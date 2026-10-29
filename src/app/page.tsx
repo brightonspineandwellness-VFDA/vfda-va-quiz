@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import Link from "next/link";
 import { Suspense } from "react";
 import { checkSupabase } from "@/lib/supabase/server";
 
@@ -36,6 +37,12 @@ export default function Home() {
       >
         <SupabaseStatus />
       </Suspense>
+      <Link
+        href="/login"
+        className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background"
+      >
+        Sign in
+      </Link>
     </main>
   );
 }

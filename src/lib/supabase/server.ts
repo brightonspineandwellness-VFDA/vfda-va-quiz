@@ -1,18 +1,38 @@
 import "server-only";
 
+import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
+import { connection } from "next/server";
 import { getSupabaseEnv } from "@/lib/env";
 
-// Anon client: every query is subject to row-level security.
-export function createAnonClient() {
+// Client acting as the signed-in user (from their session cookie): every query
+// is subject to row-level security. Use this for almost everything.
+export async function createSessionClient() {
+  // Sessions are per request: never let Next.js prerender anything that touches them.
+  await connection();
   const { url, anonKey } = getSupabaseEnv();
-  return createClient(url, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
+  const cookieStore = await cookies();
+  return createServerClient(url, anonKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options),
+          );
+        } catch {
+          // Server Components can't set cookies; proxy.ts refreshes the session instead.
+        }
+      },
+    },
   });
 }
 
 // Service-role client: bypasses row-level security. Server-only, for trusted
-// jobs like grading and serving quiz items without answer keys.
+// jobs like grading, unlocking and sending reports. Never pass its results to a VA unfiltered.
 export function createAdminClient() {
   const { url, serviceRoleKey } = getSupabaseEnv();
   return createClient(url, serviceRoleKey, {

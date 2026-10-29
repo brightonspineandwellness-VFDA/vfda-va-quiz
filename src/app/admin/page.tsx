@@ -1,0 +1,27 @@
+import { Suspense } from "react";
+import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { requireRole } from "@/lib/auth";
+import { createSessionClient } from "@/lib/supabase/server";
+
+export default function AdminPage() {
+  return (
+    <SignedInPage area="VFDA admin">
+      <Suspense fallback={<Loading />}>
+        <AdminHome />
+      </Suspense>
+    </SignedInPage>
+  );
+}
+
+async function AdminHome() {
+  const user = await requireRole("vfda_admin");
+  const supabase = await createSessionClient();
+  const { count } = await supabase.from("clinics").select("id", { count: "exact", head: true });
+
+  return (
+    <>
+      <h1 className="text-2xl font-semibold">Welcome, {user.fullName || user.email}</h1>
+      <p>Offices: {count ?? 0}</p>
+    </>
+  );
+}
