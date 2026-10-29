@@ -4,7 +4,8 @@ import { Suspense } from "react";
 import { InterviewForm } from "@/components/interview/interview-form";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
-import { loadInterview } from "@/lib/interview-data";
+import { StepProgress } from "@/components/setup/step-progress";
+import { loadOfficeSetup } from "@/lib/interview-data";
 
 export default function AdminInterviewPage({ params }: PageProps<"/admin/offices/[id]/interview">) {
   return (
@@ -25,12 +26,22 @@ async function AdminInterview({ params }: { params: Promise<{ id: string }> }) {
   await requireRole("vfda_admin");
   const { id } = await params;
   if (!UUID.test(id)) notFound();
-  const data = await loadInterview(id);
-  if (!data) notFound();
+  const setup = await loadOfficeSetup(id);
+  if (!setup) notFound();
+  const { interview: data, flow } = setup;
 
   return (
     <>
       <h1 className="text-2xl font-semibold">Office setup: {data.office.name}</h1>
+      <div>
+        <p className="mb-2 text-sm font-medium">Doctor&apos;s progress</p>
+        <StepProgress steps={flow.steps} links={false} />
+      </div>
+      <p className="text-sm text-foreground/70">
+        Every rule slot for this office, including VFDA standards and automatic rules (the doctor never sees
+        automatic rules). Editing a standard or an automatic rule here makes it VFDA&apos;s answer: it won&apos;t be
+        refilled automatically.
+      </p>
       <InterviewForm data={data} isAdmin />
     </>
   );

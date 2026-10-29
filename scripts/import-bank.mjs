@@ -63,6 +63,13 @@ console.log(
   `  ${rows.workflows.length} workflows, ${rows.ruleSlots.length} rule slots, ` +
     `${rows.scheduleDays.length} training days, ${rows.scenarios.length} scenarios, ${rows.settings.length} settings`,
 );
+const tiers = Object.fromEntries(
+  ["profile", "doctor", "default", "auto"].map((t) => [t, rows.ruleSlots.filter((r) => r.tier === t).length]),
+);
+console.log(
+  `  rule tiers: ${tiers.profile} profile, ${tiers.doctor} doctor (in ${Object.keys(bank.card_groups).length} card groups), ` +
+    `${tiers.default} default, ${tiers.auto} auto`,
+);
 const withRule = rows.scenarios.filter((s) => s.options_rule).length;
 console.log(`  ${withRule} multiple-choice scenarios use options_rule (options built per office later)`);
 
@@ -85,7 +92,9 @@ function check(step, error) {
   const hint =
     error.code === "PGRST205" || error.code === "42P01"
       ? "\n  Run supabase/phase2b.sql in the SQL Editor first."
-      : "";
+      : ["PGRST204", "PGRST202", "42703", "42883"].includes(error.code)
+        ? "\n  Run supabase/phase2c.sql in the SQL Editor first."
+        : "";
   fail(`${step} failed: ${error.message}${hint}`);
 }
 
@@ -127,6 +136,11 @@ await upsert("training days", "schedule_days", rows.scheduleDays, "code");
 await upsert("rule slots", "rule_slots", rows.ruleSlots, "key");
 await upsert("scenarios", "scenarios", rows.scenarios, "schedule_day,code,version");
 
+// Every office gets its default-tier rules (VFDA standards) and auto-tier
+// rules, including any slots that are new in this import.
+const { data: officeCount, error: refreshError } = await supabase.rpc("refresh_all_office_rules");
+check("Filling office default and auto rules", refreshError);
+
 // 3. Report
 console.log("\nDone:");
 report("settings", rows.settings.map((s) => s.key), before.settings);
@@ -134,3 +148,4 @@ report("workflows", rows.workflows.map((w) => w.code), before.workflows);
 report("rule_slots", rows.ruleSlots.map((r) => r.key), before.ruleSlots);
 report("schedule_days", rows.scheduleDays.map((d) => d.code), before.scheduleDays);
 report("scenarios", rows.scenarios.map(scenarioKey), before.scenarios);
+console.log(`  default + auto rules filled for ${officeCount} office(s)`);

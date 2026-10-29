@@ -17,6 +17,12 @@ const PHASES = [
     title: "Phase 2b database changes (SPEC v2 certification engine)",
     after: "phase2.sql (with or without phase3.sql)",
   },
+  {
+    name: "phase2c",
+    starts: "20261029170000",
+    title: "Phase 2c database changes (rule tiers, doctor setup flow)",
+    after: "phase2b.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

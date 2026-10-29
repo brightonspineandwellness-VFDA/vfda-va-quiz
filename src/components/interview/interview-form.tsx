@@ -38,9 +38,24 @@ import {
 } from "./answer-inputs";
 import { GrayCards } from "./gray-cards";
 import { SaveBadge } from "./save-badge";
+import { ToolsAnswer } from "./tools-answer";
 import { useAutosave } from "./use-autosave";
 
 const INSTANT_TYPES = new Set(["yesno", "choice"]);
+
+const TIER_LABELS = {
+  profile: "Profile",
+  doctor: "Doctor (cards)",
+  default: "VFDA standard",
+  auto: "Auto",
+} as const;
+const SOURCE_LABELS = {
+  doctor: "doctor",
+  vfda: "VFDA",
+  vfda_default: "VFDA default",
+  auto: "filled automatically",
+  card_import: "card",
+} as const;
 
 export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin: boolean }) {
   const officeId = data.office.id;
@@ -138,17 +153,23 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
         );
       }
       case "list":
+        if (q.key === "APPROVED_TOOLS") {
+          return <ToolsAnswer lines={(value as string[]) ?? []} onChange={(v) => setValue(q, v)} />;
+        }
         return <LinesAnswer lines={(value as string[]) ?? []} onChange={(v) => setValue(q, v)} />;
       case "matrix":
         return <MatrixAnswer rows={(value as MatrixRow[]) ?? []} onChange={(v) => setValue(q, v)} />;
-      case "upload":
+      case "upload": {
+        // A plain-text value (older VFDA defaults) is shown as the text.
+        const upload = typeof value === "string" ? { text: value, links: [] } : (value as UploadValue);
         return (
           <UploadAnswer
-            value={{ text: (value as UploadValue)?.text ?? "", links: (value as UploadValue)?.links ?? [] }}
+            value={{ text: upload?.text ?? "", links: upload?.links ?? [] }}
             onChange={(v) => setValue(q, v)}
             files={files(".pdf,.doc,.docx,.txt,image/*,video/*", "Files (PDF, Word, text, image, video up to 50 MB)")}
           />
         );
+      }
     }
   }
 
@@ -156,12 +177,17 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Progress, save status and the unanswered list stay in view. */}
+      {/* Progress, save status and the unanswered list stay in view. Doctors see
+          progress by step on the page instead of a question count. */}
       <div className="sticky top-[env(safe-area-inset-top,0px)] z-10 -mx-6 border-b border-foreground/10 bg-background/95 px-6 py-3 backdrop-blur">
         <div className="flex items-center justify-between gap-4 text-sm">
-          <p>
-            <strong>{progress.done}</strong> of {progress.total} answered ({progress.percent}%)
-          </p>
+          {isAdmin ? (
+            <p>
+              <strong>{progress.done}</strong> of {progress.total} answered ({progress.percent}%)
+            </p>
+          ) : (
+            <p className="text-foreground/70">Everything saves as you type.</p>
+          )}
           <p
             className={
               autosave.failed ? "text-red-700 dark:text-red-400" : "text-foreground/60"
@@ -175,6 +201,7 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
                 : "All changes saved"}
           </p>
         </div>
+        {isAdmin && (
         <div
           className="mt-2 h-2 overflow-hidden rounded-full bg-foreground/10"
           role="progressbar"
@@ -185,7 +212,8 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
         >
           <div className="h-full rounded-full bg-green-600 transition-all" style={{ width: `${progress.percent}%` }} />
         </div>
-        {progress.unanswered.length > 0 && (
+        )}
+        {isAdmin && progress.unanswered.length > 0 && (
           <details className="mt-2 text-sm">
             <summary className="cursor-pointer text-foreground/70">Unanswered ({progress.unanswered.length})</summary>
             <ul className="mt-2 max-h-64 overflow-y-auto pr-2">
@@ -212,7 +240,9 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
             </h2>
             {section.code === "PROFILE" && (
               <p className="text-sm text-foreground/60">
-                Answer these first: they switch quiz days and questions on or off for this office.
+                {isAdmin
+                  ? "Answer these first: they switch quiz days and questions on or off for this office."
+                  : "These decide which training days and rules apply to your office."}
               </p>
             )}
             {section.hidden > 0 && (
@@ -230,10 +260,13 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
                 <div className="mb-2 flex items-start justify-between gap-3">
                   <div>
                     <p className="font-medium">{q.question}</p>
-                    <p className="mt-0.5 text-xs text-foreground/50">
-                      <span className="font-mono">{q.key}</span>
-                      {q.source && ` · ${q.source}`}
-                    </p>
+                    {isAdmin && (
+                      <p className="mt-0.5 text-xs text-foreground/50">
+                        <span className="font-mono">{q.key}</span> · {TIER_LABELS[q.tier]}
+                        {data.sources[q.key] && ` · from ${SOURCE_LABELS[data.sources[q.key].source]}`}
+                        {q.source && ` · ${q.source}`}
+                      </p>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <SaveBadge

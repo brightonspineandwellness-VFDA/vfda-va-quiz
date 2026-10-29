@@ -65,7 +65,7 @@ async function Offices() {
                   </td>
                   <td className="py-2 pr-4">
                     <Link href={`/admin/offices/${office.id}/interview`} className="underline">
-                      {office.progress.percent}% ({office.progress.done}/{office.progress.total})
+                      {office.steps.map((s) => `${s.label}: ${s.detail}`).join(" · ")}
                     </Link>
                   </td>
                 </tr>

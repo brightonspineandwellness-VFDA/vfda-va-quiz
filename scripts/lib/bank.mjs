@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 // which are grouped as "bank_info".
 export const TABLE_KEYS = ["workflows", "rule_slots", "schedule", "scenarios"];
 export const INFO_KEYS = ["version", "date", "model", "placeholder_syntax"];
-export const REQUIRED_SETTINGS = ["conditions", "sequence", "derived_placeholders", "gray_card_questions"];
+export const REQUIRED_SETTINGS = ["conditions", "sequence", "derived_placeholders", "gray_card_questions", "card_groups"];
 
 const WORKFLOW_LISTS = [
   "required_information",
@@ -24,6 +24,7 @@ const WORKFLOW_LISTS = [
 ];
 const WORKFLOW_TEXTS = ["trigger", "definition_of_done", "pass_standard"];
 const ANSWER_TYPES = ["text", "list", "yesno", "choice", "upload", "matrix"];
+export const TIERS = ["profile", "auto", "default", "doctor"];
 const ANSWER_FORMATS = ["steps_say_doc", "say_do_book"];
 const ESCALATION_LEVELS = ["none", "approval", "immediate"];
 const TEST_STATUSES = ["draft", "vfda_reviewed", "live"];
@@ -112,6 +113,22 @@ export function validateBank(bank) {
     checkCondition(where, r.condition);
     if (!isStringList(r.workflows ?? [])) err(`${where}: "workflows" must be a list`);
     for (const code of r.workflows ?? []) if (!workflowCodes.has(code)) err(`${where}: unknown workflow "${code}"`);
+    if (!TIERS.includes(r.tier)) err(`${where}: tier must be one of ${TIERS.join(", ")}, got "${r.tier}"`);
+    if (r.tier === "profile" && r.schedule_day !== "PROFILE") err(`${where}: profile tier must be on PROFILE`);
+    if (r.tier === "default" && (r.default_answer === null || r.default_answer === undefined)) {
+      err(`${where}: default tier needs a default_answer`);
+    }
+    if (r.tier !== "default" && r.default_answer != null) err(`${where}: only default-tier slots have a default_answer`);
+    if (r.tier === "auto" && !isText(r.auto_rule)) err(`${where}: auto tier needs an auto_rule`);
+    if (r.tier === "doctor" && !(bank.card_groups?.[r.card_group] ?? []).includes(r.key)) {
+      err(`${where}: doctor tier needs a card_group that lists it (got "${r.card_group}")`);
+    }
+  }
+  for (const [group, keys] of Object.entries(bank.card_groups ?? {})) {
+    for (const key of keys) {
+      const slot = bank.rule_slots.find((r) => r.key === key);
+      if (slot?.tier !== "doctor" || slot.card_group !== group) err(`card_groups "${group}": ${key} isn't a doctor-tier slot in this group`);
+    }
   }
 
   // Scenarios
@@ -213,6 +230,9 @@ export function buildRows(bank) {
       .filter((key) => !TABLE_KEYS.includes(key) && !INFO_KEYS.includes(key))
       .map((key) => ({ key, value: bank[key] })),
     { key: "bank_info", value: Object.fromEntries(INFO_KEYS.map((k) => [k, bank[k] ?? null])) },
+    // JSON objects don't keep key order in Postgres, so the screen order of
+    // card_groups is saved as its own list.
+    { key: "card_group_order", value: Object.keys(bank.card_groups ?? {}) },
   ];
 
   const workflows = bank.workflows.map((w, i) => ({
@@ -231,7 +251,14 @@ export function buildRows(bank) {
     card_source: r.card_source ?? "",
     workflows: r.workflows ?? [],
     schedule_day: r.schedule_day,
-    default_answer: r.default_answer ?? null,
+    tier: r.tier,
+    // Upload answers are {text, links}; a default written as plain text becomes the text.
+    default_answer:
+      r.answer_type === "upload" && typeof r.default_answer === "string"
+        ? { text: r.default_answer, links: [] }
+        : (r.default_answer ?? null),
+    auto_rule: r.auto_rule ?? null,
+    card_group: r.card_group ?? null,
     position: i,
   }));
 

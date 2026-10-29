@@ -1092,7 +1092,8 @@
       "card_source": "",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "BILLING_TYPE",
@@ -1102,7 +1103,8 @@
       "card_source": "",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "HAS_REEXAM_CARD",
@@ -1112,7 +1114,8 @@
       "card_source": "",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "HAS_GRAY_CARDS",
@@ -1122,7 +1125,8 @@
       "card_source": "",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "ADDONS",
@@ -1132,7 +1136,8 @@
       "card_source": "",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "CLINIC_NAME",
@@ -1144,7 +1149,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From office setup"
     },
     {
       "key": "DOCTOR_NAME",
@@ -1156,7 +1163,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From office setup"
     },
     {
       "key": "SERVICES",
@@ -1168,7 +1177,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "NOT_OFFERED",
@@ -1180,7 +1191,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "OFFICE_MISSION",
@@ -1192,7 +1205,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "OFFICE_USP",
@@ -1204,7 +1219,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "CORE_VALUES",
@@ -1216,7 +1233,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "GREETING",
@@ -1229,7 +1248,9 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "DOS",
@@ -1241,7 +1262,12 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": [
+        "Verify identity before sharing any patient detail",
+        "Confirm every booking saved before telling the patient",
+        "Document every call, text and task in the chart or log"
+      ],
+      "tier": "default"
     },
     {
       "key": "DONTS",
@@ -1253,7 +1279,12 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": [
+        "Never give medical advice or interpret results",
+        "Never promise results, coverage or prices",
+        "Never mark a task done that isn't done"
+      ],
+      "tier": "default"
     },
     {
       "key": "COMMON_MISTAKES",
@@ -1265,7 +1296,13 @@
         "WF04"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": [
+        "Booking the wrong visit type or length",
+        "Not booking the report of findings on the first call",
+        "Sharing details before verifying identity",
+        "Leaving tasks off the EOD report"
+      ],
+      "tier": "default"
     },
     {
       "key": "ESCALATION_CONTACT",
@@ -1279,7 +1316,9 @@
         "WF10"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "VA Onboarding & Basics"
     },
     {
       "key": "ESCALATION_CHANNEL",
@@ -1291,7 +1330,8 @@
         "WF09"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": "Post in the office's main Slack channel; expect a reply within 30 minutes during office hours. If urgent or no reply, text or call the escalation contact.",
+      "tier": "default"
     },
     {
       "key": "EMERGENCY_PROTOCOL",
@@ -1303,7 +1343,8 @@
         "WF09"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": "Say: \"Based on what you're describing, please call 911 or go to the nearest emergency room now.\" Do not diagnose or reassure. Then alert the escalation contact immediately and document the time and the caller's exact words.",
+      "tier": "default"
     },
     {
       "key": "OFFICE_HOURS",
@@ -1316,7 +1357,9 @@
         "WF10"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Open & Close Daily List"
     },
     {
       "key": "OPENING_TASKS",
@@ -1328,7 +1371,9 @@
         "WF10"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Open & Close Daily List"
     },
     {
       "key": "CLOSING_TASKS",
@@ -1340,7 +1385,9 @@
         "WF10"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Open & Close Daily List"
     },
     {
       "key": "CONFIRM_RULE",
@@ -1352,7 +1399,8 @@
         "WF01"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": "Confirm all of tomorrow's appointments by text the day before, by 3 p.m.; call anyone who hasn't confirmed by end of day.",
+      "tier": "default"
     },
     {
       "key": "NO_SHOW_RULE",
@@ -1364,7 +1412,8 @@
         "WF03"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": "Call within 15 minutes of the missed time; if no answer, leave an approved voicemail and send a text. Offer to rebook. Flag a second miss to the escalation contact.",
+      "tier": "default"
     },
     {
       "key": "EOD_REPORT",
@@ -1376,7 +1425,8 @@
         "WF10"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": "Post in Slack by the end of the VA's shift, answering: what I worked on today, what I'm having challenges with, what specifically I need help with.",
+      "tier": "default"
     },
     {
       "key": "JOURNEY_STAGES",
@@ -1388,7 +1438,9 @@
         "WF06"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Patient Journey"
     },
     {
       "key": "REEXAM_INTERVAL",
@@ -1400,7 +1452,9 @@
         "WF02"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Patient Journey"
     },
     {
       "key": "EHR_NAME",
@@ -1412,7 +1466,9 @@
         "WF06"
       ],
       "schedule_day": "W1D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From APPROVED_TOOLS"
     },
     {
       "key": "EHR_TRAINING_LINK",
@@ -1424,7 +1480,9 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "VFDA fills from its vendor training list for the office's EHR"
     },
     {
       "key": "PATIENT_ID_CHECK",
@@ -1436,7 +1494,8 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Full name and date of birth",
+      "tier": "default"
     },
     {
       "key": "DUPLICATE_RULE",
@@ -1448,7 +1507,8 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Don't merge or edit either chart. Flag it to the escalation contact with both chart names; keep working only on the verified chart.",
+      "tier": "default"
     },
     {
       "key": "PHI_CHANNEL_RULE",
@@ -1461,7 +1521,8 @@
         "WF10"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Patient initials or chart number only. No full names with clinical details, no diagnoses, no chart screenshots.",
+      "tier": "default"
     },
     {
       "key": "CANCEL_FOLLOWUP",
@@ -1473,7 +1534,8 @@
         "WF03"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Record the reason, offer to rebook once, offer the slot to the waitlist, and note the outcome in the chart.",
+      "tier": "default"
     },
     {
       "key": "CORRECTION_PROCESS",
@@ -1485,7 +1547,8 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Don't delete or hide it. Tell the escalation contact the same day, note what happened, and follow their correction. If another patient's information was exposed, treat it as a privacy incident.",
+      "tier": "default"
     },
     {
       "key": "INTAKE_FORMS",
@@ -1497,7 +1560,9 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "DOC_CATEGORIES",
@@ -1509,7 +1574,15 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": [
+        "Intake forms",
+        "Consents",
+        "Insurance",
+        "Imaging reports",
+        "Outside records and referrals",
+        "Billing"
+      ],
+      "tier": "default"
     },
     {
       "key": "DOC_NAMING",
@@ -1521,7 +1594,8 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "LastName_FirstName_DocumentType_YYYY-MM-DD",
+      "tier": "default"
     },
     {
       "key": "RECORDS_ROUTING",
@@ -1533,7 +1607,8 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Upload to the right chart and category, then message the doctor that it's there. Never read out or act on the content.",
+      "tier": "default"
     },
     {
       "key": "VERSION_RULE",
@@ -1545,7 +1620,8 @@
         "WF06"
       ],
       "schedule_day": "W1D2",
-      "default_answer": null
+      "default_answer": "Keep both. Label the current one clearly; only the doctor or escalation contact may approve removing anything.",
+      "tier": "default"
     },
     {
       "key": "TEXT_PLATFORM",
@@ -1557,7 +1633,9 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From APPROVED_TOOLS"
     },
     {
       "key": "VOIP_PLATFORM",
@@ -1569,7 +1647,9 @@
         "WF04"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From APPROVED_TOOLS"
     },
     {
       "key": "TEXT_TRAINING_LINK",
@@ -1581,7 +1661,9 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "VFDA fills from its vendor training list for the texting platform"
     },
     {
       "key": "VOIP_TRAINING_LINK",
@@ -1593,7 +1675,9 @@
         "WF04"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "VFDA fills from its vendor training list for the phone system"
     },
     {
       "key": "TEXT_TEMPLATES",
@@ -1605,7 +1689,9 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Texting & Phone Scripts"
     },
     {
       "key": "TEXT_ID_CHECK",
@@ -1617,7 +1703,8 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Text is from the number on file; if not, ask for full name and date of birth before sharing anything.",
+      "tier": "default"
     },
     {
       "key": "TEXT_CONSENT",
@@ -1629,7 +1716,8 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Recorded on the intake form and noted in the chart.",
+      "tier": "default"
     },
     {
       "key": "OPT_OUT_RULE",
@@ -1641,7 +1729,8 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Stop all texts immediately, mark the patient opted out, and note it in the chart. Contact by phone only from then on.",
+      "tier": "default"
     },
     {
       "key": "TEXT_RESPONSE_TIME",
@@ -1653,7 +1742,8 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Within 15 minutes during office hours.",
+      "tier": "default"
     },
     {
       "key": "AFTER_HOURS_RULE",
@@ -1665,7 +1755,8 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Send the approved after-hours reply; if the message mentions urgent symptoms, follow the emergency protocol. Handle everything else first thing next morning.",
+      "tier": "default"
     },
     {
       "key": "TEXT_DOC_RULE",
@@ -1677,7 +1768,8 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Log every text and call in the patient's chart (EHR note).",
+      "tier": "default"
     },
     {
       "key": "PARKING_INFO",
@@ -1689,7 +1781,9 @@
         "WF05"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Texting & Phone Scripts"
     },
     {
       "key": "COMPLAINT_RULE",
@@ -1701,7 +1795,8 @@
         "WF04"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Apologize, get the facts, offer a specific next step, and hand it to the escalation contact the same day.",
+      "tier": "default"
     },
     {
       "key": "VOICEMAIL_RULE",
@@ -1713,7 +1808,8 @@
         "WF04"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Leave only your first name, the office name and a callback number. Never leave appointment details, balances or reasons for visit.",
+      "tier": "default"
     },
     {
       "key": "HOLD_TRANSFER_RULE",
@@ -1725,7 +1821,8 @@
         "WF04"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Ask permission before holding. Transfer only to the person the caller needs; if they don't answer, return to the caller and take a message.",
+      "tier": "default"
     },
     {
       "key": "CALLBACK_TIME",
@@ -1737,7 +1834,8 @@
         "WF04"
       ],
       "schedule_day": "W1D3",
-      "default_answer": null
+      "default_answer": "Same business day, within 2 hours.",
+      "tier": "default"
     },
     {
       "key": "SCHEDULE_MATRIX",
@@ -1750,7 +1848,9 @@
         "WF02"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Scheduling Cadence"
     },
     {
       "key": "CARE_PLAN_CADENCE",
@@ -1762,7 +1862,9 @@
         "WF02"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Scheduling Cadence"
     },
     {
       "key": "ROF_RULE",
@@ -1774,7 +1876,9 @@
         "WF01"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Scheduling Cadence"
     },
     {
       "key": "PROTECTED_BLOCKS",
@@ -1787,7 +1891,9 @@
         "WF02"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Scheduling Cadence"
     },
     {
       "key": "PROVIDER_RULES",
@@ -1800,7 +1906,9 @@
         "WF02"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Scheduling Cadence"
     },
     {
       "key": "SAME_DAY_CUTOFF",
@@ -1812,7 +1920,8 @@
         "WF01"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": "Same-day bookings allowed until 2 hours before close; after that, the doctor approves.",
+      "tier": "default"
     },
     {
       "key": "URGENT_RULE",
@@ -1825,7 +1934,8 @@
         "WF09"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": "Urgent = new or worse pain that can't wait. Escalate to the doctor; the doctor decides on a squeeze-in. Red-flag symptoms follow the emergency protocol.",
+      "tier": "default"
     },
     {
       "key": "LATE_CANCEL_RULE",
@@ -1837,7 +1947,9 @@
         "WF03"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Scheduling Cadence"
     },
     {
       "key": "WAITLIST_RULE",
@@ -1849,7 +1961,8 @@
         "WF03"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": "Keep the waitlist in the EHR; offer open slots in the order people joined, only if the slot fits their visit type and length.",
+      "tier": "default"
     },
     {
       "key": "EXCEPTION_OWNER",
@@ -1862,7 +1975,8 @@
         "WF09"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": "The doctor. The approval is noted on the appointment with who approved it and when.",
+      "tier": "default"
     },
     {
       "key": "SCHEDULE_GAP_RULE",
@@ -1874,7 +1988,8 @@
         "WF02"
       ],
       "schedule_day": "W1D4",
-      "default_answer": null
+      "default_answer": "Group visits to avoid gaps in the doctor's day; offer gap times first.",
+      "tier": "default"
     },
     {
       "key": "DAY0_STEPS",
@@ -1886,7 +2001,9 @@
         "WF01"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "INTAKE_PLATFORM",
@@ -1898,7 +2015,9 @@
         "WF01"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "DEMOGRAPHICS_RULE",
@@ -1910,7 +2029,8 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": "Enter all intake details before arrival; confirm date of birth and contact details at check-in.",
+      "tier": "default"
     },
     {
       "key": "IMAGING_SYSTEM",
@@ -1922,7 +2042,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From APPROVED_TOOLS (none if not listed)"
     },
     {
       "key": "PRINT_PACKET",
@@ -1934,7 +2056,8 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": "Intake paperwork and the consult/exam form, ready before the patient arrives.",
+      "tier": "default"
     },
     {
       "key": "CALENDAR_CODES",
@@ -1946,7 +2069,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "HUDDLE_RULE",
@@ -1958,7 +2083,8 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": "Daily huddle: for each Day 1, report whether Day 0 is complete, the type of Day 1, and anything missing with who will fix it.",
+      "tier": "default"
     },
     {
       "key": "DAY1_TYPES",
@@ -1970,7 +2096,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "ARRIVAL_STEPS",
@@ -1982,7 +2110,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "DAY1_CODES",
@@ -1994,7 +2124,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "PAYMENT_SYSTEM",
@@ -2006,7 +2138,9 @@
         "WF08"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "AFTER_DAY1_UPLOADS",
@@ -2018,7 +2152,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "INSURANCE_CARD_DAY1",
@@ -2030,7 +2166,9 @@
         "WF07"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "DAY2_STEPS",
@@ -2042,7 +2180,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "HOMECARE_STEPS",
@@ -2054,7 +2194,9 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "New Patient Checklist"
     },
     {
       "key": "Q_AUDIT_STEPS",
@@ -2066,7 +2208,14 @@
         "WF06"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": [
+        "Every checklist step checked and dated",
+        "All forms signed and uploaded",
+        "Day 1 charge recorded",
+        "Report of findings booked or done",
+        "Care plan booked if accepted"
+      ],
+      "tier": "default"
     },
     {
       "key": "REEXAM_PICKUP",
@@ -2078,7 +2227,9 @@
         "WF02"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Re-exam Checklist"
     },
     {
       "key": "REEXAM_PREP",
@@ -2090,7 +2241,9 @@
         "WF02"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Re-exam Checklist"
     },
     {
       "key": "REEXAM_VIEW",
@@ -2102,7 +2255,9 @@
         "WF02"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Re-exam Checklist"
     },
     {
       "key": "RESIGN_PROCESS",
@@ -2114,7 +2269,9 @@
         "WF02"
       ],
       "schedule_day": "W1D5",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Re-exam Checklist"
     },
     {
       "key": "INBOUND_SCRIPT",
@@ -2126,7 +2283,9 @@
         "WF04"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Texting & Phone Scripts"
     },
     {
       "key": "OUTBOUND_SCRIPT",
@@ -2138,7 +2297,9 @@
         "WF04"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Texting & Phone Scripts"
     },
     {
       "key": "NP_CALL_QUESTIONS",
@@ -2150,7 +2311,15 @@
         "WF01"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": [
+        "Full name",
+        "Date of birth",
+        "Phone and email",
+        "How they heard about us",
+        "What brings them in (in their words)",
+        "Insurance or self-pay"
+      ],
+      "tier": "default"
     },
     {
       "key": "FEE_RULE",
@@ -2163,7 +2332,9 @@
         "WF04"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Texting & Phone Scripts"
     },
     {
       "key": "UNKNOWN_POLICY_RULE",
@@ -2175,7 +2346,8 @@
         "WF04"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": "Say: \"Let me check that for you and call you back by [time].\" Ask the escalation contact, call back, and note the answer so it can be added to the SOP.",
+      "tier": "default"
     },
     {
       "key": "CALL_NOTE_RULE",
@@ -2187,7 +2359,8 @@
         "WF01"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": "Date, reason for the call, what was done, what's still open and who owns it, in the patient's chart.",
+      "tier": "default"
     },
     {
       "key": "SLACK_CHANNELS",
@@ -2199,7 +2372,9 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Slack & Remote Access"
     },
     {
       "key": "EMAIL_PLATFORM",
@@ -2211,7 +2386,9 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From APPROVED_TOOLS"
     },
     {
       "key": "EMAIL_LABELS",
@@ -2223,7 +2400,14 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": [
+        "Faxes",
+        "Records requests",
+        "Billing",
+        "Needs signature",
+        "Done"
+      ],
+      "tier": "default"
     },
     {
       "key": "EMAIL_ROUTING",
@@ -2235,7 +2419,8 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": "Records requests, legal or attorney letters, billing issues and anything needing a signature go to the doctor or team the same day.",
+      "tier": "default"
     },
     {
       "key": "SIGNED_DOCS_FOLDER",
@@ -2247,7 +2432,8 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": "The office's shared Google Drive folder for signed documents.",
+      "tier": "default"
     },
     {
       "key": "REMOTE_ACCESS_TOOL",
@@ -2259,7 +2445,9 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "auto",
+      "auto_rule": "From APPROVED_TOOLS (none if not listed)"
     },
     {
       "key": "REMOTE_DESKTOPS",
@@ -2271,7 +2459,9 @@
         "WF10"
       ],
       "schedule_day": "W2D1",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Slack & Remote Access"
     },
     {
       "key": "OBJECTION_SCRIPT",
@@ -2283,7 +2473,8 @@
         "WF04"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "Acknowledge the concern, explain what the first visit includes, offer the next available time, and offer to have the doctor's team follow up. No discounts unless approved.",
+      "tier": "default"
     },
     {
       "key": "APPROVED_PHRASES",
@@ -2295,7 +2486,13 @@
         "WF04"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": [
+        "I understand, and I'm sorry for the frustration.",
+        "Let me make sure I have this right.",
+        "Here's what I can do right now.",
+        "I'll make sure the right person follows up by [time]."
+      ],
+      "tier": "default"
     },
     {
       "key": "PROHIBITED_PHRASES",
@@ -2307,7 +2504,14 @@
         "WF04"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": [
+        "\"You're covered.\"",
+        "\"That's nothing to worry about.\"",
+        "\"That was our fault.\"",
+        "\"We'll fix it for sure.\"",
+        "\"That's not my job.\""
+      ],
+      "tier": "default"
     },
     {
       "key": "VA_AUTHORITY",
@@ -2319,7 +2523,8 @@
         "WF04"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "The VA may offer any open slot within the scheduling rules, add to the waitlist, resend forms and confirmations, and answer approved FAQ. Everything involving money, exceptions, clinical questions or complaints goes to the escalation contact.",
+      "tier": "default"
     },
     {
       "key": "BILLING_DISPUTE_RULE",
@@ -2331,7 +2536,8 @@
         "WF08"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "Take the details and send to the biller or doctor the same day; tell the patient who will follow up and when. No refunds or adjustments by the VA.",
+      "tier": "default"
     },
     {
       "key": "DOCTOR_UNAVAILABLE_RULE",
@@ -2343,7 +2549,8 @@
         "WF09"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "Explain the doctor is with patients, check for red flags, take a complete message and send it to the doctor; tell the caller when to expect a reply.",
+      "tier": "default"
     },
     {
       "key": "AUTHORIZED_CONTACTS",
@@ -2355,7 +2562,8 @@
         "WF09"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "Listed on the intake form and in the chart's contacts section.",
+      "tier": "default"
     },
     {
       "key": "REVIEW_RULE",
@@ -2367,7 +2575,8 @@
         "WF09"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "Stay calm, solve the problem if possible, and tell the escalation contact the same day. Never offer anything in exchange for changing a review.",
+      "tier": "default"
     },
     {
       "key": "LEGAL_THREAT_RULE",
@@ -2379,7 +2588,8 @@
         "WF09"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": "Stay neutral, don't admit or deny anything, write down the caller's exact words, and tell the doctor immediately.",
+      "tier": "default"
     },
     {
       "key": "RED_FLAGS",
@@ -2391,7 +2601,16 @@
         "WF09"
       ],
       "schedule_day": "W2D2",
-      "default_answer": null
+      "default_answer": [
+        "Chest pain or trouble breathing",
+        "Sudden severe headache",
+        "Loss of bladder or bowel control",
+        "New numbness or weakness in arms or legs",
+        "Fainting, confusion or slurred speech",
+        "Severe pain after a fall or accident",
+        "Thoughts of harming themselves"
+      ],
+      "tier": "default"
     },
     {
       "key": "PLANS_ACCEPTED",
@@ -2403,7 +2622,9 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Insurance & Billing"
     },
     {
       "key": "INS_COLLECT_METHOD",
@@ -2415,7 +2636,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "Front and back photo or scan, uploaded to the chart before Day 1.",
+      "tier": "default"
     },
     {
       "key": "ELIGIBILITY_SOURCE",
@@ -2427,7 +2649,9 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Insurance & Billing"
     },
     {
       "key": "VERIFY_TIMING",
@@ -2439,7 +2663,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "Before Day 1, every January, and whenever the patient says their plan changed.",
+      "tier": "default"
     },
     {
       "key": "VERIFICATION_FIELDS",
@@ -2451,7 +2676,25 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": [
+        "Patient identifier",
+        "Insurer and plan",
+        "Member ID",
+        "Group number (or N/A with reason)",
+        "Subscriber and relationship",
+        "Effective and termination dates",
+        "Eligibility on date of service",
+        "Network status",
+        "Copay, deductible, coinsurance",
+        "Visit limits",
+        "Referral or authorization status",
+        "Source and representative",
+        "Date and time checked",
+        "Reference number",
+        "Uncertainty and escalation",
+        "Patient-facing wording"
+      ],
+      "tier": "default"
     },
     {
       "key": "INS_NOTE_LOCATION",
@@ -2463,7 +2706,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "Insurance section of the patient's chart, as a dated note.",
+      "tier": "default"
     },
     {
       "key": "NONGUARANTEE_SCRIPT",
@@ -2475,7 +2719,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "\"Your plan shows [benefits as reported]. That's what your insurance told us today; the final amount depends on how they process the claim.\"",
+      "tier": "default"
     },
     {
       "key": "INACTIVE_COVERAGE_RULE",
@@ -2487,7 +2732,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "Tell the patient neutrally, ask for a new card, offer self-pay or rescheduling, and flag it at the huddle.",
+      "tier": "default"
     },
     {
       "key": "OUT_OF_NETWORK_RULE",
@@ -2499,7 +2745,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "Explain neutrally that the office is out of network for their plan, share the self-pay option, and note it in the chart.",
+      "tier": "default"
     },
     {
       "key": "AUTH_REFERRAL_RULE",
@@ -2511,7 +2758,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "If the plan may need a referral or authorization, record what's uncertain, escalate to the insurance escalation owner, and don't tell the patient they're covered until it's resolved.",
+      "tier": "default"
     },
     {
       "key": "INS_ESCALATION",
@@ -2523,7 +2771,8 @@
         "WF07"
       ],
       "schedule_day": "W2D3",
-      "default_answer": null
+      "default_answer": "The biller or doctor, the same day.",
+      "tier": "default"
     },
     {
       "key": "BILLER",
@@ -2535,7 +2784,9 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Insurance & Billing"
     },
     {
       "key": "BILLING_AUTHORITY",
@@ -2547,7 +2798,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "The VA may post patient payments and approved contractual adjustments. Write-offs, refunds and any other adjustment need the doctor's approval.",
+      "tier": "default"
     },
     {
       "key": "STATEMENT_RULE",
@@ -2559,7 +2811,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "Statements are sent monthly by the office; the VA explains that any balance owed will be on that statement.",
+      "tier": "default"
     },
     {
       "key": "ROUNDING_RULE",
@@ -2571,7 +2824,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "No rounding; use exact amounts.",
+      "tier": "default"
     },
     {
       "key": "BILLING_LOG",
@@ -2583,7 +2837,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "A dated note in the patient's ledger or the office's billing log.",
+      "tier": "default"
     },
     {
       "key": "BILLING_ROUTINE",
@@ -2595,7 +2850,9 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Insurance & Billing"
     },
     {
       "key": "EOB_SOURCE",
@@ -2607,7 +2864,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "Payer portal or mailed EOBs scanned to the office's billing folder.",
+      "tier": "default"
     },
     {
       "key": "FOLLOWUP_INTERVAL",
@@ -2619,7 +2877,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "30 days with no payment or decision.",
+      "tier": "default"
     },
     {
       "key": "CHARGE_RULES",
@@ -2631,7 +2890,9 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Insurance & Billing"
     },
     {
       "key": "VISIT_PRICE_LIST",
@@ -2643,7 +2904,9 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "doctor",
+      "card_group": "Insurance & Billing"
     },
     {
       "key": "CASH_LOG",
@@ -2655,7 +2918,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "The office's daily collections log.",
+      "tier": "default"
     },
     {
       "key": "DECLINE_RULE",
@@ -2667,7 +2931,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "Tell the patient discreetly, ask for another payment method, never charge another card without consent, and flag unpaid balances.",
+      "tier": "default"
     },
     {
       "key": "RECURRING_RULE",
@@ -2679,7 +2944,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "Recurring billing only with a signed authorization on file. Set the exact amount, start date and frequency. Stop it the same day a plan is canceled and confirm no future charges are scheduled.",
+      "tier": "default"
     },
     {
       "key": "PAYLINK_RULE",
@@ -2691,7 +2957,8 @@
         "WF08"
       ],
       "schedule_day": "W2D4",
-      "default_answer": null
+      "default_answer": "Send a payment link only to the verified email or phone on file, for the exact balance, and confirm it's paid before closing the task.",
+      "tier": "default"
     },
     {
       "key": "TEAM_MEMBERS",
@@ -2701,7 +2968,8 @@
       "card_source": "Office profile",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "APPROVED_TOOLS",
@@ -2711,7 +2979,8 @@
       "card_source": "Office profile",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     },
     {
       "key": "GENERAL_PREFERENCES",
@@ -2721,7 +2990,8 @@
       "card_source": "Office profile",
       "workflows": [],
       "schedule_day": "PROFILE",
-      "default_answer": null
+      "default_answer": null,
+      "tier": "profile"
     }
   ],
   "derived_placeholders": [
@@ -9239,5 +9509,83 @@
       "Don't penalize wording, grammar or English level"
     ],
     "result": "pass if points >= pass_points and no critical error; review if points >= review_min_points or any low-confidence item; else retake (version B next day)"
+  },
+  "card_groups": {
+    "VA Onboarding & Basics": [
+      "SERVICES",
+      "NOT_OFFERED",
+      "OFFICE_MISSION",
+      "OFFICE_USP",
+      "CORE_VALUES",
+      "GREETING",
+      "ESCALATION_CONTACT"
+    ],
+    "Open & Close Daily List": [
+      "OFFICE_HOURS",
+      "OPENING_TASKS",
+      "CLOSING_TASKS"
+    ],
+    "Patient Journey": [
+      "JOURNEY_STAGES",
+      "REEXAM_INTERVAL"
+    ],
+    "New Patient Checklist": [
+      "INTAKE_FORMS",
+      "DAY0_STEPS",
+      "INTAKE_PLATFORM",
+      "CALENDAR_CODES",
+      "DAY1_TYPES",
+      "ARRIVAL_STEPS",
+      "DAY1_CODES",
+      "PAYMENT_SYSTEM",
+      "AFTER_DAY1_UPLOADS",
+      "DAY2_STEPS",
+      "HOMECARE_STEPS",
+      "INSURANCE_CARD_DAY1"
+    ],
+    "Re-exam Checklist": [
+      "REEXAM_PICKUP",
+      "REEXAM_PREP",
+      "REEXAM_VIEW",
+      "RESIGN_PROCESS"
+    ],
+    "Scheduling Cadence": [
+      "SCHEDULE_MATRIX",
+      "CARE_PLAN_CADENCE",
+      "ROF_RULE",
+      "PROTECTED_BLOCKS",
+      "PROVIDER_RULES",
+      "LATE_CANCEL_RULE"
+    ],
+    "Texting & Phone Scripts": [
+      "TEXT_TEMPLATES",
+      "PARKING_INFO",
+      "INBOUND_SCRIPT",
+      "OUTBOUND_SCRIPT",
+      "FEE_RULE"
+    ],
+    "Slack & Remote Access": [
+      "SLACK_CHANNELS",
+      "REMOTE_DESKTOPS"
+    ],
+    "Insurance & Billing": [
+      "PLANS_ACCEPTED",
+      "ELIGIBILITY_SOURCE",
+      "BILLER",
+      "VISIT_PRICE_LIST",
+      "CHARGE_RULES",
+      "BILLING_ROUTINE"
+    ]
+  },
+  "doctor_flow": {
+    "rule": "The doctor never sees the full list of rule slots.",
+    "steps": [
+      "Office setup: 8 profile questions",
+      "VFDA uploads card PDFs; Claude extracts doctor-tier rules and VFDA reviews them",
+      "Doctor confirms extracted rules one screen per card group (Looks right / Edit), with only not-found or conflicting rules shown as questions",
+      "Doctor sees one 'VFDA standards' page listing default-tier rules, pre-accepted; 'Accept all' or edit any",
+      "Auto-tier rules are filled by VFDA or derived and never shown"
+    ],
+    "default_tier_behaviour": "Default-tier rules are accepted automatically with source vfda_default. Card import may override a default if the doctor's cards state something different; that override is shown on the VFDA standards page."
   }
 }

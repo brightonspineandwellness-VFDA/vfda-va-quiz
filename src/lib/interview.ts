@@ -4,8 +4,14 @@
 
 export type AnswerType = "text" | "list" | "yesno" | "upload" | "matrix" | "choice";
 
+// profile: setup questions · doctor: from card PDFs · default: VFDA standards ·
+// auto: filled by the app (never shown to doctors)
+export type Tier = "profile" | "auto" | "default" | "doctor";
+
 export type InterviewQuestion = {
   key: string;
+  tier: Tier;
+  card_group: string | null;
   quiz: string; // 'PROFILE' or a training day code (rule_slots.schedule_day)
   question: string;
   answer_type: AnswerType;
@@ -39,6 +45,39 @@ export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const CHOICE_OPTIONS: Record<string, string[]> = {
   BILLING_TYPE: ["insurance", "cash", "both", "none"],
 };
+
+// APPROVED_TOOLS is saved as "Label: tool" lines, one box per label. The
+// database reads these labels to fill auto rules (private.auto_rule_value):
+// EHR -> EHR_NAME, Texting, Phone system, Email, Imaging, Remote access.
+export const TOOL_LABELS = [
+  "EHR",
+  "Texting",
+  "Phone system",
+  "Email",
+  "Payments",
+  "Insurance portal",
+  "Imaging",
+  "Slack",
+  "Remote access",
+] as const;
+
+export function parseTools(lines: string[]) {
+  const byLabel: Record<string, string> = {};
+  const other: string[] = [];
+  for (const line of lines) {
+    const i = line.indexOf(":");
+    const label = i > 0 ? TOOL_LABELS.find((l) => l.toLowerCase() === line.slice(0, i).trim().toLowerCase()) : undefined;
+    // Values are kept as typed (only the space after the colon is dropped),
+    // so spaces typed mid-word survive each keystroke's save.
+    if (label) byLabel[label] = line.slice(i + 1).replace(/^ /, "");
+    else other.push(line);
+  }
+  return { byLabel, other };
+}
+
+export function formatTools(byLabel: Record<string, string>, other: string[]) {
+  return [...TOOL_LABELS.filter((l) => byLabel[l]?.trim()).map((l) => `${l}: ${byLabel[l]}`), ...other];
+}
 
 export const MATRIX_COLUMNS = [
   { key: "visit_type", label: "Visit type" },

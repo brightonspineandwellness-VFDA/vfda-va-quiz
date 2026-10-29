@@ -34,12 +34,14 @@ async function authorize(officeId: string) {
 async function getQuestion(supabase: Awaited<ReturnType<typeof createSessionClient>>, key: string) {
   const { data } = await supabase
     .from("rule_slots")
-    .select("key, schedule_day, question, answer_type, condition, card_source")
+    .select("key, tier, card_group, schedule_day, question, answer_type, condition, card_source")
     .eq("key", key)
     .maybeSingle();
   if (!data) return null;
   return {
     key: data.key,
+    tier: data.tier,
+    card_group: data.card_group,
     quiz: data.schedule_day,
     question: data.question,
     answer_type: data.answer_type,
@@ -74,7 +76,8 @@ export async function saveInterviewAnswer(
   if (!user) return fail("You can't edit this office's setup.");
   const supabase = await createSessionClient();
   const question = await getQuestion(supabase, key);
-  if (!question) return fail("Unknown question.");
+  // Doctors can't read auto-tier slots, so those come back unknown too.
+  if (!question || (user.role === "doctor" && question.tier === "auto")) return fail("Unknown question.");
   const problem = checkAnswerValue(question, value);
   if (problem) return fail(problem);
 

@@ -34,9 +34,11 @@ export async function addOffice(_prev: AddOfficeState, form: FormData): Promise<
     return { ok: false, message: `${email} already has access as ${existing.role}. Use a different email.` };
   }
 
+  // The database adds the office's VFDA standards (default tier) and automatic
+  // rules (CLINIC_NAME, DOCTOR_NAME, ...) as soon as the office exists.
   const { data: office, error: officeError } = await admin
     .from("offices")
-    .insert({ name: officeName })
+    .insert({ name: officeName, doctor_name: doctorName })
     .select("id")
     .single();
   if (officeError) return { ok: false, message: "Couldn't create the office." };
