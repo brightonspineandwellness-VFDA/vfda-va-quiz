@@ -17,14 +17,16 @@ export default function AdminPage() {
 async function AdminHome() {
   const user = await requireRole("vfda_admin");
   const supabase = await createSessionClient();
-  const { count } = await supabase.from("clinics").select("id", { count: "exact", head: true });
+  const { count } = await supabase.from("offices").select("id", { count: "exact", head: true });
 
   return (
     <>
       <h1 className="text-2xl font-semibold">Welcome, {user.fullName || user.email}</h1>
-      <p>Offices: {count ?? 0}</p>
+      <Link href="/admin/offices" className="self-start underline">
+        Offices ({count ?? 0})
+      </Link>
       <Link href="/admin/bank" className="self-start underline">
-        Quiz bank
+        Library
       </Link>
     </>
   );

@@ -20,8 +20,12 @@ export async function GET(request: NextRequest) {
   } else if (tokenHash && type) {
     const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
     if (error) return failed();
-  } else {
+  } else if (params.has("error") || params.has("error_description")) {
     return failed();
+  } else {
+    // Invite links carry the session in the #fragment, which never reaches the
+    // server. The browser keeps the fragment across this redirect.
+    return NextResponse.redirect(new URL("/auth/confirm", request.url));
   }
 
   const {

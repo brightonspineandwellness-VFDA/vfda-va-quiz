@@ -10,7 +10,7 @@ export type CurrentUser = {
   email: string;
   fullName: string;
   role: Role | null;
-  clinicId: string | null;
+  officeId: string | null;
 };
 
 // The signed-in user and their profile, or null. Verified with Supabase Auth
@@ -24,7 +24,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("full_name, role, clinic_id")
+    .select("full_name, role, office_id")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -33,7 +33,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     email: user.email ?? "",
     fullName: profile?.full_name ?? "",
     role: isRole(profile?.role) ? profile.role : null,
-    clinicId: profile?.clinic_id ?? null,
+    officeId: profile?.office_id ?? null,
   };
 });
 

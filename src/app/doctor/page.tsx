@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
@@ -16,12 +17,15 @@ export default function DoctorPage() {
 async function DoctorHome() {
   const user = await requireRole("doctor");
   const supabase = await createSessionClient();
-  const { data: clinic } = await supabase.from("clinics").select("name, status").maybeSingle();
+  const { data: office } = await supabase.from("offices").select("name, status").maybeSingle();
 
   return (
     <>
       <h1 className="text-2xl font-semibold">Welcome, {user.fullName || user.email}</h1>
-      <p>Office: {clinic?.name ?? "not found"}</p>
+      <p>Office: {office?.name ?? "not found"}</p>
+      <Link href="/doctor/interview" className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+        Office setup
+      </Link>
     </>
   );
 }

@@ -1,6 +1,7 @@
-// Imports seed/quiz-bank.json into Supabase. Safe to run again: rows are matched
-// by quiz code, interview key, quiz code + item code + version, or settings key,
-// and updated in place. Nothing is ever duplicated or deleted.
+// Imports seed/quiz-bank-v2.json into Supabase. Safe to run again: rows are
+// matched by workflow code, rule slot key, day code, day + scenario code +
+// version, or settings key, and updated in place. Nothing is ever duplicated
+// or deleted.
 //
 // Usage (from your computer only):
 //   npm run import:bank              check the bank, then import it
@@ -12,12 +13,12 @@ import { createClient } from "@supabase/supabase-js";
 import {
   buildRows,
   findUnknownPlaceholders,
-  itemKey,
   loadBank,
+  scenarioKey,
   validateBank,
 } from "./lib/bank.mjs";
 
-const BANK_PATH = "seed/quiz-bank.json";
+const BANK_PATH = "seed/quiz-bank-v2.json";
 const dryRun = process.argv.includes("--dry-run");
 
 function fail(message) {
@@ -51,17 +52,19 @@ const unknown = findUnknownPlaceholders(bank);
 if (unknown.length === 0) {
   console.log("✓ Unknown placeholders: none");
 } else {
-  console.log(`! Unknown placeholders (${unknown.length}): not an interview key, derived placeholder or gray card key`);
-  unknown.forEach((u) => console.log(`    {${u.key}}  in ${u.item} (${u.field})`));
+  console.log(
+    `! Unknown placeholders (${unknown.length}): not a rule slot, derived placeholder, gray card key or office field`,
+  );
+  unknown.forEach((u) => console.log(`    {${u.key}}  in ${u.where} (${u.field})`));
 }
 
 const rows = buildRows(bank);
 console.log(
-  `  ${rows.quizTemplates.length} quizzes, ${rows.questionTemplates.length} items, ` +
-    `${rows.interviewQuestions.length} interview questions, ${rows.settings.length} settings`,
+  `  ${rows.workflows.length} workflows, ${rows.ruleSlots.length} rule slots, ` +
+    `${rows.scheduleDays.length} training days, ${rows.scenarios.length} scenarios, ${rows.settings.length} settings`,
 );
-const withRule = rows.questionTemplates.filter((q) => q.options_rule).length;
-console.log(`  ${withRule} multiple-choice items use options_rule (options built per office in Phase 4)`);
+const withRule = rows.scenarios.filter((s) => s.options_rule).length;
+console.log(`  ${withRule} multiple-choice scenarios use options_rule (options built per office later)`);
 
 if (dryRun) {
   console.log("\nDry run: database not touched.");
@@ -79,17 +82,23 @@ const supabase = createClient(url, serviceKey, {
 
 function check(step, error) {
   if (!error) return;
-  let hint = "";
-  if (error.code === "PGRST205" || error.code === "42P01") hint = "\n  Run supabase/phase1.sql in the SQL Editor first.";
-  if (error.code === "23502" && /points/.test(error.message)) hint = "\n  Run supabase/phase2.sql in the SQL Editor first.";
+  const hint =
+    error.code === "PGRST205" || error.code === "42P01"
+      ? "\n  Run supabase/phase2b.sql in the SQL Editor first."
+      : "";
   fail(`${step} failed: ${error.message}${hint}`);
 }
 
 // Existing keys, to report new vs updated and rows no longer in the bank.
-async function existing(table, columns) {
+async function existing(table, columns, keyOf) {
   const { data, error } = await supabase.from(table).select(columns);
   check(`Reading ${table}`, error);
-  return data;
+  return data.map(keyOf);
+}
+
+async function upsert(label, table, rowsToSave, onConflict) {
+  const { error } = await supabase.from(table).upsert(rowsToSave, { onConflict });
+  check(`Saving ${label}`, error);
 }
 
 function report(label, bankKeys, dbKeys) {
@@ -97,55 +106,31 @@ function report(label, bankKeys, dbKeys) {
   const inBank = new Set(bankKeys);
   const added = bankKeys.filter((k) => !inDb.has(k)).length;
   const stale = dbKeys.filter((k) => !inBank.has(k));
-  console.log(`  ${label.padEnd(20)} ${String(added).padStart(3)} new, ${String(bankKeys.length - added).padStart(3)} updated`);
+  console.log(`  ${label.padEnd(14)} ${String(added).padStart(3)} new, ${String(bankKeys.length - added).padStart(3)} updated`);
   stale.forEach((k) => console.log(`    ! ${k} is in the database but no longer in the bank (left as is)`));
 }
 
 console.log(`\nImporting into ${new URL(url).host} ...`);
 
-const beforeSettings = await existing("settings", "key");
-const beforeQuizzes = await existing("quiz_templates", "id, code");
-const beforeInterview = await existing("interview_questions", "key");
-const beforeItems = await existing("question_templates", "code, version, quiz_template_id");
+const before = {
+  settings: await existing("settings", "key", (r) => r.key),
+  workflows: await existing("workflows", "code", (r) => r.code),
+  ruleSlots: await existing("rule_slots", "key", (r) => r.key),
+  scheduleDays: await existing("schedule_days", "code", (r) => r.code),
+  scenarios: await existing("scenarios", "schedule_day, code, version", scenarioKey),
+};
 
-{
-  const { error } = await supabase.from("settings").upsert(rows.settings, { onConflict: "key" });
-  check("Saving settings", error);
-}
-
-const { data: quizzes, error: quizError } = await supabase
-  .from("quiz_templates")
-  .upsert(rows.quizTemplates, { onConflict: "code" })
-  .select("id, code");
-check("Saving quiz templates", quizError);
-const quizIdByCode = Object.fromEntries(quizzes.map((q) => [q.code, q.id]));
-
-{
-  const { error } = await supabase
-    .from("interview_questions")
-    .upsert(rows.interviewQuestions, { onConflict: "key" });
-  check("Saving interview questions", error);
-}
-
-{
-  const items = rows.questionTemplates.map(({ quiz_code, ...item }) => ({
-    ...item,
-    quiz_template_id: quizIdByCode[quiz_code],
-  }));
-  const { error } = await supabase
-    .from("question_templates")
-    .upsert(items, { onConflict: "quiz_template_id,code,version" });
-  check("Saving items", error);
-}
+// Parents first: scenarios point at workflows and days.
+await upsert("settings", "settings", rows.settings, "key");
+await upsert("workflows", "workflows", rows.workflows, "code");
+await upsert("training days", "schedule_days", rows.scheduleDays, "code");
+await upsert("rule slots", "rule_slots", rows.ruleSlots, "key");
+await upsert("scenarios", "scenarios", rows.scenarios, "schedule_day,code,version");
 
 // 3. Report
-const codeById = Object.fromEntries([...beforeQuizzes, ...quizzes].map((q) => [q.id, q.code]));
 console.log("\nDone:");
-report("settings", rows.settings.map((s) => s.key), beforeSettings.map((s) => s.key));
-report("quiz_templates", rows.quizTemplates.map((q) => q.code), beforeQuizzes.map((q) => q.code));
-report("interview_questions", rows.interviewQuestions.map((q) => q.key), beforeInterview.map((q) => q.key));
-report(
-  "question_templates",
-  rows.questionTemplates.map((q) => itemKey({ quiz: q.quiz_code, code: q.code, version: q.version })),
-  beforeItems.map((q) => itemKey({ quiz: codeById[q.quiz_template_id], code: q.code, version: q.version })),
-);
+report("settings", rows.settings.map((s) => s.key), before.settings);
+report("workflows", rows.workflows.map((w) => w.code), before.workflows);
+report("rule_slots", rows.ruleSlots.map((r) => r.key), before.ruleSlots);
+report("schedule_days", rows.scheduleDays.map((d) => d.code), before.scheduleDays);
+report("scenarios", rows.scenarios.map(scenarioKey), before.scenarios);

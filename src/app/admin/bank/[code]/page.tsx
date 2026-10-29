@@ -3,72 +3,119 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
-import { getQuizWithItems, type QuestionTemplate } from "@/lib/quiz-bank";
+import { getWorkflowWithScenarios, type Scenario } from "@/lib/library";
 import { BankText, pointsLabel } from "../bank-text";
 
-export default function BankQuizPage({ params }: PageProps<"/admin/bank/[code]">) {
+export default function WorkflowPage({ params }: PageProps<"/admin/bank/[code]">) {
   return (
     <SignedInPage area="VFDA admin">
       <Link href="/admin/bank" className="text-sm text-foreground/60 hover:underline">
-        ← Quiz bank
+        ← Library
       </Link>
       <Suspense fallback={<Loading />}>
-        <BankQuiz params={params} />
+        <WorkflowDetail params={params} />
       </Suspense>
     </SignedInPage>
   );
 }
 
-async function BankQuiz({ params }: { params: Promise<{ code: string }> }) {
+const ESCALATION_LABELS = { none: "No escalation", approval: "Needs approval", immediate: "Escalate immediately" };
+
+async function WorkflowDetail({ params }: { params: Promise<{ code: string }> }) {
   await requireRole("vfda_admin");
   const { code } = await params;
-  const data = await getQuizWithItems(code);
+  const data = await getWorkflowWithScenarios(code);
   if (!data) notFound();
-  const { quiz, items } = data;
-
-  // Group items by part, keeping bank order.
-  const parts = new Map<string, QuestionTemplate[]>();
-  for (const item of items) parts.set(item.part, [...(parts.get(item.part) ?? []), item]);
+  const { workflow: wf, byDay, scenarioCount, ruleQuestions } = data;
 
   return (
     <>
       <div>
         <h1 className="text-2xl font-semibold">
-          <span className="font-mono">{quiz.code}</span> · {quiz.title}
+          <span className="font-mono">{wf.code}</span> · {wf.name}
         </h1>
         <p className="mt-1 text-foreground/70">
-          Week {quiz.week}, day {quiz.day} · {pointsLabel(quiz)} · office gets it: {quiz.condition}{" "}
-          · answers: {quiz.answer_format}
+          {scenarioCount} scenarios across {byDay.length} training day{byDay.length === 1 ? "" : "s"} · read-only
         </p>
       </div>
 
-      <dl className="grid gap-2 text-sm">
-        <Field label="Cards">{quiz.cards.join(" · ") || "—"}</Field>
-        <Field label="Proof of work">{quiz.proof_of_work.join(" · ") || "—"}</Field>
-        {quiz.notes && (
-          <Field label="Notes">
-            <BankText text={quiz.notes} />
-          </Field>
-        )}
+      <dl className="grid gap-4 text-sm sm:grid-cols-2">
+        <Field label="Trigger" wide>
+          <BankText text={wf.trigger} />
+        </Field>
+        <Field label="Required information">
+          <Points points={wf.required_information} />
+        </Field>
+        <Field label="Steps">
+          <Points points={wf.steps} ordered />
+        </Field>
+        <Field label="Definition of done" wide>
+          <BankText text={wf.definition_of_done} />
+        </Field>
+        <Field label="VA can decide">
+          <Points points={wf.va_can_decide} />
+        </Field>
+        <Field label="Requires approval">
+          <Points points={wf.requires_approval} />
+        </Field>
+        <Field label="Immediate escalation">
+          <Points points={wf.immediate_escalation} />
+        </Field>
+        <Field label="Common mistakes">
+          <Points points={wf.common_mistakes} />
+        </Field>
+        <Field label="Prohibited actions">
+          <Points points={wf.prohibited_actions} tone="red" />
+        </Field>
+        <Field label="SOP outline (the VA writes this)">
+          <Points points={wf.sop_outline} ordered />
+        </Field>
+        <Field label="Pass standard" wide>
+          <BankText text={wf.pass_standard} />
+        </Field>
+        <Field label={`Office rules used (${wf.rule_keys.length})`} wide>
+          <ul className="flex flex-wrap gap-1.5">
+            {wf.rule_keys.map((key) => (
+              <li key={key}>
+                <code
+                  className="rounded bg-amber-100 px-1 text-[0.9em] text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"
+                  title={ruleQuestions[key] ?? "Derived from other rules"}
+                >
+                  {key}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </Field>
+        <Field label="Bank references">{wf.bank_refs.join(" · ") || "—"}</Field>
+        <Field label={`Test scenarios (${wf.test_scenarios.length})`}>
+          <ul className="flex flex-wrap gap-x-2 font-mono text-xs">
+            {wf.test_scenarios.map((ref) => (
+              <li key={ref}>
+                <a href={`#${ref}`} className="underline">
+                  {ref}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Field>
       </dl>
 
-      {items.length === 0 && (
-        <p className="rounded-lg border border-foreground/15 px-4 py-3">
-          No fixed items: this quiz is built per office from its gray cards.
-        </p>
+      {byDay.length === 0 && (
+        <p className="rounded-lg border border-foreground/15 px-4 py-3">No scenarios for this workflow yet.</p>
       )}
 
-      {[...parts.entries()].map(([part, partItems]) => (
-        <section key={part} className="flex flex-col gap-2">
+      {byDay.map(({ day, scenarios }) => (
+        <section key={day.code} className="flex flex-col gap-2">
           <h2 className="mt-4 text-lg font-semibold">
-            Part {part}
-            {partItems[0].part_title && ` · ${partItems[0].part_title}`}
+            <span className="font-mono">{day.code}</span> · {day.title}
             <span className="ml-2 text-sm font-normal text-foreground/60">
-              {partItems.length} items
+              {scenarios.length} scenario{scenarios.length === 1 ? "" : "s"} · day: {pointsLabel(day)}
+              {day.condition !== "always" && ` · only if ${day.condition}`}
             </span>
           </h2>
-          {partItems.map((item) => (
-            <Item key={item.id} quizCode={quiz.code} item={item} />
+          {scenarios.map((s) => (
+            <ScenarioItem key={s.id} scenario={s} dayFormat={day.answer_format} />
           ))}
         </section>
       ))}
@@ -76,31 +123,31 @@ async function BankQuiz({ params }: { params: Promise<{ code: string }> }) {
   );
 }
 
-function Item({ quizCode, item }: { quizCode: string; item: QuestionTemplate }) {
+function ScenarioItem({ scenario: s, dayFormat }: { scenario: Scenario; dayFormat: string }) {
+  const cr = s.correct_response;
   return (
-    <details
-      id={`${quizCode}-${item.code}-${item.version}`}
-      className="rounded-lg border border-foreground/15 px-4 py-2 open:pb-4"
-    >
+    <details id={`${s.schedule_day}-${s.code}`} className="scroll-mt-4 rounded-lg border border-foreground/15 px-4 py-2 open:pb-4">
       <summary className="cursor-pointer list-inside">
-        <span className="font-mono font-medium">{item.code}</span>
+        <span className="font-mono font-medium">{s.code}</span>
         <span className="ml-2 text-xs text-foreground/60">
-          v{item.version} · {item.type === "mc" ? "multiple choice" : "situational"} ·{" "}
-          {item.points} pt{item.points > 1 ? "s" : ""}
-          {item.condition !== "always" && ` · only if ${item.condition}`}
+          Part {s.part}
+          {s.part_title && ` (${s.part_title})`} · v{s.version} ·{" "}
+          {s.type === "mc" ? "multiple choice" : "situational"} · {s.points} pt{s.points > 1 ? "s" : ""}
+          {s.condition !== "always" && ` · only if ${s.condition}`}
+          {s.escalation_level !== "none" && ` · ${ESCALATION_LABELS[s.escalation_level].toLowerCase()}`}
         </span>
-        <p className="mt-1 line-clamp-2 text-sm text-foreground/80">{item.stem}</p>
+        <p className="mt-1 line-clamp-2 text-sm text-foreground/80">{s.stem}</p>
       </summary>
 
       <dl className="mt-3 grid gap-3 text-sm">
-        <Field label="Question">
-          <BankText text={item.stem} />
+        <Field label="Scenario">
+          <BankText text={s.stem} />
         </Field>
 
-        {item.type === "mc" && item.options && (
+        {s.type === "mc" && s.options && (
           <Field label="Options">
             <ol className="list-[upper-alpha] pl-5">
-              {item.options.map((option, i) => (
+              {s.options.map((option, i) => (
                 <li key={i}>
                   <BankText text={option} />
                 </li>
@@ -108,70 +155,70 @@ function Item({ quizCode, item }: { quizCode: string; item: QuestionTemplate }) 
             </ol>
           </Field>
         )}
-        {item.type === "mc" && item.options_rule && (
-          <Field label="Options (built per office in Phase 4)">
-            <BankText text={item.options_rule} />
+        {s.type === "mc" && s.options_rule && (
+          <Field label="Options (built per office)">
+            <BankText text={s.options_rule} />
           </Field>
         )}
-        {item.answer && (
+        {s.answer && (
           <Field label="Answer">
-            <BankText text={item.answer} />
+            <BankText text={s.answer} />
           </Field>
         )}
 
-        {Array.isArray(item.look_for) && (
-          <Field label="Look for">
-            <PointList points={item.look_for} />
+        {Array.isArray(cr) && (
+          <Field label="Correct response">
+            <Points points={cr} />
           </Field>
         )}
-        {item.look_for && !Array.isArray(item.look_for) && (
-          <Field label="Look for">
+        {cr && !Array.isArray(cr) && (
+          <Field label="Correct response">
             <div className="grid gap-2 sm:grid-cols-3">
               {(["Say", "Do", "Book"] as const).map((part) => (
                 <div key={part}>
                   <p className="font-medium">{part}</p>
-                  {item.look_for && !Array.isArray(item.look_for) && item.look_for[part].length ? (
-                    <PointList points={item.look_for[part]} />
-                  ) : (
-                    <p className="text-foreground/50">Nothing required</p>
-                  )}
+                  {cr[part].length ? <Points points={cr[part]} /> : <p className="text-foreground/50">Nothing required</p>}
                 </div>
               ))}
             </div>
           </Field>
         )}
 
-        {item.critical_fail && (
+        {s.critical_fail && (
           <Field label="Critical fail">
             <span className="text-red-700 dark:text-red-400">
-              <BankText text={item.critical_fail} />
+              <BankText text={s.critical_fail} />
             </span>
           </Field>
         )}
-        <Field label="Source">
-          {item.bank_ref || "—"}
-          {item.answer_format && ` · answers: ${item.answer_format}`}
+        <Field label="Details">
+          {ESCALATION_LABELS[s.escalation_level]} · answers: {s.answer_format ?? dayFormat} · repeat variant:{" "}
+          {s.repeat_variant ?? "none"} · status: {s.test_status} · source: {s.bank_ref || "—"}
         </Field>
       </dl>
     </details>
   );
 }
 
-function PointList({ points }: { points: string[] }) {
+function Points({ points, ordered, tone }: { points: string[]; ordered?: boolean; tone?: "red" }) {
+  if (points.length === 0) return <p className="text-foreground/50">—</p>;
+  const List = ordered ? "ol" : "ul";
   return (
-    <ul className="list-disc pl-5">
+    <List
+      className={`${ordered ? "list-decimal" : "list-disc"} pl-5 ${tone === "red" ? "text-red-700 dark:text-red-400" : ""}`}
+    >
       {points.map((point, i) => (
         <li key={i}>
           <BankText text={point} />
         </li>
       ))}
-    </ul>
+    </List>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) {
   return (
-    <div>
+    <div className={wide ? "sm:col-span-2" : undefined}>
       <dt className="text-xs font-medium uppercase tracking-wide text-foreground/50">{label}</dt>
       <dd className="mt-0.5">{children}</dd>
     </div>
