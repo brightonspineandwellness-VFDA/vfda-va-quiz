@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
@@ -22,6 +23,9 @@ async function AdminHome() {
     <>
       <h1 className="text-2xl font-semibold">Welcome, {user.fullName || user.email}</h1>
       <p>Offices: {count ?? 0}</p>
+      <Link href="/admin/bank" className="self-start underline">
+        Quiz bank
+      </Link>
     </>
   );
 }

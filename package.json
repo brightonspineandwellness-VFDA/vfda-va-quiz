@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "db:bundle": "node scripts/bundle-sql.mjs"
+    "db:bundle": "node scripts/bundle-sql.mjs",
+    "import:bank": "node scripts/import-bank.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
