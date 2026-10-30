@@ -263,6 +263,7 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
                     {isAdmin && (
                       <p className="mt-0.5 text-xs text-foreground/50">
                         <span className="font-mono">{q.key}</span> · {TIER_LABELS[q.tier]}
+                        {q.suggested_answer !== null && " (has a VFDA suggestion)"}
                         {data.sources[q.key] && ` · from ${SOURCE_LABELS[data.sources[q.key].source]}`}
                         {q.source && ` · ${q.source}`}
                       </p>

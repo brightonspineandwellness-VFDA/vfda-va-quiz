@@ -38,6 +38,7 @@ type SlotRow = {
   key: string;
   tier: InterviewQuestion["tier"];
   card_group: string | null;
+  suggested_answer: InterviewQuestion["suggested_answer"];
   schedule_day: string;
   question: string;
   answer_type: InterviewQuestion["answer_type"];
@@ -49,7 +50,7 @@ async function loadBankParts(supabase: Awaited<ReturnType<typeof createSessionCl
   const [slots, days, settings] = await Promise.all([
     supabase
       .from("rule_slots")
-      .select("key, tier, card_group, schedule_day, question, answer_type, condition, card_source")
+      .select("key, tier, card_group, suggested_answer, schedule_day, question, answer_type, condition, card_source")
       .order("position"),
     supabase.from("schedule_days").select("code, title, condition").order("week").order("day"),
     supabase.from("settings").select("key, value").in("key", ["conditions", "gray_card_questions", "card_group_order"]),
@@ -62,6 +63,7 @@ async function loadBankParts(supabase: Awaited<ReturnType<typeof createSessionCl
         key: s.key,
         tier: s.tier,
         card_group: s.card_group,
+        suggested_answer: s.suggested_answer,
         quiz: s.schedule_day,
         question: s.question,
         answer_type: s.answer_type,

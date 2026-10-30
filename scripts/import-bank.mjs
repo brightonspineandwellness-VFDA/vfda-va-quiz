@@ -70,6 +70,9 @@ console.log(
   `  rule tiers: ${tiers.profile} profile, ${tiers.doctor} doctor (in ${Object.keys(bank.card_groups).length} card groups), ` +
     `${tiers.default} default, ${tiers.auto} auto`,
 );
+const suggested = rows.ruleSlots.filter((r) => r.suggested_answer !== null).length;
+console.log(`  ${suggested} doctor-tier slots have a VFDA suggestion (shown to the doctor, never auto-accepted)`);
+if (bank.approvals) console.log(`  approvals stored in settings`);
 const withRule = rows.scenarios.filter((s) => s.options_rule).length;
 console.log(`  ${withRule} multiple-choice scenarios use options_rule (options built per office later)`);
 
@@ -93,7 +96,7 @@ function check(step, error) {
     error.code === "PGRST205" || error.code === "42P01"
       ? "\n  Run supabase/phase2b.sql in the SQL Editor first."
       : ["PGRST204", "PGRST202", "42703", "42883"].includes(error.code)
-        ? "\n  Run supabase/phase2c.sql in the SQL Editor first."
+        ? `\n  Run supabase/${/suggested_answer/.test(error.message) ? "phase2d" : "phase2c"}.sql in the SQL Editor first.`
         : "";
   fail(`${step} failed: ${error.message}${hint}`);
 }

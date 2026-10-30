@@ -119,6 +119,7 @@ export function validateBank(bank) {
       err(`${where}: default tier needs a default_answer`);
     }
     if (r.tier !== "default" && r.default_answer != null) err(`${where}: only default-tier slots have a default_answer`);
+    if (r.suggested_answer != null && r.tier !== "doctor") err(`${where}: only doctor-tier slots have a suggested_answer`);
     if (r.tier === "auto" && !isText(r.auto_rule)) err(`${where}: auto tier needs an auto_rule`);
     if (r.tier === "doctor" && !(bank.card_groups?.[r.card_group] ?? []).includes(r.key)) {
       err(`${where}: doctor tier needs a card_group that lists it (got "${r.card_group}")`);
@@ -243,6 +244,10 @@ export function buildRows(bank) {
     position: i,
   }));
 
+  // Upload answers are {text, links}; one written as plain text becomes the text.
+  const asAnswer = (r, value) =>
+    r.answer_type === "upload" && typeof value === "string" ? { text: value, links: [] } : (value ?? null);
+
   const ruleSlots = bank.rule_slots.map((r, i) => ({
     key: r.key,
     question: r.question,
@@ -252,11 +257,9 @@ export function buildRows(bank) {
     workflows: r.workflows ?? [],
     schedule_day: r.schedule_day,
     tier: r.tier,
-    // Upload answers are {text, links}; a default written as plain text becomes the text.
-    default_answer:
-      r.answer_type === "upload" && typeof r.default_answer === "string"
-        ? { text: r.default_answer, links: [] }
-        : (r.default_answer ?? null),
+    default_answer: asAnswer(r, r.default_answer),
+    // Shown to the doctor as a starting point; never accepted on their behalf.
+    suggested_answer: asAnswer(r, r.suggested_answer),
     auto_rule: r.auto_rule ?? null,
     card_group: r.card_group ?? null,
     position: i,

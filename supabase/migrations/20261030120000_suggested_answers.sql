@@ -1,0 +1,91 @@
+-- Phase 2d: suggested answers (bank v2.1).
+--
+-- Some doctor-tier rule slots carry a VFDA suggested_answer. It is never
+-- accepted on the office's behalf: when the doctor's card PDFs don't cover the
+-- rule, the doctor's question shows the suggestion as a starting point to
+-- confirm or change. Only default-tier slots are accepted automatically.
+--
+-- refresh_office_rules() now also removes VFDA defaults that nobody has
+-- confirmed for slots that are no longer default-tier (v2.1 moved the VA's
+-- limits and the timing rules from VFDA standards to the doctor), so those
+-- rules become questions again instead of staying pre-accepted.
+-- Safe to run more than once.
+
+alter table public.rule_slots add column if not exists suggested_answer jsonb;
+
+-- Doctors read the approvals summary too.
+drop policy if exists "doctor reads setup settings" on public.settings;
+create policy "doctor reads setup settings" on public.settings
+  for select to authenticated
+  using ((select private.my_role()) = 'doctor'
+         and key in ('conditions', 'gray_card_questions', 'office_fields', 'gray_card_workflow_fields',
+                     'card_groups', 'card_group_order', 'doctor_flow', 'approvals'));
+
+create or replace function private.refresh_office_rules(p_office_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  o      public.offices;
+  tools  jsonb;
+  doctor text;
+  s      record;
+  v      jsonb;
+  prev   text := coalesce(current_setting('vfda.system_write', true), '');
+begin
+  select * into o from public.offices where id = p_office_id;
+  if not found then
+    return;
+  end if;
+  perform set_config('vfda.system_write', 'on', true);
+
+  -- Untouched VFDA defaults for slots that are no longer default-tier.
+  delete from public.office_rules r
+  using public.rule_slots rs
+  where r.office_id = o.id
+    and r.rule_slot_key = rs.key
+    and rs.tier <> 'default'
+    and r.source = 'vfda_default'
+    and r.source_document_id is null
+    and r.doctor_approved_at is null;
+
+  insert into public.office_rules (office_id, rule_slot_key, rule, source, status, workflows)
+  select o.id, rs.key, rs.default_answer, 'vfda_default', 'accepted', rs.workflows
+  from public.rule_slots rs
+  where rs.tier = 'default'
+  on conflict (office_id, rule_slot_key, source_document_id) do nothing;
+
+  update public.office_rules r
+  set rule = rs.default_answer
+  from public.rule_slots rs
+  where r.office_id = o.id
+    and r.rule_slot_key = rs.key
+    and rs.tier = 'default'
+    and r.source_document_id is null
+    and r.source = 'vfda_default'
+    and r.doctor_approved_at is null
+    and r.rule is distinct from rs.default_answer;
+
+  select r.rule into tools
+  from public.office_rules r
+  where r.office_id = o.id and r.rule_slot_key = 'APPROVED_TOOLS' and r.source_document_id is null;
+  doctor := coalesce(
+    nullif(btrim(o.doctor_name), ''),
+    (select nullif(btrim(p.full_name), '') from public.profiles p
+     where p.office_id = o.id and p.role = 'doctor' order by p.created_at limit 1));
+
+  for s in select rs.key, rs.workflows from public.rule_slots rs where rs.tier = 'auto' order by rs.position loop
+    v := private.auto_rule_value(s.key, o.name, doctor, tools);
+    insert into public.office_rules (office_id, rule_slot_key, rule, source, status, workflows)
+    values (o.id, s.key, v, 'auto', case when v is null then 'proposed' else 'accepted' end, s.workflows)
+    on conflict (office_id, rule_slot_key, source_document_id) do update
+      set rule = excluded.rule, status = excluded.status
+      where public.office_rules.source = 'auto'
+        and public.office_rules.rule is distinct from excluded.rule;
+  end loop;
+
+  perform set_config('vfda.system_write', prev, true);
+end;
+$$;

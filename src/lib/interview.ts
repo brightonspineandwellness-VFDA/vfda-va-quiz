@@ -12,6 +12,9 @@ export type InterviewQuestion = {
   key: string;
   tier: Tier;
   card_group: string | null;
+  // VFDA's suggestion for some doctor-tier rules: a starting point the doctor
+  // confirms or changes, never accepted for them.
+  suggested_answer: AnswerValue;
   quiz: string; // 'PROFILE' or a training day code (rule_slots.schedule_day)
   question: string;
   answer_type: AnswerType;

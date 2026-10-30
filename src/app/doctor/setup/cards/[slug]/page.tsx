@@ -149,6 +149,8 @@ function QuestionCard({
   officeId: string;
   fileUrls: Record<string, string>;
 }) {
+  // A starting point only: nothing is saved until the doctor presses Save.
+  const suggestion = item.reason === "not_found" ? item.slot.suggested_answer : null;
   return (
     <article id={`rule-${item.slot.key}`} className="flex flex-col gap-2 rounded-lg border border-amber-300 p-4 dark:border-amber-700">
       <p className="font-medium">{item.slot.question}</p>
@@ -164,7 +166,16 @@ function QuestionCard({
           <p className="text-foreground/70">Which is right? Type the rule your VA should follow.</p>
         </div>
       )}
-      <RuleEditor officeId={officeId} slot={item.slot} value={null} fileUrls={fileUrls} startOpen />
+      {suggestion && (
+        <div className="flex flex-col gap-1 text-sm">
+          <p className="text-foreground/70">VFDA suggests:</p>
+          <div className="rounded-md bg-foreground/5 px-3 py-2">
+            <RuleValue slot={item.slot} value={suggestion} />
+          </div>
+          <p className="text-foreground/70">Save it as is, or change it to fit your office.</p>
+        </div>
+      )}
+      <RuleEditor officeId={officeId} slot={item.slot} value={suggestion} fileUrls={fileUrls} startOpen />
     </article>
   );
 }
