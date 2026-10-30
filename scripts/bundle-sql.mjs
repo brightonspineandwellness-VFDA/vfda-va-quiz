@@ -29,6 +29,12 @@ const PHASES = [
     title: "Phase 2d database changes (suggested answers, bank v2.1)",
     after: "phase2c.sql",
   },
+  {
+    name: "phase3b",
+    starts: "20261030130000",
+    title: "Phase 3b database changes (card upload, rule extraction, gap questions)",
+    after: "phase2d.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

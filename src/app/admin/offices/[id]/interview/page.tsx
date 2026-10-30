@@ -37,6 +37,9 @@ async function AdminInterview({ params }: { params: Promise<{ id: string }> }) {
         <p className="mb-2 text-sm font-medium">Doctor&apos;s progress</p>
         <StepProgress steps={flow.steps} links={false} />
       </div>
+      <Link href={`/admin/offices/${data.office.id}/rules`} className="self-start text-sm underline">
+        Cards and extracted rules: review and send to doctor →
+      </Link>
       <p className="text-sm text-foreground/70">
         Every rule slot for this office, including VFDA standards and automatic rules (the doctor never sees
         automatic rules). Editing a standard or an automatic rule here makes it VFDA&apos;s answer: it won&apos;t be

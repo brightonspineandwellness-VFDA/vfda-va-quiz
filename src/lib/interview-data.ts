@@ -1,6 +1,15 @@
 import "server-only";
 
-import { buildDoctorFlow, type RuleRow, type Step } from "@/lib/doctor-flow";
+import {
+  buildDoctorFlow,
+  planGaps,
+  type DocumentRow,
+  type FlowInput,
+  type GapRow,
+  type OfficeState,
+  type RuleRow,
+  type Step,
+} from "@/lib/doctor-flow";
 import {
   profileFromAnswers,
   UPLOAD_BUCKET,
@@ -82,8 +91,24 @@ type CardRow = { id: string; code: string; card_answers: Record<string, string>;
 type DbRule = Omit<RuleRow, "document_name"> & { office_id: string; office_documents: { file_name: string } | null };
 
 const RULE_COLUMNS =
-  "id, office_id, rule_slot_key, rule, attachments, source, source_document_id, source_quote, status, " +
+  "id, office_id, rule_slot_key, rule, attachments, source, source_document_id, source_quote, status, partial, " +
   "doctor_approved_at, office_documents(file_name)";
+const OFFICE_STATE_COLUMNS = "cards_uploaded_at, extraction_status, extraction_error, sent_to_doctor_at";
+const DOCUMENT_COLUMNS = "id, office_id, file_name, card_name, file_path, imported_at, created_at";
+const GAP_COLUMNS = "id, office_id, rule_slot_key, workflow, question, reason, answer, answered_at, released_at";
+
+type DbOffice = {
+  cards_uploaded_at: string | null;
+  extraction_status: OfficeState["extractionStatus"];
+  extraction_error: string | null;
+  sent_to_doctor_at: string | null;
+};
+const toState = (o: DbOffice): OfficeState => ({
+  cardsUploadedAt: o.cards_uploaded_at,
+  extractionStatus: o.extraction_status,
+  sentToDoctorAt: o.sent_to_doctor_at,
+  extractionError: o.extraction_error,
+});
 
 const toRule = (r: DbRule): RuleRow => ({
   id: r.id,
@@ -94,6 +119,7 @@ const toRule = (r: DbRule): RuleRow => ({
   source_document_id: r.source_document_id,
   source_quote: r.source_quote,
   status: r.status,
+  partial: r.partial ?? false,
   doctor_approved_at: r.doctor_approved_at,
   document_name: r.office_documents?.file_name ?? null,
 });
@@ -115,18 +141,24 @@ const toCard = (c: CardRow): GrayCard => ({
 type Supabase = Awaited<ReturnType<typeof createSessionClient>>;
 type BankParts = Awaited<ReturnType<typeof loadBankParts>>;
 
-function flowFor(bank: BankParts, rules: RuleRow[], grayCards: GrayCard[], documentCount: number) {
-  return buildDoctorFlow({
+function flowInput(
+  bank: BankParts,
+  rules: RuleRow[],
+  office: OfficeState,
+  documents: DocumentRow[],
+  gaps: GapRow[],
+): FlowInput {
+  return {
     slots: bank.questions,
     dayConditions: Object.fromEntries(bank.quizzes.map((q) => [q.code, q.condition])),
     conditions: bank.conditions,
     cardGroupOrder: bank.cardGroupOrder,
     profile: profileFromAnswers(toAnswers(rules)),
     rules,
-    documentCount,
-    grayCards,
-    grayCardQuestions: bank.grayCardQuestions,
-  });
+    office,
+    documents,
+    gaps,
+  };
 }
 
 async function signedUrls(supabase: Supabase, rules: RuleRow[]) {
@@ -145,24 +177,26 @@ export async function loadOfficeSetup(officeId: string) {
   const supabase = await createSessionClient();
   const { data: office, error } = await supabase
     .from("offices")
-    .select("id, name, status")
+    .select(`id, name, status, ${OFFICE_STATE_COLUMNS}`)
     .eq("id", officeId)
     .maybeSingle();
   if (error) throw error;
   if (!office) return null;
 
-  const [bank, rules, cards, documents] = await Promise.all([
+  const [bank, rules, cards, documents, gaps] = await Promise.all([
     loadBankParts(supabase),
     supabase.from("office_rules").select(RULE_COLUMNS).eq("office_id", officeId),
     supabase.from("office_workflows").select(CARD_COLUMNS).eq("office_id", officeId).order("position"),
-    supabase.from("office_documents").select("id", { count: "exact", head: true }).eq("office_id", officeId),
+    supabase.from("office_documents").select(DOCUMENT_COLUMNS).eq("office_id", officeId).eq("kind", "card").order("created_at"),
+    // Doctors only see released questions (row-level security); VFDA sees all.
+    supabase.from("gap_questions").select(GAP_COLUMNS).eq("office_id", officeId).order("created_at"),
   ]);
-  for (const r of [rules, cards, documents]) if (r.error) throw r.error;
+  for (const r of [rules, cards, documents, gaps]) if (r.error) throw r.error;
 
   const ruleRows = ((rules.data ?? []) as unknown as DbRule[]).map(toRule);
   const grayCards = ((cards.data ?? []) as CardRow[]).map(toCard);
   const interview: InterviewData = {
-    office,
+    office: { id: office.id, name: office.name, status: office.status },
     ...bank,
     answers: toAnswers(ruleRows),
     sources: Object.fromEntries(
@@ -173,7 +207,20 @@ export async function loadOfficeSetup(officeId: string) {
     grayCards,
     fileUrls: await signedUrls(supabase, ruleRows),
   };
-  return { interview, flow: flowFor(bank, ruleRows, grayCards, documents.count ?? 0) };
+  const state = toState(office as DbOffice);
+  const documentRows = (documents.data ?? []) as DocumentRow[];
+  const gapRows = (gaps.data ?? []) as GapRow[];
+  const input = flowInput(bank, ruleRows, state, documentRows, gapRows);
+  return {
+    interview,
+    state,
+    rules: ruleRows,
+    documents: documentRows,
+    gaps: gapRows,
+    flow: buildDoctorFlow(input),
+    // What "Send to doctor" would change (meaningful for VFDA, who sees every question).
+    gapPlan: planGaps(input),
+  };
 }
 
 export type OfficeRow = {
@@ -188,23 +235,20 @@ export type OfficeRow = {
 // Offices list for VFDA admins, with the doctor's setup steps per office.
 export async function loadOffices(): Promise<OfficeRow[]> {
   const supabase = await createSessionClient();
-  const [offices, doctors, rules, cards, documents, bank] = await Promise.all([
-    supabase.from("offices").select("id, name, status, created_at").order("created_at"),
+  const [offices, doctors, rules, documents, gaps, bank] = await Promise.all([
+    supabase.from("offices").select(`id, name, status, created_at, ${OFFICE_STATE_COLUMNS}`).order("created_at"),
     supabase.from("profiles").select("office_id, full_name, email").eq("role", "doctor"),
     supabase.from("office_rules").select(RULE_COLUMNS),
-    supabase.from("office_workflows").select(`office_id, ${CARD_COLUMNS}`),
-    supabase.from("office_documents").select("office_id"),
+    supabase.from("office_documents").select(DOCUMENT_COLUMNS).eq("kind", "card"),
+    supabase.from("gap_questions").select(GAP_COLUMNS),
     loadBankParts(supabase),
   ]);
-  for (const r of [offices, doctors, rules, cards, documents]) if (r.error) throw r.error;
+  for (const r of [offices, doctors, rules, documents, gaps]) if (r.error) throw r.error;
 
   const allRules = (rules.data ?? []) as unknown as DbRule[];
   return (offices.data ?? []).map((office) => {
     const officeRules = allRules.filter((r) => r.office_id === office.id).map(toRule);
-    const officeCards = ((cards.data ?? []) as (CardRow & { office_id: string })[])
-      .filter((c) => c.office_id === office.id)
-      .map(toCard);
-    const documentCount = (documents.data ?? []).filter((d) => d.office_id === office.id).length;
+    const mine = <T extends { office_id: string }>(rows: T[] | null) => (rows ?? []).filter((r) => r.office_id === office.id);
     return {
       id: office.id,
       name: office.name,
@@ -213,7 +257,15 @@ export async function loadOffices(): Promise<OfficeRow[]> {
       doctors: (doctors.data ?? [])
         .filter((d) => d.office_id === office.id)
         .map((d) => ({ name: d.full_name, email: d.email })),
-      steps: flowFor(bank, officeRules, officeCards, documentCount).steps,
+      steps: buildDoctorFlow(
+        flowInput(
+        bank,
+        officeRules,
+        toState(office),
+        mine(documents.data as (DocumentRow & { office_id: string })[]),
+        mine(gaps.data as (GapRow & { office_id: string })[]),
+        ),
+      ).steps,
     };
   });
 }

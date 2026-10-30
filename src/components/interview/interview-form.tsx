@@ -57,7 +57,17 @@ const SOURCE_LABELS = {
   card_import: "card",
 } as const;
 
-export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin: boolean }) {
+// showGrayCards: the doctor's profile step leaves gray cards out (they upload
+// them as PDFs in step 2); VFDA still fills them in here.
+export function InterviewForm({
+  data,
+  isAdmin,
+  showGrayCards = true,
+}: {
+  data: InterviewData;
+  isAdmin: boolean;
+  showGrayCards?: boolean;
+}) {
   const officeId = data.office.id;
   const [answers, setAnswers] = useState<Record<string, Answer>>(data.answers);
   const [grayCards, setGrayCards] = useState<GrayCard[]>(data.grayCards);
@@ -288,7 +298,7 @@ export function InterviewForm({ data, isAdmin }: { data: InterviewData; isAdmin:
         </section>
       ))}
 
-      {profile.HAS_GRAY_CARDS === "yes" && (
+      {showGrayCards && profile.HAS_GRAY_CARDS === "yes" && (
         <GrayCards
           cards={grayCards}
           questions={data.grayCardQuestions}

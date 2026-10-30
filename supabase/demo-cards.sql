@@ -1,18 +1,21 @@
--- DEMO ONLY: pretend VFDA uploaded two Trello card PDFs for the demo office
--- and reviewed the rules extracted from them. Lets you test the doctor's
--- "Your cards" and "VFDA standards" steps before PDF import exists.
+-- DEMO ONLY: pretend the demo office uploaded two Trello card PDFs, they were
+-- read, and VFDA reviewed most of the extracted rules. Lets you test the
+-- doctor's steps and VFDA's review page without real PDFs or the Claude API.
 --
--- Run after phase2c.sql, `npm run import:bank` and supabase/seed.sql.
--- Running it again resets the demo card rules to "waiting for the doctor".
+-- Run after phase3b.sql, `npm run import:bank` and supabase/seed.sql.
+-- Running it again resets the demo card rules (it never un-sends: if VFDA
+-- already sent the rules to the doctor, that stays).
 -- Fake data only: no real patients, logins or card numbers.
 --
--- What you'll see as the demo doctor:
---   VA Onboarding & Basics   services, not offered, mission, greeting found;
---                            escalation contact conflicts between the two PDFs;
---                            USP and core values not found (short questions)
---   Open & Close Daily List  office hours + opening tasks found; closing tasks a question
---   other groups             not found yet (short questions)
---   VFDA standards           callback time: your card says something different
+-- Then, as VFDA (Offices → Cards & rules for the demo office):
+--   one rule still to review (no-show rule, partial); accept or reject it,
+--   then "Send to doctor".
+-- As the demo doctor, after that:
+--   Confirm your rules   VA Onboarding & Basics (escalation contact is a question:
+--                        the two PDFs disagree), Open & Close Daily List
+--   Questions for you    rules the cards didn't cover, with VFDA suggestions
+--                        where there is one (e.g. confirmation rule)
+--   VFDA standards       pre-accepted
 
 do $$
 declare
@@ -24,11 +27,21 @@ begin
     raise exception 'The demo office is missing. Run supabase/seed.sql first.';
   end if;
 
-  insert into public.office_documents (id, office_id, kind, file_path, file_name, imported_at)
+  insert into public.office_documents (id, office_id, kind, file_path, file_name, card_name, imported_at, created_at)
   values
-    (doc1, office, 'card', office || '/demo/onboarding-cards.pdf', 'VA Onboarding cards (FAKE).pdf', now()),
-    (doc2, office, 'card', office || '/demo/daily-list-cards.pdf', 'Daily List cards (FAKE).pdf', now())
-  on conflict (id) do nothing;
+    (doc1, office, 'card', office || '/demo/onboarding-cards.pdf', 'VA Onboarding cards (FAKE).pdf', 'VA Onboarding',
+     now(), now() - interval '1 minute'),
+    (doc2, office, 'card', office || '/demo/daily-list-cards.pdf', 'Daily List cards (FAKE).pdf', 'Open & Close',
+     now(), now() - interval '1 minute')
+  on conflict (id) do update set card_name = excluded.card_name;
+
+  -- Uploaded and read; VFDA's review comes next.
+  update public.offices
+  set cards_uploaded_at = coalesce(cards_uploaded_at, now()),
+      extraction_status = 'done',
+      extracted_at = now(),
+      extraction_error = null
+  where id = office;
 
   insert into public.office_rules
     (office_id, rule_slot_key, rule, source, source_document_id, source_quote, status, vfda_reviewed_at)
@@ -50,15 +63,21 @@ begin
     (office, 'OPENING_TASKS', '["Check voicemail and texts", "Confirm today''s appointments", "Print the day sheet"]',
      'card_import', doc2, 'Open: voicemail + texts, confirm today, print day sheet.', 'needs_doctor', now()),
     (office, 'CALLBACK_TIME', '"Within 1 hour during office hours."',
-     'card_import', doc2, 'Call everyone back within the hour.', 'needs_doctor', now())
+     'card_import', doc2, 'Call everyone back within the hour.', 'needs_doctor', now()),
+    -- Waiting for VFDA: only part of the rule is on the card.
+    (office, 'NO_SHOW_RULE', '"Call no-shows the same day."',
+     'card_import', doc2, 'No-shows: call them same day.', 'proposed', null)
   on conflict (office_id, rule_slot_key, source_document_id) do update
     set rule = excluded.rule,
         source = 'card_import',
         source_quote = excluded.source_quote,
-        status = 'needs_doctor',
+        status = excluded.status,
         vfda_reviewed_at = excluded.vfda_reviewed_at,
         doctor_approved_by = null,
         doctor_approved_at = null;
 
-  raise notice 'Demo card rules ready for the demo doctor.';
+  update public.office_rules set partial = (rule_slot_key = 'NO_SHOW_RULE')
+  where office_id = office and source_document_id in (doc1, doc2);
+
+  raise notice 'Demo cards ready: review them as VFDA, then send to the doctor.';
 end $$;

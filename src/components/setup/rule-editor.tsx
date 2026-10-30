@@ -12,7 +12,7 @@ import {
   UploadAnswer,
   YES_NO,
 } from "@/components/interview/answer-inputs";
-import { addInterviewFile, deleteInterviewFile, saveInterviewAnswer } from "@/lib/interview-actions";
+import { addInterviewFile, deleteInterviewFile, saveInterviewAnswer, type ActionResult } from "@/lib/interview-actions";
 import {
   emptyValue,
   type AnswerValue,
@@ -24,8 +24,10 @@ import {
 
 const button = "rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-60";
 
-// "Edit" for one rule (or the answer box for a short question). Saving writes
-// the office's direct rule as the doctor's own answer, then reloads the page.
+// "Edit" for one rule (or the answer box for a short question). By default
+// saving writes the office's direct rule as the user's own answer; pass
+// `save` (a bound server action) to save somewhere else, e.g. a gap question
+// or VFDA's edit of an extracted rule. Then reloads the page.
 export function RuleEditor({
   officeId,
   slot,
@@ -34,6 +36,9 @@ export function RuleEditor({
   fileUrls = {},
   startOpen = false,
   editLabel = "Edit",
+  saveLabel = "Save",
+  save,
+  files = !save,
 }: {
   officeId: string;
   slot: InterviewQuestion;
@@ -42,6 +47,10 @@ export function RuleEditor({
   fileUrls?: Record<string, string>;
   startOpen?: boolean;
   editLabel?: string;
+  saveLabel?: string;
+  save?: (value: AnswerValue) => Promise<ActionResult>;
+  // File uploads attach to the office's direct rule for the slot.
+  files?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(startOpen);
@@ -57,10 +66,10 @@ export function RuleEditor({
     );
   }
 
-  function save() {
+  function submit() {
     setError(null);
     startTransition(async () => {
-      const result = await saveInterviewAnswer(officeId, slot.key, draft);
+      const result = save ? await save(draft) : await saveInterviewAnswer(officeId, slot.key, draft);
       if (!result.ok) return setError(result.error);
       if (!startOpen) setOpen(false);
       router.refresh();
@@ -86,10 +95,10 @@ export function RuleEditor({
 
   return (
     <div className="flex flex-col gap-2">
-      {input(slot, draft, setDraft, fileProps)}
+      {input(slot, draft, setDraft, files ? fileProps : null)}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={save} disabled={pending} className={`${button} bg-foreground text-background`}>
-          {pending ? "Saving…" : "Save"}
+        <button type="button" onClick={submit} disabled={pending} className={`${button} bg-foreground text-background`}>
+          {pending ? "Saving…" : saveLabel}
         </button>
         {!startOpen && (
           <button
@@ -120,7 +129,7 @@ function input(
   slot: InterviewQuestion,
   value: AnswerValue,
   set: (v: AnswerValue) => void,
-  fileProps: Omit<Parameters<typeof FileUploads>[0], "label" | "accept">,
+  fileProps: Omit<Parameters<typeof FileUploads>[0], "label" | "accept"> | null,
 ) {
   switch (slot.answer_type) {
     case "yesno":
@@ -140,7 +149,15 @@ function input(
         <UploadAnswer
           value={{ text: v?.text ?? "", links: v?.links ?? [] }}
           onChange={set}
-          files={<FileUploads {...fileProps} label="Files (PDF, Word, text, image, video up to 50 MB)" accept=".pdf,.doc,.docx,.txt,image/*,video/*" />}
+          files={
+            fileProps && (
+              <FileUploads
+                {...fileProps}
+                label="Files (PDF, Word, text, image, video up to 50 MB)"
+                accept=".pdf,.doc,.docx,.txt,image/*,video/*"
+              />
+            )
+          }
         />
       );
     }

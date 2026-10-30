@@ -50,6 +50,13 @@ async function getQuestion(supabase: Awaited<ReturnType<typeof createSessionClie
   } as InterviewQuestion;
 }
 
+// Card and standard rules open to the doctor once VFDA has sent the reviewed
+// rules (the office_rules guard enforces this too).
+async function sentToDoctor(supabase: Awaited<ReturnType<typeof createSessionClient>>, officeId: string) {
+  const { data } = await supabase.from("offices").select("sent_to_doctor_at").eq("id", officeId).maybeSingle();
+  return !!data?.sent_to_doctor_at;
+}
+
 // The office's direct rule for one slot: one row per office + key with no
 // source document. A doctor's answer is accepted with their approval; VFDA's
 // is accepted as reviewed by VFDA.
@@ -78,6 +85,9 @@ export async function saveInterviewAnswer(
   const question = await getQuestion(supabase, key);
   // Doctors can't read auto-tier slots, so those come back unknown too.
   if (!question || (user.role === "doctor" && question.tier === "auto")) return fail("Unknown question.");
+  if (user.role === "doctor" && question.tier !== "profile" && !(await sentToDoctor(supabase, officeId))) {
+    return fail("This step opens after VFDA reviews your cards.");
+  }
   const problem = checkAnswerValue(question, value);
   if (problem) return fail(problem);
 

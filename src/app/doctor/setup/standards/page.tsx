@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { ActionButton } from "@/components/setup/action-button";
+import { LockedStep } from "@/components/setup/locked-step";
 import { RuleEditor } from "@/components/setup/rule-editor";
 import { RuleValue } from "@/components/setup/rule-value";
 import { StepProgress } from "@/components/setup/step-progress";
@@ -12,8 +13,8 @@ import { loadDoctorSetup } from "../load";
 export default function StandardsPage() {
   return (
     <SignedInPage area="Doctor">
-      <Link href="/doctor/setup/cards" className="text-sm text-foreground/60 hover:underline">
-        ← Your cards
+      <Link href="/doctor/setup/questions" className="text-sm text-foreground/60 hover:underline">
+        ← Questions for you
       </Link>
       <Suspense fallback={<Loading />}>
         <StandardsStep />
@@ -22,11 +23,21 @@ export default function StandardsPage() {
   );
 }
 
-// Step 3: every default-tier rule, already in place as a VFDA standard.
+// Step 6: every default-tier rule, already in place as a VFDA standard.
 async function StandardsStep() {
   const setup = await loadDoctorSetup();
   if (!setup) return <p>Your office isn&apos;t set up yet. Contact VFDA.</p>;
   const { interview, flow } = setup;
+  if (!flow.unlocked) {
+    return (
+      <>
+        <h1 className="text-2xl font-semibold">Office setup: {interview.office.name}</h1>
+        <StepProgress steps={flow.steps} current="standards" />
+        <h2 className="text-xl font-semibold">Step 6 · VFDA standards</h2>
+        <LockedStep />
+      </>
+    );
+  }
   const items = flow.standards;
   const open = items.filter((s) => !s.accepted && !s.override).length;
   const overrides = items.filter((s) => s.override);
@@ -51,7 +62,7 @@ async function StandardsStep() {
       <h1 className="text-2xl font-semibold">Office setup: {interview.office.name}</h1>
       <StepProgress steps={flow.steps} current="standards" />
       <div>
-        <h2 className="text-xl font-semibold">Step 3 · VFDA standards</h2>
+        <h2 className="text-xl font-semibold">Step 6 · VFDA standards</h2>
         <p className="text-foreground/70">
           How VFDA trains every VA unless you tell us otherwise. They&apos;re already in place; accept them, or edit
           any that your office does differently.

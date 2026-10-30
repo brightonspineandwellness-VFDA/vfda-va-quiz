@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
+import { currentStep } from "@/lib/doctor-flow";
 import { loadOffices } from "@/lib/interview-data";
 import { AddOfficeForm } from "./add-office-form";
 
@@ -45,7 +46,8 @@ async function Offices() {
                 <th className="py-2 pr-4 font-medium">Office</th>
                 <th className="py-2 pr-4 font-medium">Status</th>
                 <th className="py-2 pr-4 font-medium">Doctor</th>
-                <th className="py-2 pr-4 font-medium">Setup</th>
+                <th className="py-2 pr-4 font-medium">Doctor setup step</th>
+                <th className="py-2 pr-4 font-medium">Open</th>
               </tr>
             </thead>
             <tbody>
@@ -64,8 +66,14 @@ async function Offices() {
                       : "—"}
                   </td>
                   <td className="py-2 pr-4">
-                    <Link href={`/admin/offices/${office.id}/interview`} className="underline">
-                      {office.steps.map((s) => `${s.label}: ${s.detail}`).join(" · ")}
+                    <SetupStep steps={office.steps} />
+                  </td>
+                  <td className="py-2 pr-4">
+                    <Link href={`/admin/offices/${office.id}/rules`} className="block underline">
+                      Cards &amp; rules
+                    </Link>
+                    <Link href={`/admin/offices/${office.id}/interview`} className="block underline">
+                      Every rule slot
                     </Link>
                   </td>
                 </tr>
@@ -75,5 +83,24 @@ async function Offices() {
         </div>
       )}
     </>
+  );
+}
+
+function SetupStep({ steps }: { steps: Parameters<typeof currentStep>[0] }) {
+  const current = currentStep(steps);
+  // VFDA's own step, shown even when the doctor still has an earlier one open.
+  const vfda = steps.find((s) => s.key === "review" && s.state === "waiting");
+  return (
+    <span>
+      {current ? (
+        <>
+          Step {current.index + 1} of {steps.length}: {current.step.label}
+          {current.step !== vfda && <span className="block text-xs text-foreground/60">{current.step.detail}</span>}
+        </>
+      ) : (
+        <span className="text-green-700 dark:text-green-400">All {steps.length} steps done ✓</span>
+      )}
+      {vfda && <span className="block text-xs font-medium text-amber-700 dark:text-amber-300">Waiting on VFDA: {vfda.detail}</span>}
+    </span>
   );
 }

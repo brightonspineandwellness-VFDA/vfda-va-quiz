@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { StepProgress } from "@/components/setup/step-progress";
 import { requireRole } from "@/lib/auth";
+import { currentStep } from "@/lib/doctor-flow";
 import { loadOfficeSetup } from "@/lib/interview-data";
 
 export default function DoctorPage() {
@@ -18,7 +19,7 @@ export default function DoctorPage() {
 async function DoctorHome() {
   const user = await requireRole("doctor");
   const setup = user.officeId ? await loadOfficeSetup(user.officeId) : null;
-  const next = setup?.flow.steps.find((s) => s.state === "todo");
+  const next = setup && currentStep(setup.flow.steps)?.step;
 
   return (
     <>

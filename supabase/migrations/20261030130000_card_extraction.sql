@@ -1,0 +1,152 @@
+-- Phase 3b: card upload, rule extraction, VFDA review, gap questions.
+--
+-- The doctor's setup now runs in this order:
+--   1 Profile               the 8 profile questions
+--   2 Upload your cards     card PDFs (doctor or VFDA); "Done uploading" starts extraction
+--   3 Waiting for VFDA      extraction runs, VFDA reviews, then "Send to doctor"
+--   4 Confirm your rules    rules found on the cards, one screen per card group
+--   5 Questions for you     gap questions only
+--   6 VFDA standards        default-tier rules, pre-accepted
+-- Steps 4-6 stay locked until VFDA sends the rules to the doctor
+-- (offices.sent_to_doctor_at). Safe to run more than once.
+
+-- ---------------------------------------------------------------------------
+-- Office setup state. Written by the app's server code (service role) or VFDA.
+-- ---------------------------------------------------------------------------
+alter table public.offices add column if not exists cards_uploaded_at timestamptz;
+alter table public.offices add column if not exists extraction_status text not null default 'none';
+alter table public.offices add column if not exists extraction_started_at timestamptz;
+alter table public.offices add column if not exists extracted_at timestamptz;
+alter table public.offices add column if not exists extraction_error text;
+alter table public.offices add column if not exists sent_to_doctor_at timestamptz;
+alter table public.offices drop constraint if exists offices_extraction_status_check;
+alter table public.offices add constraint offices_extraction_status_check
+  check (extraction_status in ('none', 'running', 'done', 'failed'));
+
+-- Which Trello card a PDF is (e.g. "Scheduling Cadence", "Gray cards").
+alter table public.office_documents add column if not exists card_name text not null default '';
+
+-- An extracted rule that only partly answers its slot.
+alter table public.office_rules add column if not exists partial boolean not null default false;
+
+-- Gap questions are written while VFDA reviews and reach the doctor only once
+-- VFDA sends them (released_at).
+alter table public.gap_questions add column if not exists released_at timestamptz;
+create unique index if not exists gap_questions_office_slot_key
+  on public.gap_questions (office_id, rule_slot_key) where rule_slot_key is not null;
+create unique index if not exists gap_questions_office_edge_case_key
+  on public.gap_questions (office_id, workflow) where reason = 'edge_case';
+
+drop policy if exists "doctor reads own gap questions" on public.gap_questions;
+create policy "doctor reads own gap questions" on public.gap_questions
+  for select to authenticated
+  using (private.is_doctor_of_office(office_id) and released_at is not null);
+drop policy if exists "doctor answers own gap questions" on public.gap_questions;
+create policy "doctor answers own gap questions" on public.gap_questions
+  for update to authenticated
+  using (private.is_doctor_of_office(office_id) and released_at is not null)
+  with check (private.is_doctor_of_office(office_id) and released_at is not null);
+
+-- Doctors only ever set the answer; release stays with VFDA.
+create or replace function private.guard_gap_question()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (select auth.uid()) is null or private.is_admin() then
+    return new;
+  end if;
+  new.office_id     := old.office_id;
+  new.rule_slot_key := old.rule_slot_key;
+  new.workflow      := old.workflow;
+  new.question      := old.question;
+  new.reason        := old.reason;
+  new.released_at   := old.released_at;
+  new.answered_by   := (select auth.uid());
+  new.answered_at   := now();
+  return new;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Card PDFs: doctors upload their own office's cards, and can remove one
+-- until it has been read.
+-- ---------------------------------------------------------------------------
+drop policy if exists "doctor adds own card documents" on public.office_documents;
+create policy "doctor adds own card documents" on public.office_documents
+  for insert to authenticated
+  with check (private.is_doctor_of_office(office_id) and kind = 'card'
+              and uploaded_by = (select auth.uid()) and imported_at is null and extracted_text is null);
+drop policy if exists "doctor removes own unread card documents" on public.office_documents;
+create policy "doctor removes own unread card documents" on public.office_documents
+  for delete to authenticated
+  using (private.is_doctor_of_office(office_id) and imported_at is null);
+
+drop policy if exists "office documents: doctor adds to own office" on storage.objects;
+create policy "office documents: doctor adds to own office" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'office-documents' and (select private.my_role()) = 'doctor'
+              and (storage.foldername(name))[1] = (select private.my_office_id())::text);
+drop policy if exists "office documents: doctor deletes own office" on storage.objects;
+create policy "office documents: doctor deletes own office" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'office-documents' and (select private.my_role()) = 'doctor'
+         and (storage.foldername(name))[1] = (select private.my_office_id())::text);
+
+-- ---------------------------------------------------------------------------
+-- Doctor writes to card and standard rules (doctor and default tiers) only
+-- after VFDA has sent the reviewed rules. Otherwise as in Phase 2c.
+-- ---------------------------------------------------------------------------
+create or replace function private.guard_office_rule()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (select auth.uid()) is null
+     or private.is_admin()
+     or coalesce(current_setting('vfda.system_write', true), '') = 'on' then
+    return new;
+  end if;
+  if exists (select 1 from public.rule_slots s where s.key = new.rule_slot_key and s.tier = 'auto') then
+    raise exception 'This rule is filled automatically.' using errcode = '42501';
+  end if;
+  if exists (select 1 from public.rule_slots s where s.key = new.rule_slot_key and s.tier in ('doctor', 'default'))
+     and not exists (select 1 from public.offices o where o.id = new.office_id and o.sent_to_doctor_at is not null) then
+    raise exception 'This step opens after VFDA reviews your cards.' using errcode = '42501';
+  end if;
+  if tg_op = 'UPDATE' then
+    new.office_id          := old.office_id;
+    new.rule_slot_key      := old.rule_slot_key;
+    new.source_document_id := old.source_document_id;
+    new.source_quote       := old.source_quote;
+    new.partial            := old.partial;
+    new.vfda_reviewed_by   := old.vfda_reviewed_by;
+    new.vfda_reviewed_at   := old.vfda_reviewed_at;
+    if new.rule is distinct from old.rule or new.attachments is distinct from old.attachments then
+      new.source := 'doctor';
+    else
+      new.source := old.source;
+    end if;
+    if new.status = 'rejected' and old.source = 'card_import' and new.source = 'card_import' then
+      new.doctor_approved_by := null;
+      new.doctor_approved_at := null;
+      return new;
+    end if;
+  else
+    new.source             := 'doctor';
+    new.source_document_id := null;
+    new.source_quote       := null;
+    new.partial            := false;
+    new.vfda_reviewed_by   := null;
+    new.vfda_reviewed_at   := null;
+  end if;
+  new.status             := 'accepted';
+  new.doctor_approved_by := (select auth.uid());
+  new.doctor_approved_at := now();
+  return new;
+end;
+$$;
