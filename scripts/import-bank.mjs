@@ -72,7 +72,7 @@ console.log(
 );
 const suggested = rows.ruleSlots.filter((r) => r.suggested_answer !== null).length;
 console.log(`  ${suggested} doctor-tier slots have a VFDA suggestion (shown to the doctor, never auto-accepted)`);
-if (bank.approvals) console.log(`  approvals stored in settings`);
+if (bank.approvals) console.log(`  approvals block goes to settings`);
 const withRule = rows.scenarios.filter((s) => s.options_rule).length;
 console.log(`  ${withRule} multiple-choice scenarios use options_rule (options built per office later)`);
 
