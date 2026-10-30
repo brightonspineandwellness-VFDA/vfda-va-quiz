@@ -4,7 +4,8 @@
 -- (Phase 4) exists. {PLACEHOLDERS} are left as they are; repeat variants are
 -- the master scenario with "(Repeat)" in front.
 --
--- Run after phase5.sql, `npm run import:bank` and supabase/seed.sql.
+-- Run after phase4.sql (which comes after phase5.sql), `npm run import:bank` and
+-- supabase/seed.sql. To build real scenarios instead, use Offices -> Scenarios.
 -- Running it again resets the demo VA's training (unlocks, attempts, proof)
 -- and sets their start date to today.
 -- Fake data only: no real patients, logins or card numbers.
@@ -67,6 +68,12 @@ begin
   from public.office_scenarios
   where office_id = office and type = 'situational' and not is_repeat_variant
     and schedule_day in ('W1D1', 'W1D2');
+
+  -- Shown as built and approved on VFDA's Scenarios page.
+  insert into public.office_days (office_id, schedule_day, kind, build_status, built_at, approved_at)
+  values (office, 'W1D1', 'standard', 'done', now(), now()), (office, 'W1D2', 'standard', 'done', now(), now())
+  on conflict (office_id, schedule_day) do update
+    set build_status = 'done', built_at = now(), approved_at = now(), build_error = null;
 
   update public.profiles set va_start_date = current_date where office_id = office and role = 'va';
 end $$;

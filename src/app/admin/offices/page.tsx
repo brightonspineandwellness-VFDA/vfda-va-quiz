@@ -75,6 +75,9 @@ async function Offices() {
                     <Link href={`/admin/offices/${office.id}/interview`} className="block underline">
                       Every rule slot
                     </Link>
+                    <Link href={`/admin/offices/${office.id}/scenarios`} className="block underline">
+                      Scenarios
+                    </Link>
                   </td>
                 </tr>
               ))}
