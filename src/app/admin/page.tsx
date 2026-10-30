@@ -25,6 +25,9 @@ async function AdminHome() {
       <Link href="/admin/offices" className="self-start underline">
         Offices ({count ?? 0})
       </Link>
+      <Link href="/admin/vas" className="self-start underline">
+        VA training (progress, proof of work, reviews)
+      </Link>
       <Link href="/admin/bank" className="self-start underline">
         Library
       </Link>

@@ -10,8 +10,7 @@ import "server-only";
 // documents not read before (imported_at is null) are sent. Slots the doctor
 // or VFDA already answered are skipped, so their answers are never overwritten.
 
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import { aiErrorMessage, askStructured } from "@/lib/ai";
 import { directAnswer, slotApplies, type RuleRow } from "@/lib/doctor-flow";
 import {
   buildPrompt,
@@ -25,42 +24,25 @@ import { profileFromAnswers, type Answer, type InterviewQuestion } from "@/lib/i
 import { createAdminClient } from "@/lib/supabase/server";
 
 export const DOCUMENT_BUCKET = "office-documents";
-const MODEL = "claude-opus-5-5";
 // Stay well under the API's 32 MB request limit (base64 adds a third).
 const MAX_BATCH_BYTES = 20 * 1024 * 1024;
 // A run that has said "running" this long is treated as dead and may restart.
 const STALE_RUN_MS = 20 * 60 * 1000;
 
-async function callClaude(prompt: string, pdfs: { title: string; data: string }[]) {
-  const client = new Anthropic();
-  const stream = client.beta.messages.stream({
-    model: MODEL,
-    max_tokens: 64000,
-    thinking: { type: "adaptive" },
-    output_config: { effort: "high", format: betaZodOutputFormat(ExtractionSchema) },
-    // If the model declines, the API retries on a fallback model.
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+function callClaude(prompt: string, pdfs: { title: string; data: string }[]) {
+  return askStructured(ExtractionSchema, {
     system: SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content: [
-          ...pdfs.map((pdf) => ({
-            type: "document" as const,
-            title: pdf.title,
-            source: { type: "base64" as const, media_type: "application/pdf" as const, data: pdf.data },
-          })),
-          { type: "text" as const, text: prompt },
-        ],
-      },
+    effort: "high",
+    maxTokens: 64000,
+    content: [
+      ...pdfs.map((pdf) => ({
+        type: "document" as const,
+        title: pdf.title,
+        source: { type: "base64" as const, media_type: "application/pdf" as const, data: pdf.data },
+      })),
+      { type: "text" as const, text: prompt },
     ],
   });
-  const message = await stream.finalMessage();
-  if (message.stop_reason === "refusal") throw new Error("The model declined to read these cards.");
-  if (message.stop_reason === "max_tokens") throw new Error("The cards were too long to read in one go.");
-  if (!message.parsed_output) throw new Error("The model's answer couldn't be read.");
-  return message.parsed_output;
 }
 
 // Groups documents so each request stays under the size limit.
@@ -73,9 +55,6 @@ function batches<T extends { size: number }>(items: T[]) {
   }
   return out;
 }
-
-const messageOf = (e: unknown) =>
-  e instanceof Anthropic.APIError ? `Claude API error ${e.status ?? ""}: ${e.message}` : e instanceof Error ? e.message : String(e);
 
 export async function runExtraction(officeId: string) {
   const db = createAdminClient();
@@ -218,7 +197,7 @@ export async function runExtraction(officeId: string) {
     console.error("Rule extraction failed", officeId, e);
     await db
       .from("offices")
-      .update({ extraction_status: "failed", extraction_error: messageOf(e).slice(0, 500) })
+      .update({ extraction_status: "failed", extraction_error: aiErrorMessage(e).slice(0, 500) })
       .eq("id", officeId);
   }
 }
