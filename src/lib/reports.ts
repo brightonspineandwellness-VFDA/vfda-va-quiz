@@ -1,7 +1,7 @@
 import "server-only";
 
 // Sends the results report after every attempt: an email (Resend, from
-// REPORT_FROM, reply-to REPORT_REPLY_TO) to VFDA (REPORT_TO_VFDA) and to the
+// REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL) and to the
 // office's doctor, and a Slack post to VFDA (SLACK_WEBHOOK_URL). One
 // notifications row per recipient is written before sending, so running this
 // again only sends what hasn't gone out yet. Each send is tried twice.
@@ -152,7 +152,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
 async function sendEmail(to: string, subject: string, html: string, text: string, idempotencyKey: string) {
   const key = process.env.RESEND_API_KEY;
   const from = reportFrom();
-  if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM are needed.");
+  if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM_EMAIL are needed.");
   const replyTo = process.env.REPORT_REPLY_TO?.trim();
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -195,11 +195,10 @@ async function tryTwice(send: () => Promise<void>): Promise<string | null> {
   return error;
 }
 
-// REPORT_FROM_EMAIL and VFDA_REPORT_EMAIL are the earlier names, still read.
-export const reportFrom = () => (process.env.REPORT_FROM || process.env.REPORT_FROM_EMAIL || "").trim();
+export const reportFrom = () => (process.env.REPORT_FROM_EMAIL ?? "").trim();
 
 export const vfdaEmails = () =>
-  (process.env.REPORT_TO_VFDA || process.env.VFDA_REPORT_EMAIL || "")
+  (process.env.VFDA_REPORT_EMAIL ?? "")
     .split(",")
     .map((e) => e.trim())
     .filter((e) => /^[^@\s]+@[^@\s]+$/.test(e));
@@ -213,7 +212,7 @@ export const SLACK_RECIPIENT = "VFDA Slack";
 
 export async function sendTestEmail(): Promise<{ sentTo: string[]; error: string | null }> {
   const to = vfdaEmails();
-  if (!to.length) return { sentTo: [], error: "REPORT_TO_VFDA isn't set." };
+  if (!to.length) return { sentTo: [], error: "VFDA_REPORT_EMAIL isn't set." };
   const sentTo: string[] = [];
   for (const address of to) {
     const error = await tryTwice(() =>

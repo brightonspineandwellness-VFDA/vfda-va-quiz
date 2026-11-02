@@ -32,9 +32,9 @@ async function Settings() {
     ["AI_MODE", aiMode() === "mock" ? "mock (answers graded by keywords, not Claude)" : "live (Claude)"],
     ["ANTHROPIC_API_KEY", isSet("ANTHROPIC_API_KEY") ? "set" : "missing"],
     ["RESEND_API_KEY", isSet("RESEND_API_KEY") ? "set" : "missing"],
-    ["REPORT_FROM", reportFrom() || "missing"],
+    ["REPORT_FROM_EMAIL", reportFrom() || "missing"],
     ["REPORT_REPLY_TO", process.env.REPORT_REPLY_TO?.trim() || "not set (optional)"],
-    ["REPORT_TO_VFDA", vfdaEmails().join(", ") || "missing"],
+    ["VFDA_REPORT_EMAIL", vfdaEmails().join(", ") || "missing"],
     ["SLACK_WEBHOOK_URL", isSet("SLACK_WEBHOOK_URL") ? "set" : "missing"],
     ["Links in reports", appUrl()],
   ];
