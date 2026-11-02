@@ -14,6 +14,8 @@ export type ReportItem = {
   critical_error: boolean;
   critical_quote: string | null;
   fast: boolean;
+  low_confidence: boolean;
+  overridden: boolean;
 };
 
 export type WorkflowStatus = { code: string; name: string; status: "Certified" | "Retrain" | "Pending"; why: string };
@@ -61,13 +63,15 @@ export function reportSections(r: AttemptReport) {
     r.fastFinish && "finished much faster than normal",
     r.items.some((i) => i.fast) && `${r.items.filter((i) => i.fast).length} item(s) answered much faster than normal`,
     r.pastes > 0 && `${r.pastes} paste(s) logged`,
-    r.items.some((i) => i.first_score === null) && "some answers couldn't be graded automatically",
+    r.items.some((i) => i.type === "situational" && i.first_score === null) && "an answer couldn't be graded automatically (needs review)",
+    r.items.some((i) => i.low_confidence) && "a low-confidence grade (VFDA reviews)",
+    r.items.some((i) => i.overridden) && "a score was changed by VFDA",
   ].filter((f): f is string => !!f);
   const resultText =
     r.result === "retake" && r.version === "B" ? "Retake failed on version B: set up a call with the VA" : RESULT_LABELS[r.result];
 
   return {
-    subject: `${r.vaName} · ${r.dayCode}${r.version === "B" ? " (version B)" : ""}: ${RESULT_LABELS[r.result].split(" (")[0]} ${r.points}/${r.maxPoints} · ${r.officeName}`,
+    subject: `${r.vaName} – ${r.dayCode}${r.version === "B" ? " (B)" : ""} – ${RESULT_LABELS[r.result].split(" (")[0]} – ${r.officeName}`,
     summary: [
       ["VA", r.vaName],
       ["Office", r.officeName],
@@ -89,7 +93,8 @@ export function reportSections(r: AttemptReport) {
 
 const NONE = "None";
 
-export function reportText(r: AttemptReport): string {
+// `link`: the attempt review page (login required).
+export function reportText(r: AttemptReport, link: string): string {
   const s = reportSections(r);
   const list = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : NONE);
   return [
@@ -103,6 +108,7 @@ export function reportText(r: AttemptReport): string {
     }`,
     `Workflow statuses:\n${list(s.workflows)}`,
     s.flags.length ? `Flags:\n${list(s.flags)}` : "",
+    `Review the attempt (login required): ${link}`,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -111,7 +117,7 @@ export function reportText(r: AttemptReport): string {
 export const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-export function reportHtml(r: AttemptReport): string {
+export function reportHtml(r: AttemptReport, link: string): string {
   const s = reportSections(r);
   const e = escapeHtml;
   const h = (t: string) => `<h3 style="margin:20px 0 6px;font-size:15px">${e(t)}</h3>`;
@@ -132,6 +138,7 @@ ${h("Weakest items")}${
   }
 ${h("Workflow statuses")}${list(s.workflows)}
 ${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
+<p style="margin-top:20px"><a href="${e(link)}">Review the attempt</a> (login required)</p>
 <p style="margin-top:24px;color:#777;font-size:12px">VFDA VA Quiz App. Practice scenarios use fake patients only.</p>
 </div>`;
 }
@@ -139,25 +146,25 @@ ${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
 // Slack mrkdwn: escape &, < and > so a VA's words can't ping or link anyone.
 const slackEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export function reportSlack(r: AttemptReport): { text: string } {
+// The same summary in short form.
+export function reportSlack(r: AttemptReport, link: string): { text: string } {
   const s = reportSections(r);
-  const list = (items: string[]) => (items.length ? items.map((i) => `• ${slackEscape(i)}`).join("\n") : NONE);
+  const result = s.summary.find(([k]) => k === "Result")?.[1] ?? "";
+  const line = (label: string, items: string[]) => (items.length ? `*${label}:* ${items.map(slackEscape).join(" · ")}` : "");
   const lines = [
     `*${slackEscape(s.subject)}*`,
-    s.summary.map(([k, v]) => `${k}: *${slackEscape(v)}*`).join("\n"),
-    `*Items repeated*\n${list(s.repeated)}`,
-    `*Critical errors (VA's exact words)*\n${list(s.critical)}`,
-    `*Weakest items*\n${
-      s.weakest.length
-        ? s.weakest
-            .map((w) => `• ${slackEscape(w.title)}${w.missed.map((m) => `\n      missed: ${slackEscape(m)}`).join("")}`)
-            .join("\n")
-        : NONE
-    }`,
-    `*Workflow statuses*\n${list(s.workflows)}`,
-    s.flags.length ? `*Flags*\n${list(s.flags)}` : "",
+    `First try ${r.points}/${r.maxPoints} · ${slackEscape(result)} · ${minutesText(r.timeSpent)}`,
+    line("Repeated", s.repeated),
+    line("Critical (VA's words)", s.critical),
+    line(
+      "Weakest",
+      s.weakest.map((w) => (w.missed.length ? `${w.title} (missed: ${w.missed.join("; ")})` : w.title)),
+    ),
+    line("Workflows", s.workflows),
+    line("Flags", s.flags),
+    `<${link}|Review the attempt>`,
   ];
-  return { text: lines.filter(Boolean).join("\n\n") };
+  return { text: lines.filter(Boolean).join("\n") };
 }
 
 // SPEC section 6: Retrain on a critical error or an uncorrected repeat;

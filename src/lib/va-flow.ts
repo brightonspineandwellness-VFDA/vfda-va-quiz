@@ -347,6 +347,29 @@ export type GradedItem = {
   ai_confidence: number | null;
 };
 
+// A VFDA score override (attempt_items.vfda_override) replaces the grader's
+// scores and critical flag; a reviewed grade no longer counts as unsure.
+export type ScoreOverride = {
+  first_score: number | null;
+  repeat_score: number | null;
+  critical_error: boolean;
+  note: string;
+  by: string;
+  at: string;
+};
+
+export function withOverride<T extends Omit<GradedItem, "type" | "points">>(item: T, override: unknown): T {
+  const o = override as ScoreOverride | null;
+  if (!o || typeof o !== "object") return item;
+  return {
+    ...item,
+    first_score: o.first_score ?? item.first_score,
+    repeat_score: o.repeat_score ?? item.repeat_score,
+    critical_error: !!o.critical_error,
+    ai_confidence: 1,
+  };
+}
+
 export function dayResult(day: DayRow, items: GradedItem[], rules: CertificationRules) {
   const max = items.reduce((n, i) => n + i.points, 0);
   // The day's thresholds are set for its full master list; scale them if the
@@ -366,8 +389,10 @@ export function dayResult(day: DayRow, items: GradedItem[], rules: Certification
   // VFDA decides those days.
   const ungraded = situational.filter((i) => i.first_score === null).length;
 
+  // A critical error or an unsure grade goes to VFDA (review), which can
+  // still assign the retake.
   let result: DayResult;
-  if (criticalErrors > 0) result = "retake";
+  if (criticalErrors > 0) result = "review";
   else if (ungraded > 0) result = "review";
   else if (points < reviewMin) result = "retake";
   else if (points >= passPoints && uncorrected === 0 && lowConfidence === 0) result = "pass";

@@ -1,9 +1,10 @@
 import "server-only";
 
-// Sends the results report after every attempt: an email (Resend) to VFDA
-// (VFDA_REPORT_EMAIL) and to the office's doctor, and a Slack post to VFDA
-// (SLACK_WEBHOOK_URL). One notifications row per recipient is written before
-// sending, so running this again only sends what hasn't gone out yet.
+// Sends the results report after every attempt: an email (Resend, from
+// REPORT_FROM, reply-to REPORT_REPLY_TO) to VFDA (REPORT_TO_VFDA) and to the
+// office's doctor, and a Slack post to VFDA (SLACK_WEBHOOK_URL). One
+// notifications row per recipient is written before sending, so running this
+// again only sends what hasn't gone out yet. Each send is tried twice.
 
 import {
   reportHtml,
@@ -15,14 +16,28 @@ import {
   type ReportItem,
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
+import { withOverride } from "@/lib/va-flow";
 
 type Db = ReturnType<typeof createAdminClient>;
 const TIMEOUT_MS = 15000;
+const RETRY_DELAY_MS = 2000;
+// Matches the default settings.grading.low_confidence_below.
+const LOW_CONFIDENCE = 0.7;
 
 function must<T>(r: { data: T; error: { message: string } | null }): T {
   if (r.error) throw new Error(r.error.message);
   return r.data;
 }
+
+// The app's address for links in reports: APP_URL, else Vercel's production URL.
+export function appUrl() {
+  const url =
+    process.env.APP_URL ||
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "http://localhost:3000");
+  return url.replace(/\/+$/, "");
+}
+
+export const attemptLink = (attemptId: string, area: "admin" | "doctor") => `${appUrl()}/${area}/attempts/${attemptId}`;
 
 type Feedback = { missed_steps?: string[] } | null;
 
@@ -54,7 +69,9 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     must(
       await db
         .from("attempt_items")
-        .select("attempt_id, office_scenario_id, first_score, first_feedback, repeat_scenario_id, repeat_score, critical_error, critical_quote, fast, position")
+        .select(
+          "attempt_id, office_scenario_id, first_score, first_feedback, repeat_scenario_id, repeat_score, critical_error, critical_quote, ai_confidence, vfda_override, fast, position",
+        )
         .in("attempt_id", attemptIds.length ? attemptIds : [attemptId]),
     ) ?? [];
   const scenarioIds = [...new Set(allItems.map((i) => i.office_scenario_id))];
@@ -67,9 +84,11 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     ) ?? [];
   const scenarioOf = new Map(scenarios.map((s) => [s.id, s]));
 
-  const toItem = (i: (typeof allItems)[number]): ReportItem | null => {
-    const s = scenarioOf.get(i.office_scenario_id);
+  const toItem = (row: (typeof allItems)[number]): ReportItem | null => {
+    const s = scenarioOf.get(row.office_scenario_id);
     if (!s) return null;
+    // A VFDA override replaces the grader's scores.
+    const i = withOverride({ ...row, ai_confidence: row.ai_confidence === null ? null : Number(row.ai_confidence) }, row.vfda_override);
     return {
       code: s.code,
       workflow: s.workflow,
@@ -82,6 +101,8 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       critical_error: i.critical_error,
       critical_quote: i.critical_quote,
       fast: i.fast,
+      low_confidence: s.type === "situational" && i.ai_confidence !== null && i.ai_confidence < LOW_CONFIDENCE,
+      overridden: !!row.vfda_override,
     };
   };
   const mine = allItems
@@ -130,12 +151,13 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
 
 async function sendEmail(to: string, subject: string, html: string, text: string, idempotencyKey: string) {
   const key = process.env.RESEND_API_KEY;
-  const from = process.env.REPORT_FROM_EMAIL;
-  if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM_EMAIL are needed.");
+  const from = reportFrom();
+  if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM are needed.");
+  const replyTo = process.env.REPORT_REPLY_TO?.trim();
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-    body: JSON.stringify({ from, to: [to], subject, html, text }),
+    body: JSON.stringify({ from, to: [to], subject, html, text, ...(replyTo ? { reply_to: replyTo } : {}) }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -156,8 +178,28 @@ async function postSlack(payload: { text: string }) {
   if (!res.ok) throw new Error(`Slack answered ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
 }
 
+// Runs a send, and once more if it fails. Null when it went out, else the last error.
+async function tryTwice(send: () => Promise<void>): Promise<string | null> {
+  let error = "";
+  for (let i = 0; i < 2; i++) {
+    try {
+      await send();
+      return null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      // Missing settings won't fix themselves.
+      if (error.includes("isn't set up")) break;
+      if (i === 0) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    }
+  }
+  return error;
+}
+
+// REPORT_FROM_EMAIL and VFDA_REPORT_EMAIL are the earlier names, still read.
+export const reportFrom = () => (process.env.REPORT_FROM || process.env.REPORT_FROM_EMAIL || "").trim();
+
 export const vfdaEmails = () =>
-  (process.env.VFDA_REPORT_EMAIL ?? "")
+  (process.env.REPORT_TO_VFDA || process.env.VFDA_REPORT_EMAIL || "")
     .split(",")
     .map((e) => e.trim())
     .filter((e) => /^[^@\s]+@[^@\s]+$/.test(e));
@@ -165,22 +207,59 @@ export const vfdaEmails = () =>
 // The Slack row's recipient. The webhook URL itself is a secret and is never stored.
 export const SLACK_RECIPIENT = "VFDA Slack";
 
+// ---------------------------------------------------------------------------
+// Test buttons (/admin/settings)
+// ---------------------------------------------------------------------------
+
+export async function sendTestEmail(): Promise<{ sentTo: string[]; error: string | null }> {
+  const to = vfdaEmails();
+  if (!to.length) return { sentTo: [], error: "REPORT_TO_VFDA isn't set." };
+  const sentTo: string[] = [];
+  for (const address of to) {
+    const error = await tryTwice(() =>
+      sendEmail(
+        address,
+        "VFDA VA Quiz App – test email",
+        `<p>Test email from the VFDA VA Quiz App. Attempt reports will come from this address.</p><p><a href="${appUrl()}/admin">Open the app</a></p>`,
+        `Test email from the VFDA VA Quiz App. Attempt reports will come from this address.\n\n${appUrl()}/admin`,
+        `test-${address}-${Date.now()}`,
+      ),
+    );
+    if (error) return { sentTo, error: `${address}: ${error}` };
+    sentTo.push(address);
+  }
+  return { sentTo, error: null };
+}
+
+export const sendTestSlack = () =>
+  tryTwice(() => postSlack({ text: `Test post from the VFDA VA Quiz App. Attempt reports will appear here. <${appUrl()}/admin|Open the app>` }));
+
+// ---------------------------------------------------------------------------
+// The report
+// ---------------------------------------------------------------------------
+
 export async function sendAttemptReport(attemptId: string): Promise<{ sent: number; failed: number }> {
   const db = createAdminClient();
   const loaded = await loadAttemptReport(db, attemptId);
   if (!loaded) return { sent: 0, failed: 0 };
   const { report, doctorEmails } = loaded;
   const subject = reportSections(report).subject;
-  const html = reportHtml(report);
-  const text = reportText(report);
+  const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
+  const doctors = [...new Set(doctorEmails.map((e) => e.toLowerCase()))].filter((e) => !vfda.includes(e));
 
-  const targets: { channel: "email" | "slack"; recipient: string; send: () => Promise<void> }[] = [
-    ...[...new Set([...vfdaEmails(), ...doctorEmails].map((e) => e.toLowerCase()))].map((to) => ({
+  // VFDA's link opens the admin review page, the doctor's the read-only one.
+  const email = (to: string, area: "admin" | "doctor") => {
+    const link = attemptLink(attemptId, area);
+    return {
       channel: "email" as const,
       recipient: to,
-      send: () => sendEmail(to, subject, html, text, `attempt-${attemptId}-${to}`),
-    })),
-    { channel: "slack", recipient: SLACK_RECIPIENT, send: () => postSlack(reportSlack(report)) },
+      send: () => sendEmail(to, subject, reportHtml(report, link), reportText(report, link), `attempt-${attemptId}-${to}`),
+    };
+  };
+  const targets: { channel: "email" | "slack"; recipient: string; send: () => Promise<void> }[] = [
+    ...vfda.map((to) => email(to, "admin")),
+    ...doctors.map((to) => email(to, "doctor")),
+    { channel: "slack", recipient: SLACK_RECIPIENT, send: () => postSlack(reportSlack(report, attemptLink(attemptId, "admin"))) },
   ];
 
   let sent = 0;
@@ -203,20 +282,19 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
     // Claim this try, so two senders running at once don't both send.
     const { data: claimed } = await db
       .from("notifications")
-      .update({ attempts: row.attempts + 1 })
+      .update({ attempts: row.attempts + 1, status: "pending" })
       .eq("id", row.id)
       .eq("attempts", row.attempts)
       .is("sent_at", null)
       .select("id");
     if (!claimed?.length) continue;
-    try {
-      await t.send();
-      await db.from("notifications").update({ sent_at: new Date().toISOString(), error: null }).eq("id", row.id);
+    const error = await tryTwice(t.send);
+    if (error === null) {
+      await db.from("notifications").update({ sent_at: new Date().toISOString(), status: "sent", error: null }).eq("id", row.id);
       sent++;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      console.error("Report not sent", attemptId, t.channel, message);
-      await db.from("notifications").update({ error: message.slice(0, 500) }).eq("id", row.id);
+    } else {
+      console.error("Report not sent", attemptId, t.channel, error);
+      await db.from("notifications").update({ status: "failed", error: error.slice(0, 500) }).eq("id", row.id);
       failed++;
     }
   }

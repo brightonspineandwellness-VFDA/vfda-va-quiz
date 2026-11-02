@@ -6,7 +6,7 @@ import "server-only";
 // checks the VA itself and returns only what the VA may see: never answer,
 // correct_response, critical_fail or options_rule.
 
-import { gradeSituational } from "@/lib/ai";
+import { CONFIDENCE_VALUE, gradeSituational } from "@/lib/ai";
 import type { CurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
@@ -478,7 +478,7 @@ export async function submitAnswer(
       }
     : UNGRADED;
   const stamp = { reason: feedback.reason, missed_steps: feedback.missedSteps };
-  const confidence = grade ? Math.round(grade.confidence * 100) / 100 : null;
+  const confidence = grade ? CONFIDENCE_VALUE[grade.confidence] : null;
   const update =
     phase === "first"
       ? {

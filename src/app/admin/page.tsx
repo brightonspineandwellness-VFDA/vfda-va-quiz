@@ -31,6 +31,9 @@ async function AdminHome() {
       <Link href="/admin/bank" className="self-start underline">
         Library
       </Link>
+      <Link href="/admin/settings" className="self-start underline">
+        Settings (grading mode, report test sends)
+      </Link>
     </>
   );
 }

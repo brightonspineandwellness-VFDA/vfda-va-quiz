@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { AttemptLink, ReportStatus } from "@/components/attempts/attempt-review";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ProofReview, StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
 import { createSessionClient } from "@/lib/supabase/server";
-import { decideReviewDay, resendAttemptReport } from "@/lib/va-admin-actions";
+import { decideReviewDay } from "@/lib/va-admin-actions";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
 // "Send again" sends a report while you wait.
@@ -58,7 +59,7 @@ async function Vas() {
   const { data: items } = attemptRows.length
     ? await supabase
         .from("attempt_items")
-        .select("attempt_id, fast, ai_confidence, first_score, repeat_score, repeat_scenario_id")
+        .select("attempt_id, fast, ai_confidence, first_score, repeat_score, repeat_scenario_id, vfda_override")
         .in(
           "attempt_id",
           attemptRows.map((a) => a.id),
@@ -67,7 +68,7 @@ async function Vas() {
   const { data: notes } = attemptRows.length
     ? await supabase
         .from("notifications")
-        .select("attempt_id, channel, recipient, sent_at, error")
+        .select("attempt_id, channel, recipient, status, error")
         .in(
           "attempt_id",
           attemptRows.map((a) => a.id),
@@ -160,14 +161,14 @@ async function Vas() {
                         Array.isArray(a.paste_log) && a.paste_log.length > 0 && `${a.paste_log.length} pastes`,
                         repeats.length > 0 &&
                           `${repeats.length} repeated (${repeats.filter((i) => i.repeat_score !== 2).length} still below 2/2)`,
-                        its.some((i) => i.ai_confidence !== null && Number(i.ai_confidence) < 0.7) && "low-confidence grade",
-                        its.some((i) => i.first_score === null) && "ungraded item",
+                        its.some((i) => !i.vfda_override && i.ai_confidence !== null && Number(i.ai_confidence) < 0.7) && "low-confidence grade",
+                        its.some((i) => !i.vfda_override && i.first_score === null) && "item needs review",
                       ].filter(Boolean);
                       return (
                         <tr key={a.id} className="border-b border-foreground/10 align-top">
                           <td className="py-1 pr-3">
                             {a.schedule_day}
-                            {a.version === "B" && " (B)"}
+                            {a.version === "B" && " (B)"} <AttemptLink id={a.id} area="admin" />
                           </td>
                           <td className="py-1 pr-3">
                             {Number(a.first_try_points)}/{a.max_points}
@@ -217,27 +218,5 @@ async function Vas() {
         );
       })}
     </>
-  );
-}
-
-type NoteRow = { channel: string; recipient: string; sent_at: string | null; error: string | null };
-
-// Where the attempt's report went, and "Send again" for anything that didn't.
-function ReportStatus({ attemptId, rows }: { attemptId: string; rows: NoteRow[] }) {
-  const sent = rows.filter((r) => r.sent_at);
-  const failed = rows.filter((r) => !r.sent_at);
-  return (
-    <div className="flex flex-col gap-1">
-      {rows.length === 0 && <span className="text-foreground/60">not sent yet</span>}
-      {sent.length > 0 && <span>Sent: {sent.map((r) => r.recipient).join(", ")}</span>}
-      {failed.map((r) => (
-        <span key={`${r.channel}:${r.recipient}`} className="text-red-700 dark:text-red-400">
-          {r.recipient}: {r.error ?? "sending…"}
-        </span>
-      ))}
-      {(rows.length === 0 || failed.length > 0) && (
-        <ActionButton action={resendAttemptReport.bind(null, attemptId)} label="Send again" pendingLabel="Sending…" />
-      )}
-    </div>
   );
 }
