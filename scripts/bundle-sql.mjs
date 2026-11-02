@@ -71,6 +71,12 @@ const PHASES = [
     title: "Invite VA database changes (VA invites, progress per office, deactivation)",
     after: "phase7.sql",
   },
+  {
+    name: "card-first",
+    starts: "20261102150000",
+    title: "Card-first database changes (card mapping, scenario sources, must-ask questions only)",
+    after: "invite-va.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

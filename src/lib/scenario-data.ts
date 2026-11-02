@@ -39,10 +39,12 @@ export type ScenarioRow = {
   missing_keys: string[];
   formula: string | null;
   position: number;
+  source_card: string | null;
+  source_quote: string | null;
 };
 
 const SCENARIO_COLUMNS =
-  "id, scenario_id, version, workflow, part, part_title, code, type, points, answer_format, stem, options, answer, correct_response, critical_fail, escalation_level, is_repeat_variant, parent_scenario_id, test_status, edited_by_vfda, missing_keys, formula, position";
+  "id, scenario_id, version, workflow, part, part_title, code, type, points, answer_format, stem, options, answer, correct_response, critical_fail, escalation_level, is_repeat_variant, parent_scenario_id, test_status, edited_by_vfda, missing_keys, formula, position, source_card, source_quote";
 
 export type DaySummary = {
   code: string;
@@ -54,13 +56,15 @@ export type DaySummary = {
   repeats: number;
   missing: number;
   started: boolean;
+  // Card PDFs mapped to the day (the day is written from these).
+  cards: string[];
 };
 
 export async function loadScenarioOverview(officeId: string) {
   const ctx = await loadOfficeBuild(createAdminClient(), officeId);
   if (!ctx) return null;
   const supabase = await createSessionClient();
-  const [days, scenarios, attempts] = await Promise.all([
+  const [days, scenarios, attempts, documents] = await Promise.all([
     supabase
       .from("office_days")
       .select("schedule_day, build_status, build_error, built_at, approved_at")
@@ -70,6 +74,13 @@ export async function loadScenarioOverview(officeId: string) {
       .select("schedule_day, version, is_repeat_variant, missing_keys")
       .eq("office_id", officeId),
     supabase.from("attempts").select("schedule_day").eq("office_id", officeId),
+    supabase
+      .from("office_documents")
+      .select("card_title, file_name, schedule_days")
+      .eq("office_id", officeId)
+      .eq("kind", "card")
+      .eq("skip", false)
+      .not("imported_at", "is", null),
   ]);
   const rows = scenarios.data ?? [];
   const started = new Set((attempts.data ?? []).map((a) => a.schedule_day));
@@ -85,6 +96,9 @@ export async function loadScenarioOverview(officeId: string) {
       repeats: mine.filter((r) => r.is_repeat_variant).length,
       missing: mine.filter((r) => r.missing_keys.length > 0).length,
       started: started.has(day.code),
+      cards: (documents.data ?? [])
+        .filter((d) => (d.schedule_days ?? []).includes(day.code))
+        .map((d) => d.card_title || d.file_name),
     };
   });
   return { office: ctx.office as { id: string; name: string; status: string }, days: summaries };

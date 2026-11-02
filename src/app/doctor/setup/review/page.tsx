@@ -42,9 +42,9 @@ async function ReviewStep() {
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-4 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
           <p className="text-lg font-medium">We&apos;re reading your cards</p>
           <p className="mt-1">
-            We pull the rules your VA needs out of your cards, and VFDA checks each one. When VFDA is done,
-            you&apos;ll confirm the rules and answer a short list of questions. You can close this page; we&apos;ll
-            pick up where you left off.
+            Your cards are what your VA trains on: we read each one, VFDA matches it to the training days and
+            checks it. When VFDA is done, you&apos;ll answer a few questions your cards didn&apos;t cover. You can
+            close this page; we&apos;ll pick up where you left off.
           </p>
         </div>
       ) : (
@@ -54,8 +54,8 @@ async function ReviewStep() {
               ? "VFDA is checking the cards you added. Anything new will show up in your questions when they're done. You can carry on meanwhile."
               : "VFDA has reviewed your cards. ✓"}
           </p>
-          <Link href="/doctor/setup/confirm" className={nextButton}>
-            Next: Confirm your rules →
+          <Link href="/doctor/setup/questions" className={nextButton}>
+            Next: Questions for you →
           </Link>
         </div>
       )}

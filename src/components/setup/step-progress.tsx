@@ -18,7 +18,7 @@ export function StepProgress({ steps, current, links = true }: { steps: Step[]; 
         {done === steps.length ? "All steps done. Thank you!" : `${done} of ${steps.length} steps done`}
       </p>
       <ol
-        className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+        className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5"
         role="progressbar"
         aria-valuenow={done}
         aria-valuemin={0}

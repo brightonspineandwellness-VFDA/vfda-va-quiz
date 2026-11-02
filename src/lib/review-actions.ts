@@ -1,7 +1,8 @@
 "use server";
 
-// VFDA's review of extracted rules (/admin/offices/[id]/rules) and "Send to
-// doctor", which writes the gap questions and opens steps 4-6 for the doctor.
+// VFDA's review of rules read from the cards (/admin/offices/[id]/rules) and
+// "Send to doctor", which writes the must-ask questions and opens steps 4-5
+// for the doctor.
 // VFDA admins only; writes as the admin (row-level security applies).
 
 import { getCurrentUser } from "@/lib/auth";
@@ -17,7 +18,8 @@ async function admin() {
   return user?.role === "vfda_admin" ? user : null;
 }
 
-// Accept (the doctor confirms it next) or reject one extracted rule.
+// Accept or reject one rule read from a card. Accepted card rules are the
+// office's rules; the doctor isn't asked to confirm them.
 export async function reviewRule(ruleId: string, decision: "accept" | "reject"): Promise<ActionResult> {
   const user = await admin();
   if (!user) return fail("VFDA admins only.");
@@ -25,7 +27,7 @@ export async function reviewRule(ruleId: string, decision: "accept" | "reject"):
   const { error } = await supabase
     .from("office_rules")
     .update({
-      status: decision === "accept" ? "needs_doctor" : "rejected",
+      status: decision === "accept" ? "accepted" : "rejected",
       vfda_reviewed_by: user.id,
       vfda_reviewed_at: new Date().toISOString(),
     })
@@ -53,26 +55,13 @@ export async function editAndAcceptRule(ruleId: string, value: unknown): Promise
   if (problem) return fail(problem);
   const { error } = await supabase
     .from("office_rules")
-    .update({ rule: value, status: "needs_doctor", vfda_reviewed_by: user.id, vfda_reviewed_at: new Date().toISOString() })
+    .update({ rule: value, status: "accepted", vfda_reviewed_by: user.id, vfda_reviewed_at: new Date().toISOString() })
     .eq("id", ruleId);
   return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }
 
-// Drop an edge-case question before the doctor sees it.
-export async function removeEdgeCase(gapId: string): Promise<ActionResult> {
-  if (!(await admin())) return fail("VFDA admins only.");
-  const supabase = await createSessionClient();
-  const { error } = await supabase
-    .from("gap_questions")
-    .delete()
-    .eq("id", gapId)
-    .eq("reason", "edge_case")
-    .is("answered_at", null);
-  return error ? fail("Couldn't remove it. Try again.") : { ok: true, data: null };
-}
-
-// Writes the gap list (only slots still missing; never re-asks an answered
-// one), releases it to the doctor, and opens steps 4-6.
+// Writes the must-ask questions (only rules still missing; never re-asks an
+// answered one), releases them to the doctor, and opens steps 4-5.
 export async function sendToDoctor(officeId: string): Promise<ActionResult> {
   if (!(await admin())) return fail("VFDA admins only.");
   const setup = await loadOfficeSetup(officeId);

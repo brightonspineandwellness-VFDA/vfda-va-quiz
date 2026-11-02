@@ -57,6 +57,11 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
         </h1>
         <p className="text-sm text-foreground/60">{KIND_LABELS[summary.kind]}</p>
         <p className={`text-sm ${TONES[state.tone]}`}>{state.label}</p>
+        {summary.kind !== "skipped" && (
+          <p className="text-sm text-foreground/60">
+            {summary.cards.length ? `Written from: ${summary.cards.join(", ")}` : "No card mapped to this day: built from the master bank."}
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap gap-2">
         {summary.status?.build_status === "done" && !approved && (
@@ -86,7 +91,7 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
               <Item
                 key={r.id}
                 row={r}
-                master={version === "A" && r.scenario_id ? (masters.get(r.scenario_id) as Master | undefined) : undefined}
+                master={r.scenario_id ? (masters.get(r.scenario_id) as Master | undefined) : undefined}
                 repeat={repeatOf(r)}
                 locked={approved}
               />
@@ -129,7 +134,13 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
         </p>
       )}
       <div className="grid gap-3 md:grid-cols-2">
-        {master && (
+        {row.source_card && (
+          <div className="flex flex-col gap-1 rounded-md bg-foreground/5 px-3 py-2 text-sm md:order-last">
+            <p className="font-medium">Source: {row.source_card}</p>
+            {row.source_quote && <blockquote className="whitespace-pre-line text-foreground/70">&ldquo;{row.source_quote}&rdquo;</blockquote>}
+          </div>
+        )}
+        {!row.source_card && master && (
           <div className="flex flex-col gap-1 text-sm text-foreground/70">
             <p className="font-medium">Master</p>
             <p>{master.stem}</p>
@@ -137,7 +148,7 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
             {master.options && <Options options={master.options} answer={master.answer} />}
           </div>
         )}
-        <div className={`flex flex-col gap-1 text-sm ${master ? "" : "md:col-span-2"}`}>
+        <div className={`flex flex-col gap-1 text-sm ${master || row.source_card ? "" : "md:col-span-2"}`}>
           <p className="font-medium">This office</p>
           <p className="whitespace-pre-line">{row.stem}</p>
           {row.type === "mc" &&

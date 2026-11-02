@@ -48,10 +48,15 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
         </p>
       </div>
       <p className="text-sm text-foreground/70">
-        Building fills every rule placeholder with the office&apos;s accepted rules and has Claude write the rest:
-        options built from a rule, version B for retakes, a repeat variant for each situational item, gray card items
-        and a skipped day&apos;s phone drills. Review each day, edit anything, then approve it. A day opens to VAs only
-        once it&apos;s approved. Rebuilding replaces the day, including your edits.
+        Card-first: Claude writes each day from the office&apos;s own cards mapped to it, with the master day as the
+        pattern (same number of items, same multiple choice / situational split) and the VFDA standards where the
+        cards are silent. Every item shows the card and the card&apos;s words it came from, plus version B for retakes
+        and a repeat variant. A day with no card mapped is built from the master bank. Map cards on the{" "}
+        <Link href={`/admin/offices/${office.id}/rules`} className="underline">
+          Cards page
+        </Link>
+        . Review each day, edit anything, then approve it. A day opens to VAs only once it&apos;s approved. Rebuilding
+        replaces the day, including your edits.
       </p>
       <BuildAllButton officeId={office.id} days={toBuild.map((d) => d.code)} />
 
@@ -76,6 +81,9 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
                       {d.code}: {d.title}
                     </Link>
                     <p className="text-foreground/60">{KIND_LABELS[d.kind]}</p>
+                    <p className="text-xs text-foreground/60">
+                      {d.kind === "skipped" ? "" : d.cards.length ? `From: ${d.cards.join(", ")}` : "No card mapped: master bank"}
+                    </p>
                   </td>
                   <td className={`py-2 pr-3 ${TONES[state.tone]}`}>
                     {state.label}

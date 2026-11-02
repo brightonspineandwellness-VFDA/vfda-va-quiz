@@ -60,7 +60,7 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
             Cards &amp; rules
           </Link>
           <Link href={`/admin/offices/${id}/interview`} className="underline">
-            Every rule slot
+            Standards &amp; must-ask rules
           </Link>
           <Link href={`/admin/offices/${id}/scenarios`} className="underline">
             Scenarios

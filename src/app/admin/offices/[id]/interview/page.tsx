@@ -5,6 +5,7 @@ import { InterviewForm } from "@/components/interview/interview-form";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
 import { StepProgress } from "@/components/setup/step-progress";
+import { isMustAsk } from "@/lib/card-map";
 import { loadOfficeSetup } from "@/lib/interview-data";
 
 export default function AdminInterviewPage({ params }: PageProps<"/admin/offices/[id]/interview">) {
@@ -28,7 +29,14 @@ async function AdminInterview({ params }: { params: Promise<{ id: string }> }) {
   if (!UUID.test(id)) notFound();
   const setup = await loadOfficeSetup(id);
   if (!setup) notFound();
-  const { interview: data, flow } = setup;
+  const { interview, flow } = setup;
+  // Card-first: the cards are the source of the scenarios. Rule slots are kept
+  // only for the profile, the VFDA standards, the 12 must-ask rules and the
+  // automatic rules; answers already given to other slots stay in place.
+  const data = {
+    ...interview,
+    questions: interview.questions.filter((q) => q.tier !== "doctor" || isMustAsk(q.key)),
+  };
 
   return (
     <>
@@ -38,11 +46,11 @@ async function AdminInterview({ params }: { params: Promise<{ id: string }> }) {
         <StepProgress steps={flow.steps} links={false} />
       </div>
       <Link href={`/admin/offices/${data.office.id}/rules`} className="self-start text-sm underline">
-        Cards and extracted rules: review and send to doctor →
+        Cards: mapping, rules found on them, send to doctor →
       </Link>
       <p className="text-sm text-foreground/70">
-        Every rule slot for this office, including VFDA standards and automatic rules (the doctor never sees
-        automatic rules). Editing a standard or an automatic rule here makes it VFDA&apos;s answer: it won&apos;t be
+        The office&apos;s profile, VFDA standards, the 12 must-ask rules and the automatic rules (the doctor never
+        sees automatic rules). Everything else comes from the office&apos;s cards. Editing a standard or an automatic rule here makes it VFDA&apos;s answer: it won&apos;t be
         refilled automatically.
       </p>
       <InterviewForm data={data} isAdmin />

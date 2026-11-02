@@ -62,7 +62,7 @@ async function loadBankParts(supabase: Awaited<ReturnType<typeof createSessionCl
       .select("key, tier, card_group, suggested_answer, schedule_day, question, answer_type, condition, card_source")
       .order("position"),
     supabase.from("schedule_days").select("code, title, condition").order("week").order("day"),
-    supabase.from("settings").select("key, value").in("key", ["conditions", "gray_card_questions", "card_group_order"]),
+    supabase.from("settings").select("key, value").in("key", ["conditions", "gray_card_questions"]),
   ]);
   for (const r of [slots, days, settings]) if (r.error) throw r.error;
   const setting = (key: string) => settings.data?.find((s) => s.key === key)?.value;
@@ -83,7 +83,6 @@ async function loadBankParts(supabase: Awaited<ReturnType<typeof createSessionCl
     quizzes: (days.data ?? []) as QuizInfo[],
     conditions: (setting("conditions") ?? {}) as Record<string, string>,
     grayCardQuestions: (setting("gray_card_questions") ?? []) as GrayCardQuestion[],
-    cardGroupOrder: (setting("card_group_order") ?? []) as string[],
   };
 }
 
@@ -93,8 +92,9 @@ type DbRule = Omit<RuleRow, "document_name"> & { office_id: string; office_docum
 const RULE_COLUMNS =
   "id, office_id, rule_slot_key, rule, attachments, source, source_document_id, source_quote, status, partial, " +
   "doctor_approved_at, office_documents(file_name)";
-const OFFICE_STATE_COLUMNS = "cards_uploaded_at, extraction_status, extraction_error, sent_to_doctor_at";
-const DOCUMENT_COLUMNS = "id, office_id, file_name, card_name, file_path, imported_at, created_at";
+const OFFICE_STATE_COLUMNS = "cards_uploaded_at, extraction_status, extraction_error, sent_to_doctor_at, standards_accepted_at";
+const DOCUMENT_COLUMNS =
+  "id, office_id, file_name, card_name, file_path, imported_at, created_at, card_title, card_color, schedule_days, workflow, skip, tags, mapped_at";
 const GAP_COLUMNS = "id, office_id, rule_slot_key, workflow, question, reason, answer, answered_at, released_at";
 
 type DbOffice = {
@@ -102,12 +102,14 @@ type DbOffice = {
   extraction_status: OfficeState["extractionStatus"];
   extraction_error: string | null;
   sent_to_doctor_at: string | null;
+  standards_accepted_at: string | null;
 };
 const toState = (o: DbOffice): OfficeState => ({
   cardsUploadedAt: o.cards_uploaded_at,
   extractionStatus: o.extraction_status,
   sentToDoctorAt: o.sent_to_doctor_at,
   extractionError: o.extraction_error,
+  standardsAcceptedAt: o.standards_accepted_at,
 });
 
 const toRule = (r: DbRule): RuleRow => ({
@@ -152,7 +154,6 @@ function flowInput(
     slots: bank.questions,
     dayConditions: Object.fromEntries(bank.quizzes.map((q) => [q.code, q.condition])),
     conditions: bank.conditions,
-    cardGroupOrder: bank.cardGroupOrder,
     profile: profileFromAnswers(toAnswers(rules)),
     rules,
     office,

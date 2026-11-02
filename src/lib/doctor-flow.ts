@@ -3,13 +3,13 @@
 // server-only imports.
 //
 //   1 Profile               the 8 profile-tier questions
-//   2 Upload your cards     card PDFs; "Done uploading" starts extraction
-//   3 Waiting for VFDA      extraction, then VFDA review and "Send to doctor"
-//   4 Confirm your rules    doctor-tier rules found on the cards, per card group
-//   5 Questions for you     gap questions only (not found, partial, conflicting, edge cases)
-//   6 VFDA standards        default-tier rules, pre-accepted as vfda_default
-// Steps 4-6 stay locked until VFDA sends the reviewed rules. Auto-tier rules
-// never appear here.
+//   2 Upload your cards     card PDFs; "Done uploading" reads them
+//   3 Waiting for VFDA      reading, card mapping, VFDA review and "Send to doctor"
+//   4 Questions for you     only the 12 must-ask rules the cards don't cover,
+//                           with the VFDA suggestion to confirm or change
+//   5 VFDA standards        one checkbox: anything the cards don't cover uses them
+// Steps 4-5 stay locked until VFDA sends the reviewed rules. The cards are the
+// source of the office's scenarios; every other rule slot is no longer asked.
 
 import {
   applies,
@@ -20,6 +20,7 @@ import {
   type InterviewQuestion,
   type Profile,
 } from "@/lib/interview";
+import { isMustAsk } from "@/lib/card-map";
 
 export type RuleRow = {
   id: string;
@@ -42,6 +43,7 @@ export type OfficeState = {
   extractionStatus: ExtractionStatus;
   sentToDoctorAt: string | null;
   extractionError?: string | null;
+  standardsAcceptedAt?: string | null;
 };
 
 export type DocumentRow = {
@@ -51,6 +53,14 @@ export type DocumentRow = {
   file_path: string;
   imported_at: string | null;
   created_at: string;
+  // Card mapping, once the card has been read.
+  card_title?: string;
+  card_color?: string | null;
+  schedule_days?: string[];
+  workflow?: string | null;
+  skip?: boolean;
+  tags?: string[];
+  mapped_at?: string | null;
 };
 
 export type GapReason = "not_found" | "partial" | "conflicting" | "edge_case";
@@ -88,22 +98,13 @@ export type SlotFinding =
   | { kind: "conflicting"; versions: RuleRow[] }
   | { kind: "not_found" };
 
-export type ConfirmItem =
-  | { kind: "card"; slot: InterviewQuestion; row: RuleRow; confirmed: boolean; confirmIds: string[] }
-  | { kind: "answered"; slot: InterviewQuestion; row: RuleRow };
-
-export type ConfirmGroup = { name: string; slug: string; items: ConfirmItem[]; confirmed: boolean };
-
 export type QuestionItem = { gap: GapRow; slot: InterviewQuestion | null; versions: RuleRow[] };
 
-export type StandardItem = {
-  slot: InterviewQuestion;
-  row: RuleRow | null;
-  override: RuleRow | null; // a card that says something different, waiting for the doctor
-  accepted: boolean;
-};
+// A VFDA standard and the office's value for it: a card's version (accepted
+// by VFDA) wins over the VFDA default, and the doctor's own answer over both.
+export type StandardItem = { slot: InterviewQuestion; row: RuleRow | null };
 
-export type StepKey = "profile" | "upload" | "review" | "confirm" | "questions" | "standards";
+export type StepKey = "profile" | "upload" | "review" | "questions" | "standards";
 export type StepState = "done" | "todo" | "waiting" | "locked";
 export type Step = { key: StepKey; label: string; href: string; state: StepState; detail: string };
 
@@ -111,20 +112,12 @@ export type FlowInput = {
   slots: InterviewQuestion[];
   dayConditions: Record<string, string>;
   conditions: Record<string, string>;
-  cardGroupOrder: string[];
   profile: Profile;
   rules: RuleRow[];
   office: OfficeState;
   documents: DocumentRow[];
   gaps: GapRow[];
 };
-
-export const slugify = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
 
 // Card versions VFDA approved ('needs_doctor') or the doctor already accepted.
 const isReviewedCard = (r: RuleRow) => r.source === "card_import" && (r.status === "needs_doctor" || r.status === "accepted");
@@ -161,17 +154,20 @@ function groupRows(rules: RuleRow[]) {
   return (key: string) => byKey.get(key) ?? [];
 }
 
-const doctorSlots = (input: FlowInput) => input.slots.filter((s) => s.tier === "doctor" && slotApplies(s, input));
+// Only the must-ask rules are still asked of the doctor.
+const askedSlots = (input: Pick<FlowInput, "slots" | "dayConditions" | "conditions" | "profile">) =>
+  input.slots.filter((s) => s.tier === "doctor" && isMustAsk(s.key) && slotApplies(s, input));
 
-// What "Send to doctor" changes in gap_questions: one question per doctor-tier
-// slot that is still missing (not found, partial or conflicting). Answered
-// questions are never asked again; open ones whose slot is now settled go away.
+// What "Send to doctor" changes in gap_questions: one question per must-ask
+// rule still missing from the cards (not found, partial or conflicting).
+// Answered questions are never asked again; open ones whose rule is now
+// settled, and any other open question, go away.
 export function planGaps(input: Pick<FlowInput, "slots" | "dayConditions" | "conditions" | "profile" | "rules" | "gaps">) {
   const rowsFor = groupRows(input.rules);
   const add: { rule_slot_key: string; question: string; reason: GapReason }[] = [];
   const update: { id: string; reason: GapReason }[] = [];
   const remove: string[] = [];
-  for (const slot of doctorSlots(input as FlowInput)) {
+  for (const slot of askedSlots(input)) {
     const finding = slotFinding(slot, rowsFor(slot.key));
     const existing = input.gaps.find((g) => g.rule_slot_key === slot.key);
     const reason = finding.kind === "answered" || finding.kind === "found" ? null : finding.kind;
@@ -184,10 +180,10 @@ export function planGaps(input: Pick<FlowInput, "slots" | "dayConditions" | "con
       update.push({ id: existing.id, reason });
     }
   }
-  // Slots that no longer apply to the office (profile changed) drop their open questions.
-  const applicable = new Set(doctorSlots(input as FlowInput).map((s) => s.key));
+  // Open questions for anything else (no longer asked, or no longer applies) go away.
+  const applicable = new Set(askedSlots(input).map((s) => s.key));
   for (const g of input.gaps) {
-    if (g.rule_slot_key && !g.answered_at && !applicable.has(g.rule_slot_key)) remove.push(g.id);
+    if (!g.answered_at && (!g.rule_slot_key || !applicable.has(g.rule_slot_key))) remove.push(g.id);
   }
   return { add, update, remove };
 }
@@ -215,45 +211,10 @@ export function buildDoctorFlow(input: FlowInput) {
   const extracting = input.office.extractionStatus === "running" || input.office.extractionStatus === "failed";
   const reviewPending = uploadedAt !== null && (!unlocked || extracting || awaitingReview);
 
-  // Step 4
-  const slotsByGroup = doctorSlots(input);
-  const groupNames = [
-    ...input.cardGroupOrder,
-    ...new Set(slotsByGroup.map((s) => s.card_group ?? "Other").filter((g) => !input.cardGroupOrder.includes(g))),
-  ];
-  const groups: ConfirmGroup[] = groupNames
-    .map((name) => {
-      const items = slotsByGroup
-        .filter((s) => (s.card_group ?? "Other") === name)
-        .flatMap((slot): ConfirmItem[] => {
-          const finding = slotFinding(slot, rowsFor(slot.key));
-          if (finding.kind === "answered") return [{ kind: "answered", slot, row: finding.row }];
-          if (finding.kind !== "found") return [];
-          return [
-            {
-              kind: "card",
-              slot,
-              row: finding.row,
-              confirmed: finding.cards.some((c) => c.status === "accepted" && c.doctor_approved_at !== null),
-              confirmIds: finding.cards.map((c) => c.id),
-            },
-          ];
-        });
-      return {
-        name,
-        slug: slugify(name),
-        items,
-        confirmed: items.every((i) => i.kind === "answered" || i.confirmed),
-      };
-    })
-    // Only card groups where the cards had rules.
-    .filter((g) => g.items.some((i) => i.kind === "card"));
-  const groupsDone = groups.filter((g) => g.confirmed).length;
-
-  // Step 5: released gap questions, open ones first.
+  // Step 4: released must-ask questions, open ones first.
   const slotByKey = new Map(input.slots.map((s) => [s.key, s]));
   const questions: QuestionItem[] = input.gaps
-    .filter((g) => g.released_at !== null)
+    .filter((g) => g.released_at !== null && isMustAsk(g.rule_slot_key))
     .map((gap) => ({
       gap,
       slot: gap.rule_slot_key ? (slotByKey.get(gap.rule_slot_key) ?? null) : null,
@@ -265,18 +226,16 @@ export function buildDoctorFlow(input: FlowInput) {
     .sort((a, b) => Number(a.gap.answered_at !== null) - Number(b.gap.answered_at !== null));
   const openQuestions = questions.filter((q) => q.gap.answered_at === null).length;
 
-  // Step 6
+  // Step 5: the VFDA standards, accepted all at once.
+  const sourceRank = (r: RuleRow) => (r.source === "doctor" || r.source === "vfda" ? 2 : r.source === "card_import" ? 1 : 0);
   const standards: StandardItem[] = input.slots
     .filter((s) => s.tier === "default" && slotApplies(s, input))
     .map((slot) => {
-      const rows = rowsFor(slot.key);
-      const row = rows.find((r) => r.source_document_id === null) ?? null;
-      const override =
-        rows.find((r) => r.source === "card_import" && r.status === "needs_doctor" && (!row || !sameValue(r.rule, row.rule))) ??
-        null;
-      return { slot, row, override, accepted: !!row?.doctor_approved_at && !override };
+      const rows = rowsFor(slot.key).filter((r) => r.status !== "rejected" && r.status !== "proposed");
+      const row = [...rows].sort((a, b) => sourceRank(b) - sourceRank(a))[0] ?? null;
+      return { slot, row };
     });
-  const standardsDone = standards.filter((s) => s.accepted).length;
+  const standardsAccepted = !!input.office.standardsAcceptedAt;
 
   const locked = (step: Omit<Step, "state" | "detail">, open: Pick<Step, "state" | "detail">): Step =>
     unlocked ? { ...step, ...open } : { ...step, state: "locked", detail: "Opens after VFDA review" };
@@ -318,30 +277,22 @@ export function buildDoctorFlow(input: FlowInput) {
               : "VFDA is reviewing",
     },
     locked(
-      { key: "confirm", label: "Confirm your rules", href: "/doctor/setup/confirm" },
-      groupsDone === groups.length
-        ? { state: "done", detail: groups.length ? "Done" : "Nothing to confirm" }
-        : { state: "todo", detail: `${groupsDone} of ${plural(groups.length, "group")} confirmed` },
-    ),
-    locked(
       { key: "questions", label: "Questions for you", href: "/doctor/setup/questions" },
       openQuestions === 0 ? { state: "done", detail: "Done" } : { state: "todo", detail: plural(openQuestions, "question") },
     ),
     locked(
       { key: "standards", label: "VFDA standards", href: "/doctor/setup/standards" },
-      standardsDone === standards.length
-        ? { state: "done", detail: "Done" }
-        : { state: "todo", detail: `${standardsDone} of ${standards.length} accepted` },
+      standardsAccepted ? { state: "done", detail: "Accepted" } : { state: "todo", detail: "Not accepted yet" },
     ),
   ];
 
   return {
     steps,
     unlocked,
-    groups,
     questions,
     openQuestions,
     standards,
+    standardsAccepted,
     newDocuments,
     awaitingReview,
     profileAnswered: answered,

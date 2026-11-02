@@ -71,7 +71,7 @@ export function selectMasters(masters: MasterScenario[], day: string, conditions
 // Rule values as text.
 // ---------------------------------------------------------------------------
 
-export type RuleForBuild = { rule_slot_key: string; rule: unknown; source_document_id: string | null };
+export type RuleForBuild = { rule_slot_key: string; rule: unknown; source_document_id: string | null; source?: string };
 
 const matrixLine = (row: Partial<MatrixRow>) =>
   `${row.visit_type || "Visit"}: ` +
@@ -112,15 +112,18 @@ const squash = (s: string) => s.toLowerCase().replace(/[^a-z]/g, "");
 
 export type DerivedPlaceholder = { key: string; from_key: string; rule: string };
 
-// Every placeholder value the office has: accepted rules (a direct answer wins
-// over a card's version) plus settings.derived_placeholders.
+// Every placeholder value the office has: accepted rules plus
+// settings.derived_placeholders. Cards come first: a card's version wins over
+// the VFDA default, and an answer the doctor or VFDA typed in wins over both.
 export function placeholderValues(
   rules: RuleForBuild[],
   derived: DerivedPlaceholder[],
   seed: string,
 ): Record<string, string> {
   const raw = new Map<string, unknown>();
-  for (const r of [...rules].sort((a, b) => Number(!!b.source_document_id) - Number(!!a.source_document_id))) {
+  const rank = (r: RuleForBuild) =>
+    r.source === "vfda_default" ? 0 : r.source_document_id ? 1 : 2;
+  for (const r of [...rules].sort((a, b) => rank(a) - rank(b))) {
     raw.set(r.rule_slot_key, r.rule);
   }
   const values: Record<string, string> = {};
@@ -198,6 +201,10 @@ export type DraftScenario = {
   options_rule: string | null;
   wants_repeat: boolean;
   position: number;
+  // The card (and its own words) the item was written from.
+  source_card: string | null;
+  source_quote: string | null;
+  source_document_id: string | null;
 };
 
 export function fillMaster(m: MasterScenario, values: Record<string, string>): DraftScenario {
@@ -223,6 +230,9 @@ export function fillMaster(m: MasterScenario, values: Record<string, string>): D
     options_rule: m.options_rule ? fill(m.options_rule, values, missing) : null,
     wants_repeat: m.type === "situational" && m.repeat_variant === "generate",
     position: m.position,
+    source_card: null,
+    source_quote: null,
+    source_document_id: null,
   };
   draft.missing_keys = [...missing].sort();
   return draft;
@@ -273,4 +283,75 @@ export function correctResponseFromText(text: string, keys: string[] | null): Co
   }
   const empty = keys.filter((k) => !out[k]?.length);
   return empty.length ? `Add at least one step under ${empty.map((k) => `${k}:`).join(", ")}` : out;
+}
+
+// ---------------------------------------------------------------------------
+// Card-first items: Claude's items for a day become drafts in the master's
+// slots (same codes, parts and points), matched by type and, where it says
+// so, by the master item it follows.
+// ---------------------------------------------------------------------------
+
+// Never about exact buttons or click paths: the VA says it in their own words.
+export const BUTTON_WORDS = /\b(click(s|ed|ing)?|button(s)?)\b/i;
+
+export type CardItem = {
+  based_on: string | null;
+  type: "mc" | "situational";
+  workflow: string;
+  part_title: string;
+  stem: string;
+  options: string[] | null;
+  answer: string | null;
+  correct_response: CorrectResponse | null;
+  critical_fail: string | null;
+  escalation_level: "none" | "approval" | "immediate";
+  source_card: string;
+  source_quote: string;
+  source_document_id: string | null;
+};
+
+export function cardDrafts(items: CardItem[], masters: DraftScenario[]): DraftScenario[] {
+  const free = [...masters];
+  const take = (item: CardItem) => {
+    let i = free.findIndex((m) => m.code === item.based_on && m.type === item.type);
+    if (i < 0) i = free.findIndex((m) => m.type === item.type);
+    return i < 0 ? undefined : free.splice(i, 1)[0];
+  };
+  return items.map((item, n) => {
+    const slot = take(item);
+    return {
+      scenario_id: slot && slot.code === item.based_on ? slot.scenario_id : null,
+      office_workflow_id: null,
+      workflow: item.workflow,
+      part: slot?.part ?? "A",
+      part_title: item.part_title || slot?.part_title || "",
+      code: slot?.code ?? `C${n + 1}`,
+      type: item.type,
+      points: item.type === "mc" ? 1 : 2,
+      answer_format: slot?.answer_format ?? null,
+      stem: item.stem,
+      options: item.type === "mc" ? item.options : null,
+      answer: item.type === "mc" ? item.answer : null,
+      correct_response: item.type === "situational" ? item.correct_response : null,
+      critical_fail: item.critical_fail,
+      escalation_level: item.escalation_level,
+      formula: null,
+      missing_keys: [],
+      options_rule: null,
+      wants_repeat: item.type === "situational",
+      position: slot?.position ?? n,
+      source_card: item.source_card,
+      source_quote: item.source_quote,
+      source_document_id: item.source_document_id,
+    };
+  });
+}
+
+// The boxes a correct response is split into for this day (e.g. Say/Do/Book),
+// from the master items; null when they're plain step lists.
+export function responseBoxes(masters: { type: string; correct_response: CorrectResponse | null }[]): string[] | null {
+  for (const m of masters) {
+    if (m.type === "situational" && m.correct_response && !Array.isArray(m.correct_response)) return Object.keys(m.correct_response);
+  }
+  return null;
 }

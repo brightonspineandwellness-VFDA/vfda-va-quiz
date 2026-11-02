@@ -80,7 +80,7 @@ async function Offices() {
                       Cards &amp; rules
                     </Link>
                     <Link href={`/admin/offices/${office.id}/interview`} className="block underline">
-                      Every rule slot
+                      Standards &amp; must-ask rules
                     </Link>
                     <Link href={`/admin/offices/${office.id}/scenarios`} className="block underline">
                       Scenarios

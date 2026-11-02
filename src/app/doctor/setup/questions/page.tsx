@@ -14,8 +14,8 @@ import { loadDoctorSetup } from "../load";
 export default function QuestionsPage() {
   return (
     <SignedInPage area="Doctor">
-      <Link href="/doctor/setup/confirm" className="text-sm text-foreground/60 hover:underline">
-        ← Confirm your rules
+      <Link href="/doctor/setup/review" className="text-sm text-foreground/60 hover:underline">
+        ← Waiting for VFDA review
       </Link>
       <Suspense fallback={<Loading />}>
         <QuestionsStep />
@@ -24,8 +24,8 @@ export default function QuestionsPage() {
   );
 }
 
-// Step 5: only the gap questions: rules the cards didn't cover, covered in
-// part, or said different things about, plus a few edge cases.
+// Step 4: only the must-ask rules (at most 12) that the cards didn't cover,
+// covered in part, or said different things about.
 async function QuestionsStep() {
   const setup = await loadDoctorSetup();
   if (!setup) return <p>Your office isn&apos;t set up yet. Contact VFDA.</p>;
@@ -38,14 +38,17 @@ async function QuestionsStep() {
       <h1 className="text-2xl font-semibold">Office setup: {interview.office.name}</h1>
       <StepProgress steps={flow.steps} current="questions" />
       <div>
-        <h2 className="text-xl font-semibold">Step 5 · Questions for you</h2>
+        <h2 className="text-xl font-semibold">Step 4 · Questions for you</h2>
         {flow.unlocked && (
           <p className="text-lg">
             {total === 1 ? "1 question" : `${total} questions`}
             {answered > 0 && <span className="text-foreground/60"> · {answered} answered</span>}
           </p>
         )}
-        <p className="text-foreground/70">Only what your cards didn&apos;t answer. Short answers are fine.</p>
+        <p className="text-foreground/70">
+          Only the few rules every VA needs that your cards didn&apos;t answer. Confirm VFDA&apos;s suggestion or change
+          it. Short answers are fine.
+        </p>
       </div>
 
       {!flow.unlocked ? (
@@ -101,7 +104,8 @@ function Question({
     source: "",
   };
   const answered = gap.answered_at !== null;
-  const suggestion = gap.reason === "not_found" ? slot.suggested_answer : null;
+  // VFDA's suggestion to confirm or change, unless the cards gave a version.
+  const suggestion = versions.length === 0 ? slot.suggested_answer : null;
   // A starting point only: nothing is saved until the doctor presses Save.
   const start: AnswerValue = answered
     ? gap.answer
@@ -124,7 +128,6 @@ function Question({
       </div>
       <p className="text-xs text-foreground/60">
         {REASON_LABELS[gap.reason]}
-        {gap.reason === "edge_case" && gap.workflow && ` · ${gap.workflow}`}
       </p>
 
       {answered ? (
