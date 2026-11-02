@@ -47,6 +47,12 @@ const PHASES = [
     title: "Phase 4 database changes (office scenarios, VFDA day approval)",
     after: "phase5.sql",
   },
+  {
+    name: "phase6",
+    starts: "20261030160000",
+    title: "Phase 6 database changes (results reports by email and Slack)",
+    after: "phase4.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

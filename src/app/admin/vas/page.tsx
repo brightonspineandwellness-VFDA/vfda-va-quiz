@@ -5,8 +5,11 @@ import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ProofReview, StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
 import { createSessionClient } from "@/lib/supabase/server";
-import { decideReviewDay } from "@/lib/va-admin-actions";
+import { decideReviewDay, resendAttemptReport } from "@/lib/va-admin-actions";
 import { PROOF_BUCKET } from "@/lib/va-training";
+
+// "Send again" sends a report while you wait.
+export const maxDuration = 60;
 
 export default function VasPage() {
   return (
@@ -56,6 +59,15 @@ async function Vas() {
     ? await supabase
         .from("attempt_items")
         .select("attempt_id, fast, ai_confidence, first_score, repeat_score, repeat_scenario_id")
+        .in(
+          "attempt_id",
+          attemptRows.map((a) => a.id),
+        )
+    : { data: [] };
+  const { data: notes } = attemptRows.length
+    ? await supabase
+        .from("notifications")
+        .select("attempt_id, channel, recipient, sent_at, error")
         .in(
           "attempt_id",
           attemptRows.map((a) => a.id),
@@ -134,6 +146,7 @@ async function Vas() {
                       <th className="py-1 pr-3 font-medium">Result</th>
                       <th className="py-1 pr-3 font-medium">Time</th>
                       <th className="py-1 pr-3 font-medium">Flags</th>
+                      <th className="py-1 pr-3 font-medium">Report</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -162,6 +175,9 @@ async function Vas() {
                           <td className="py-1 pr-3">{a.result}</td>
                           <td className="py-1 pr-3">{minutes(a.time_spent)}</td>
                           <td className="py-1 pr-3">{flags.join(", ") || "–"}</td>
+                          <td className="py-1 pr-3">
+                            <ReportStatus attemptId={a.id} rows={(notes ?? []).filter((n) => n.attempt_id === a.id)} />
+                          </td>
                         </tr>
                       );
                     })}
@@ -201,5 +217,27 @@ async function Vas() {
         );
       })}
     </>
+  );
+}
+
+type NoteRow = { channel: string; recipient: string; sent_at: string | null; error: string | null };
+
+// Where the attempt's report went, and "Send again" for anything that didn't.
+function ReportStatus({ attemptId, rows }: { attemptId: string; rows: NoteRow[] }) {
+  const sent = rows.filter((r) => r.sent_at);
+  const failed = rows.filter((r) => !r.sent_at);
+  return (
+    <div className="flex flex-col gap-1">
+      {rows.length === 0 && <span className="text-foreground/60">not sent yet</span>}
+      {sent.length > 0 && <span>Sent: {sent.map((r) => r.recipient).join(", ")}</span>}
+      {failed.map((r) => (
+        <span key={`${r.channel}:${r.recipient}`} className="text-red-700 dark:text-red-400">
+          {r.recipient}: {r.error ?? "sending…"}
+        </span>
+      ))}
+      {(rows.length === 0 || failed.length > 0) && (
+        <ActionButton action={resendAttemptReport.bind(null, attemptId)} label="Send again" pendingLabel="Sending…" />
+      )}
+    </div>
   );
 }

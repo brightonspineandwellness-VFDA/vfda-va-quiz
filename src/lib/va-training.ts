@@ -514,12 +514,20 @@ export async function submitAnswer(
 // End of the day
 // ---------------------------------------------------------------------------
 
-export type FinishedDay = { dayCode: string; result: "pass" | "review" | "retake"; version: "A" | "B"; retakeOn: string | null };
+export type FinishedDay = {
+  attemptId: string;
+  // True only for the request that worked the result out (it sends the report).
+  fresh: boolean;
+  dayCode: string;
+  result: "pass" | "review" | "retake";
+  version: "A" | "B";
+  retakeOn: string | null;
+};
 
 async function finishDay(ctx: DayContext): Promise<FinishedDay> {
   const { db, current, attempt } = ctx;
   const now = new Date();
-  const base = { dayCode: current.day.code, version: current.version };
+  const base = { attemptId: attempt.id, dayCode: current.day.code, version: current.version };
 
   // Claim the finish, so it is worked out once.
   const { data: claimed } = await db
@@ -530,7 +538,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     .select("id");
   if (!claimed?.length) {
     const { data } = await db.from("attempts").select("result").eq("id", attempt.id).single();
-    return { ...base, result: data?.result ?? "review", retakeOn: null };
+    return { ...base, fresh: false, result: data?.result ?? "review", retakeOn: null };
   }
 
   const settings = await gradingSettings(db);
@@ -636,7 +644,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     .eq("schedule_day", current.day.code)
     .eq("status", "open");
 
-  return { ...base, result: outcome.result, retakeOn };
+  return { ...base, fresh: true, result: outcome.result, retakeOn };
 }
 
 // ---------------------------------------------------------------------------

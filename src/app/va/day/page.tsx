@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
+import { sendAttemptReport } from "@/lib/reports";
 import { showDate } from "@/lib/va-flow";
 import { loadDayScreen, type FinishedDay } from "@/lib/va-training";
 
-// Grading a situational answer (and its retry) runs in the answer action.
+// Grading a situational answer (and its retry) runs in the answer action;
+// the results report is sent after the day's last page.
 export const maxDuration = 300;
 
 export default function DayPage() {
@@ -27,7 +30,11 @@ async function DayScreen() {
   if (screen.kind === "empty") {
     return <p>{screen.dayCode} has no scenarios yet. Check back later.</p>;
   }
-  if (screen.kind === "finished") return <Finished result={screen.result} />;
+  if (screen.kind === "finished") {
+    const { attemptId, fresh } = screen.result;
+    if (fresh) after(() => sendAttemptReport(attemptId).then(() => undefined));
+    return <Finished result={screen.result} />;
+  }
   const { item } = screen;
   return <ScenarioRunner key={`${item.scenarioId}:${item.phase}`} initial={item} />;
 }

@@ -6,6 +6,7 @@
 
 import { getCurrentUser } from "@/lib/auth";
 import type { ActionResult } from "@/lib/interview-actions";
+import { sendAttemptReport } from "@/lib/reports";
 import { createSessionClient } from "@/lib/supabase/server";
 import { nextTrainingDay } from "@/lib/va-training";
 
@@ -82,4 +83,12 @@ export async function setStartDate(vaId: string, date: string): Promise<ActionRe
     .eq("role", "va")
     .select("id");
   return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+}
+
+// Sends whatever part of an attempt's report hasn't gone out (failed or never sent).
+export async function resendAttemptReport(attemptId: string): Promise<ActionResult> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(attemptId)) return fail("Invalid request.");
+  const { failed } = await sendAttemptReport(attemptId);
+  return failed ? fail(`${failed} couldn't be sent. See the error beside the report.`) : { ok: true, data: null };
 }
