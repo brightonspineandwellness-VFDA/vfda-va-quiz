@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { SopForm } from "@/components/certs/sop-form";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
+import { loadVaTasks } from "@/lib/certifications";
 import { markTodaysCardsDone } from "@/lib/va-actions";
-import { dayName, proofState, type DayView, type UnlockStatus } from "@/lib/va-flow";
+import { dayName, proofState, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
 import { loadToday } from "@/lib/va-training";
 
 export default function VaPage() {
@@ -105,13 +107,20 @@ async function Today() {
         </div>
       )}
 
+      {user.officeId && <Tasks vaId={user.id} officeId={user.officeId} />}
+
       {"days" in today && (
         <section className="flex flex-col gap-2">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-lg font-semibold">Your training days</h2>
-            <Link href="/va/proof" className="text-sm underline">
-              Proof of work
-            </Link>
+            <span className="flex gap-3 text-sm">
+              <Link href="/va/results" className="underline">
+                My results
+              </Link>
+              <Link href="/va/proof" className="underline">
+                Proof of work
+              </Link>
+            </span>
           </div>
           <ol className="flex flex-col divide-y divide-foreground/10 rounded-lg border border-foreground/15">
             {today.days.map((d) => {
@@ -133,6 +142,63 @@ async function Today() {
           </ol>
         </section>
       )}
+    </>
+  );
+}
+
+// Retrains and rechecks to do, and Trello cards to update. Neither blocks the next day.
+async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
+  const { sop, drills } = await loadVaTasks(vaId, officeId);
+  if (!sop.length && !drills.length) return null;
+  return (
+    <>
+      {drills.map((d) => (
+        <div key={d.id} className={card}>
+          <p className="text-sm font-medium text-red-700 dark:text-red-400">{d.kind === "retrain" ? "Retrain" : "Recheck"}</p>
+          <p className="text-lg font-semibold">
+            {d.code} {d.name}
+          </p>
+          <p className="text-sm">
+            {d.kind === "retrain"
+              ? "Practice this workflow again with new scenarios (version B)."
+              : "A short recheck to keep your certification: 5 scenarios."}
+          </p>
+          <Link href={`/va/drill/${d.id}`} className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+            Start →
+          </Link>
+        </div>
+      ))}
+      {sop.map((t) => (
+        <div key={t.certificationId} className={card}>
+          <p className="text-lg font-semibold">
+            Update your office&apos;s Trello card for {t.code} {t.name}
+          </p>
+          {t.note && t.sopStatus !== "pending" && (
+            <p className="rounded-lg bg-foreground/5 px-3 py-2 text-sm">
+              <span className="font-medium">VFDA: </span>
+              {t.note}
+            </p>
+          )}
+          {t.todo ? (
+            <>
+              <div className="text-sm">
+                <p className="font-medium">The card should cover:</p>
+                <ul className="mt-1 flex flex-col gap-0.5">
+                  {t.outline.map((o) => (
+                    <li key={o}>☐ {o}</li>
+                  ))}
+                </ul>
+              </div>
+              <SopForm certificationId={t.certificationId} links={t.links} />
+            </>
+          ) : (
+            <p className="text-sm text-foreground/70">
+              Sent {t.submittedAt ? showDate(t.submittedAt.slice(0, 10)) : ""}. Waiting for VFDA to confirm the doctor approved it on
+              Trello. {t.links.length > 1 ? `${t.links.length} cards.` : ""}
+            </p>
+          )}
+        </div>
+      ))}
     </>
   );
 }

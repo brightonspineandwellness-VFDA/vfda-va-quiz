@@ -8,6 +8,7 @@ import "server-only";
 
 import { CONFIDENCE_VALUE, gradeSituational } from "@/lib/ai";
 import type { CurrentUser } from "@/lib/auth";
+import { recalculateCertifications } from "@/lib/certifications";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   addTrainingDays,
@@ -178,6 +179,8 @@ type DayContext = {
   db: Db;
   user: CurrentUser & { officeId: string };
   current: DayView;
+  // A workflow retrain or recheck instead of a training day.
+  drill: { id: string; kind: "retrain" | "recheck"; workflow: string } | null;
   attempt: { id: string; started_at: string; submitted_at: string | null };
   scenarios: DisplayScenario[];
   items: (ItemProgress & {
@@ -199,9 +202,11 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
   const current = loaded.today.current;
   const db = createAdminClient();
   const officeId = user.officeId;
-  const key = { va_id: user.id, schedule_day: current.day.code, version: current.version };
+  const key = { va_id: user.id, schedule_day: current.day.code, version: current.version, kind: "day" };
 
-  await db.from("attempts").upsert({ ...key, office_id: officeId }, { onConflict: "va_id,schedule_day,version", ignoreDuplicates: true });
+  // Created on the first visit (a second request at the same time hits the unique index).
+  const { error: insertError } = await db.from("attempts").insert({ ...key, office_id: officeId });
+  if (insertError && insertError.code !== "23505") throw new Error(insertError.message);
   const [attempt, scenarios] = await Promise.all([
     db.from("attempts").select("id, started_at, submitted_at").match(key).single(),
     db
@@ -221,9 +226,60 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
     db,
     user: { ...user, officeId },
     current,
+    drill: null,
     attempt: attemptRow,
     scenarios: (must(scenarios) ?? []) as DisplayScenario[],
     items: (items ?? []) as DayContext["items"],
+  };
+}
+
+// A retrain or recheck of one workflow: its items were set when it was assigned.
+async function openDrill(user: CurrentUser, attemptId: string): Promise<DayContext | null> {
+  if (!user.officeId) return null;
+  const db = createAdminClient();
+  const { data: attempt } = await db
+    .from("attempts")
+    .select("id, started_at, submitted_at, kind, schedule_day, version, certification_id")
+    .eq("id", attemptId)
+    .eq("va_id", user.id)
+    .neq("kind", "day")
+    .maybeSingle();
+  if (!attempt) return null;
+  const [day, rows] = await Promise.all([
+    db.from("schedule_days").select(DAY_COLUMNS).eq("code", attempt.schedule_day).single(),
+    db.from("attempt_items").select(`${ITEM_COLUMNS}, position`).eq("attempt_id", attempt.id).order("position"),
+  ]);
+  const items = (must(rows) ?? []) as DayContext["items"];
+  const scenarios = items.length
+    ? ((must(
+        await db
+          .from("office_scenarios")
+          .select(DISPLAY_COLUMNS)
+          .eq("office_id", user.officeId)
+          .in(
+            "id",
+            items.map((i) => i.office_scenario_id),
+          ),
+      ) ?? []) as DisplayScenario[])
+    : [];
+  const byId = new Map(scenarios.map((s) => [s.id, s]));
+  const ordered = items.map((i) => byId.get(i.office_scenario_id)).filter((s): s is DisplayScenario => !!s);
+  const kind = attempt.kind as "retrain" | "recheck";
+  const workflow = ordered[0]?.workflow ?? "";
+  return {
+    db,
+    user: { ...user, officeId: user.officeId },
+    current: {
+      index: 0,
+      day: { ...(must(day) as DayRow), title: workflow },
+      unlock: null,
+      status: "open",
+      version: attempt.version as DayView["version"],
+    },
+    drill: { id: attempt.id, kind, workflow },
+    attempt: { id: attempt.id, started_at: attempt.started_at, submitted_at: attempt.submitted_at },
+    scenarios: ordered,
+    items,
   };
 }
 
@@ -241,7 +297,7 @@ function toServed(
     phase,
     number: ctx.scenarios.findIndex((s) => s.id === parent.id) + 1,
     total: ctx.scenarios.length,
-    dayCode: ctx.current.day.code,
+    dayCode: ctx.drill ? (ctx.drill.kind === "retrain" ? "Retrain" : "Recheck") : ctx.current.day.code,
     dayTitle: ctx.current.day.title,
     workflow: shown.workflow,
     partTitle: shown.part_title,
@@ -250,6 +306,7 @@ function toServed(
     stem: shown.stem,
     options,
     priorFeedback,
+    drillId: ctx.drill?.id ?? null,
   };
 }
 
@@ -285,7 +342,15 @@ export type DayScreen =
 // so time per item is measured on the server.
 export async function loadDayScreen(user: CurrentUser): Promise<DayScreen> {
   const ctx = await openDay(user);
-  if (!ctx) return { kind: "closed" };
+  return ctx ? screenFor(ctx) : { kind: "closed" };
+}
+
+export async function loadDrillScreen(user: CurrentUser, attemptId: string): Promise<DayScreen> {
+  const ctx = await openDrill(user, attemptId);
+  return ctx ? screenFor(ctx) : { kind: "closed" };
+}
+
+async function screenFor(ctx: DayContext): Promise<DayScreen> {
   if (ctx.scenarios.length === 0) return { kind: "empty", dayCode: ctx.current.day.code };
   const next = nextItem(ctx.scenarios, ctx.items);
   if (!next) return { kind: "finished", result: await finishDay(ctx) };
@@ -301,6 +366,12 @@ export async function loadDayScreen(user: CurrentUser): Promise<DayScreen> {
         },
         { onConflict: "attempt_id,office_scenario_id", ignoreDuplicates: true },
       );
+    } else {
+      // A drill's items exist from the start; its time runs from when one is first shown.
+      const row = ctx.items.find((i) => i.office_scenario_id === next.scenario.id);
+      if (row && !row.served_at) {
+        await ctx.db.from("attempt_items").update({ served_at: new Date().toISOString() }).eq("id", row.id).is("served_at", null);
+      }
     }
     return { kind: "item", item: toServed(ctx, next.scenario, next.scenario, "first", null) };
   }
@@ -342,7 +413,7 @@ const ruleText = (value: unknown): string => {
 };
 
 // The office's accepted rules for one workflow, for the grader.
-async function officeRulesFor(db: Db, officeId: string, workflow: string) {
+export async function officeRulesFor(db: Db, officeId: string, workflow: string) {
   const slots = must(await db.from("rule_slots").select("key").contains("workflows", [workflow])) ?? [];
   if (!slots.length) return [];
   const rows =
@@ -377,9 +448,10 @@ export async function submitAnswer(
   scenarioId: string,
   phase: "first" | "repeat",
   answer: SubmittedAnswer,
+  drillId: string | null = null,
 ): Promise<{ ok: true; data: SubmitOutcome } | { ok: false; error: string }> {
-  const ctx = await openDay(user);
-  if (!ctx) return { ok: false, error: "No day is open for you right now." };
+  const ctx = drillId ? await openDrill(user, drillId) : await openDay(user);
+  if (!ctx || ctx.attempt.submitted_at) return { ok: false, error: "Nothing is open for you here right now." };
   const next = nextItem(ctx.scenarios, ctx.items);
   // No going back, no skipping ahead: only the item on screen can be answered, once.
   if (!next || next.scenario.id !== scenarioId || next.phase !== phase) {
@@ -464,6 +536,7 @@ export async function submitAnswer(
       .select(DISPLAY_COLUMNS)
       .eq("parent_scenario_id", scenarioId)
       .eq("is_repeat_variant", true)
+      .eq("recheck", false)
       .eq("test_status", "live")
       .maybeSingle();
     repeat = data as DisplayScenario | null;
@@ -516,6 +589,7 @@ export async function submitAnswer(
 
 export type FinishedDay = {
   attemptId: string;
+  drill: "retrain" | "recheck" | null;
   // True only for the request that worked the result out (it sends the report).
   fresh: boolean;
   dayCode: string;
@@ -527,7 +601,12 @@ export type FinishedDay = {
 async function finishDay(ctx: DayContext): Promise<FinishedDay> {
   const { db, current, attempt } = ctx;
   const now = new Date();
-  const base = { attemptId: attempt.id, dayCode: current.day.code, version: current.version };
+  const base = {
+    attemptId: attempt.id,
+    drill: ctx.drill?.kind ?? null,
+    dayCode: ctx.drill ? current.day.title : current.day.code,
+    version: current.version,
+  };
 
   // Claim the finish, so it is worked out once.
   const { data: claimed } = await db
@@ -598,8 +677,9 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
   }
   if (fastIds.length) await db.from("attempt_items").update({ fast: true }).in("id", fastIds);
 
+  // A drill has no thresholds of its own: the pass and review ratios apply.
   const outcome = dayResult(
-    current.day,
+    ctx.drill ? { ...current.day, max_points: null, pass_points: null, review_min_points: null } : current.day,
     full
       .filter((i) => typeOf.has(i.office_scenario_id))
       .map((i) => ({
@@ -628,6 +708,11 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     })
     .eq("id", attempt.id);
 
+  if (ctx.drill) {
+    await recalculateCertifications(ctx.user.id);
+    return { ...base, fresh: true, result: outcome.result, retakeOn: null };
+  }
+
   // Move the day on. A first retake opens version B the next training day;
   // failing version B goes to VFDA for a call.
   let retakeOn: string | null = null;
@@ -644,6 +729,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     .eq("schedule_day", current.day.code)
     .eq("status", "open");
 
+  await recalculateCertifications(ctx.user.id);
   return { ...base, fresh: true, result: outcome.result, retakeOn };
 }
 

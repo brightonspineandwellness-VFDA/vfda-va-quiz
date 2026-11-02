@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { AttemptLink, ReportStatus } from "@/components/attempts/attempt-review";
+import { CertGrid } from "@/components/certs/cert-grid";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ProofReview, StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
+import { daysBetween, SOP_WAIT_FLAG_DAYS } from "@/lib/certification";
+import { loadCertGrid } from "@/lib/certifications";
 import { createSessionClient } from "@/lib/supabase/server";
 import { decideReviewDay } from "@/lib/va-admin-actions";
 import { PROOF_BUCKET } from "@/lib/va-training";
@@ -18,7 +21,7 @@ export default function VasPage() {
       <Link href="/admin" className="text-sm text-foreground/60 hover:underline">
         ← Admin
       </Link>
-      <h1 className="text-2xl font-semibold">VA training</h1>
+      <h1 className="text-2xl font-semibold">VA progress</h1>
       <Suspense fallback={<Loading />}>
         <Vas />
       </Suspense>
@@ -35,6 +38,11 @@ const STATUS_LABELS: Record<string, string> = {
   retake: "retake",
 };
 
+// An attempt with this many pastes is flagged.
+const HEAVY_PASTING = 5;
+// A report still not out after this long is flagged.
+const REPORT_GRACE_MS = 15 * 60 * 1000;
+
 const minutes = (s: number | null) => (s === null ? "–" : `${Math.max(1, Math.round(s / 60))} min`);
 
 async function Vas() {
@@ -47,7 +55,7 @@ async function Vas() {
     supabase.from("day_unlocks").select("va_id, schedule_day, version, status, cards_done_at, opens_on"),
     supabase
       .from("attempts")
-      .select("id, va_id, schedule_day, version, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
+      .select("id, va_id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
       .not("submitted_at", "is", null)
       .order("submitted_at"),
     supabase
@@ -86,9 +94,95 @@ async function Vas() {
   );
 
   if (!vas.data?.length) return <p className="text-foreground/70">No VAs yet.</p>;
+  const grid = await loadCertGrid(supabase, {});
+  const now = new Date();
+
+  // One line per VA: where they are, how they score, what needs a look.
+  const progress = vas.data.map((va) => {
+    const days = (unlocks.data ?? [])
+      .filter((u) => u.va_id === va.id)
+      .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
+    const current = days.find((d) => d.status !== "passed");
+    const mine = attemptRows.filter((a) => a.va_id === va.id);
+    const its = (items ?? []).filter((i) => mine.some((a) => a.id === i.attempt_id));
+    const repeats = its.filter((i) => i.repeat_scenario_id);
+    const row = grid.rows.find((r) => r.vaId === va.id);
+    const notSent = mine.filter((a) => {
+      const rows = (notes ?? []).filter((n) => n.attempt_id === a.id);
+      return rows.some((n) => n.status === "failed") || (!rows.length && now.getTime() - new Date(a.submitted_at).getTime() > REPORT_GRACE_MS);
+    }).length;
+    const sopWaiting = (row?.cells ?? []).filter(
+      (c) => c.sopStatus === "pending" && c.submittedAt && daysBetween(c.submittedAt, now) > SOP_WAIT_FLAG_DAYS,
+    ).length;
+    const fast = mine.filter((a) => a.fast_finish).length;
+    const heavy = mine.filter((a) => Array.isArray(a.paste_log) && a.paste_log.length >= HEAVY_PASTING).length;
+    const critical = mine.reduce((n, a) => n + a.critical_errors, 0);
+    const waiting = its.filter((i) => i.first_score === null && !i.vfda_override).length;
+    return {
+      va,
+      current: current
+        ? `${current.schedule_day}${current.version === "B" ? " (B)" : ""} ${STATUS_LABELS[current.status] ?? current.status}`
+        : days.length
+          ? "all days passed"
+          : "not started",
+      scores: mine
+        .filter((a) => a.kind === "day")
+        .map((a) => `${a.schedule_day}${a.version === "B" ? "B" : ""} ${Number(a.first_try_points)}/${a.max_points}`),
+      repeats: repeats.length ? `${repeats.length} (${repeats.filter((i) => i.repeat_score !== 2).length} below 2/2)` : "–",
+      flags: [
+        fast > 0 && `${fast} fast finish${fast > 1 ? "es" : ""}`,
+        heavy > 0 && `heavy pasting (${heavy})`,
+        critical > 0 && `${critical} critical`,
+        waiting > 0 && `${waiting} item${waiting > 1 ? "s" : ""} waiting for review`,
+        notSent > 0 && `${notSent} report${notSent > 1 ? "s" : ""} not sent`,
+        sopWaiting > 0 && `${sopWaiting} SOP link${sopWaiting > 1 ? "s" : ""} waiting > ${SOP_WAIT_FLAG_DAYS} days`,
+      ].filter((f): f is string => !!f),
+    };
+  });
 
   return (
     <>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-foreground/15 text-foreground/60">
+            <tr>
+              <th className="py-1 pr-3 font-medium">VA</th>
+              <th className="py-1 pr-3 font-medium">Office</th>
+              <th className="py-1 pr-3 font-medium">Current day</th>
+              <th className="py-1 pr-3 font-medium">First-try scores</th>
+              <th className="py-1 pr-3 font-medium">Repeats</th>
+              <th className="py-1 pr-3 font-medium">Flags</th>
+            </tr>
+          </thead>
+          <tbody>
+            {progress.map((p) => (
+              <tr key={p.va.id} className="border-b border-foreground/10 align-top">
+                <td className="py-1 pr-3">
+                  <a href={`#va-${p.va.id}`} className="underline">
+                    {p.va.full_name || p.va.email}
+                  </a>
+                </td>
+                <td className="py-1 pr-3">{p.va.office_id ? (officeName.get(p.va.office_id) ?? "Unknown office") : "No office"}</td>
+                <td className="py-1 pr-3">{p.current}</td>
+                <td className="py-1 pr-3">{p.scores.join(", ") || "–"}</td>
+                <td className="py-1 pr-3">{p.repeats}</td>
+                <td className={`py-1 pr-3 ${p.flags.length ? "text-red-700 dark:text-red-400" : ""}`}>{p.flags.join(", ") || "–"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <section className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-lg font-semibold">Certifications</h2>
+          <Link href="/admin/sops" className="text-sm underline">
+            SOPs to confirm
+          </Link>
+        </div>
+        <CertGrid columns={grid.columns} rows={grid.rows} admin certificatePath={(id) => `/admin/vas/${id}/certificate`} />
+      </section>
+
       {vas.data.map((va) => {
         const days = (unlocks.data ?? [])
           .filter((u) => u.va_id === va.id)
@@ -96,7 +190,7 @@ async function Vas() {
         const mine = attemptRows.filter((a) => a.va_id === va.id);
         const proofRows = (proofs.data ?? []).filter((p) => p.va_id === va.id);
         return (
-          <section key={va.id} className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
+          <section key={va.id} id={`va-${va.id}`} className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
             <div>
               <h2 className="text-lg font-semibold">{va.full_name || va.email}</h2>
               <p className="text-sm text-foreground/60">
@@ -167,8 +261,8 @@ async function Vas() {
                       return (
                         <tr key={a.id} className="border-b border-foreground/10 align-top">
                           <td className="py-1 pr-3">
-                            {a.schedule_day}
-                            {a.version === "B" && " (B)"} <AttemptLink id={a.id} area="admin" />
+                            {a.kind === "day" ? a.schedule_day : a.kind === "retrain" ? "Retrain" : "Recheck"}
+                            {a.kind === "day" && a.version === "B" && " (B)"} <AttemptLink id={a.id} area="admin" />
                           </td>
                           <td className="py-1 pr-3">
                             {Number(a.first_try_points)}/{a.max_points}

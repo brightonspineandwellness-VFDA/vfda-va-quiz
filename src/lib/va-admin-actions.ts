@@ -4,10 +4,12 @@
 // redo, decide a day that went to review, and set a VA's training start date.
 // VFDA admins only; writes as the admin (row-level security applies).
 
-import { getCurrentUser } from "@/lib/auth";
-import type { ActionResult } from "@/lib/interview-actions";
+import { after } from "next/server";
 import { recalculateAttempt } from "@/lib/attempt-review";
-import { sendAttemptReport, sendTestEmail, sendTestSlack } from "@/lib/reports";
+import { getCurrentUser } from "@/lib/auth";
+import { assignRetrainFor, recalculateCertifications } from "@/lib/certifications";
+import type { ActionResult } from "@/lib/interview-actions";
+import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestSlack } from "@/lib/reports";
 import { createSessionClient } from "@/lib/supabase/server";
 import { nextTrainingDay } from "@/lib/va-training";
 
@@ -132,6 +134,8 @@ export async function overrideScore(itemId: string, input: OverrideInput): Promi
   if (error) return fail("Couldn't save. Try again.");
   try {
     await recalculateAttempt(supabase, item.attempt_id);
+    const { data: owner } = await supabase.from("attempts").select("va_id").eq("id", item.attempt_id).single();
+    if (owner) await recalculateCertifications(owner.va_id);
   } catch {
     return fail("Saved, but the day result couldn't be worked out again. Reload the page.");
   }
@@ -148,13 +152,34 @@ export async function decideAttempt(attemptId: string, decision: "pass" | "retak
   const supabase = await createSessionClient();
   const { data: attempt } = await supabase
     .from("attempts")
-    .select("va_id, schedule_day, version, submitted_at")
+    .select("va_id, schedule_day, version, submitted_at, kind, result")
     .eq("id", attemptId)
     .maybeSingle();
   if (!attempt?.submitted_at) return fail("This attempt isn't finished.");
+
+  // A retrain or recheck in review: VFDA's call is its result.
+  if (attempt.kind !== "day") {
+    if (attempt.result !== "review") return fail("This attempt isn't waiting for a decision.");
+    const { error } = await supabase
+      .from("attempts")
+      .update({ result: decision === "pass" ? "pass" : "retake" })
+      .eq("id", attemptId)
+      .eq("result", "review");
+    if (error) return fail("Couldn't save. Try again.");
+    await recalculateCertifications(attempt.va_id);
+    return { ok: true, data: null };
+  }
+
   const [{ data: unlock }, { data: versionB }] = await Promise.all([
     supabase.from("day_unlocks").select("status").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
-    supabase.from("attempts").select("id").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).eq("version", "B").maybeSingle(),
+    supabase
+      .from("attempts")
+      .select("id")
+      .eq("va_id", attempt.va_id)
+      .eq("schedule_day", attempt.schedule_day)
+      .eq("version", "B")
+      .eq("kind", "day")
+      .maybeSingle(),
   ]);
   if (attempt.version === "A" && versionB) return fail("Version B was already started; decide that attempt instead.");
   const status = unlock?.status;
@@ -196,4 +221,60 @@ export async function testSlack(): Promise<ActionResult<string>> {
   if (!(await admin())) return fail("VFDA admins only.");
   const error = await sendTestSlack();
   return error ? fail(error) : { ok: true, data: "Posted to Slack." };
+}
+
+// ---------------------------------------------------------------------------
+// SOPs on Trello (/admin/sops) and certifications
+// ---------------------------------------------------------------------------
+
+// VFDA saw on Trello that the doctor approved the card (or not).
+export async function confirmSop(
+  certificationId: string,
+  decision: "approved" | "needs_changes" | "rejected",
+  note: string,
+): Promise<ActionResult> {
+  const user = await admin();
+  if (!user) return fail("VFDA admins only.");
+  if (!UUID.test(certificationId) || !["approved", "needs_changes", "rejected"].includes(decision)) return fail("Invalid request.");
+  const text = String(note ?? "").trim().slice(0, 2000);
+  if (decision !== "approved" && !text) return fail("Add a note for the VA.");
+  const supabase = await createSessionClient();
+  const { data, error } = await supabase
+    .from("certifications")
+    .update({
+      sop_status: decision,
+      sop_note: text || null,
+      sop_confirmed_by: user.id,
+      sop_confirmed_at: new Date().toISOString(),
+    })
+    .eq("id", certificationId)
+    .not("sop_submitted_at", "is", null)
+    .select("va_id");
+  if (error || !data?.length) return fail("Couldn't save. Try again.");
+  await recalculateCertifications(data[0].va_id);
+  after(() => sendSopNotice(certificationId, decision).then(() => undefined));
+  return { ok: true, data: null };
+}
+
+// Another round of the workflow's version B scenarios (after a failed retrain).
+export async function assignRetrainAgain(certificationId: string): Promise<ActionResult> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(certificationId)) return fail("Invalid request.");
+  const error = await assignRetrainFor(certificationId);
+  return error ? fail(error) : { ok: true, data: null };
+}
+
+// Lets the VA see this attempt's scores and feedback on My results.
+export async function releaseFeedback(attemptId: string): Promise<ActionResult> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(attemptId)) return fail("Invalid request.");
+  const supabase = await createSessionClient();
+  const { data, error } = await supabase
+    .from("attempts")
+    .update({ feedback_released_at: new Date().toISOString() })
+    .eq("id", attemptId)
+    .not("submitted_at", "is", null)
+    .is("feedback_released_at", null)
+    .select("id");
+  return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }

@@ -144,7 +144,7 @@ ${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
 }
 
 // Slack mrkdwn: escape &, < and > so a VA's words can't ping or link anyone.
-const slackEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export const slackEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 // The same summary in short form.
 export function reportSlack(r: AttemptReport, link: string): { text: string } {
@@ -167,17 +167,32 @@ export function reportSlack(r: AttemptReport, link: string): { text: string } {
   return { text: lines.filter(Boolean).join("\n") };
 }
 
-// SPEC section 6: Retrain on a critical error or an uncorrected repeat;
-// Certified needs the doctor's SOP approval too; Pending otherwise.
+// The workflow's certification status (src/lib/certifications.ts works it
+// out on the server), with a short reason. No certification row yet: the
+// workflow's last scheduled day hasn't been reached.
 export function workflowStatus(
   items: Pick<ReportItem, "type" | "first_score" | "repeat_score" | "repeated" | "critical_error">[],
-  certification: { status: string; doctor_decision: string | null } | null,
+  certification: { status: string; sop_status: string; sop_submitted_at: string | null } | null,
 ): Pick<WorkflowStatus, "status" | "why"> {
-  if (certification?.doctor_decision === "rejected") return { status: "Retrain", why: "SOP rejected" };
-  if (items.some((i) => i.critical_error)) return { status: "Retrain", why: "critical error" };
-  if (items.some((i) => i.type === "situational" && i.first_score !== null && i.first_score < 2 && i.repeat_score !== 2)) {
-    return { status: "Retrain", why: "a missed item wasn't corrected on repeat" };
+  if (!certification) return { status: "Pending", why: "later days not reached yet" };
+  if (certification.status === "certified") return { status: "Certified", why: "" };
+  if (certification.status === "retrain") {
+    const why =
+      certification.sop_status === "rejected"
+        ? "SOP rejected"
+        : items.some((i) => i.critical_error)
+          ? "critical error"
+          : items.some((i) => i.repeated && i.repeat_score !== null && i.repeat_score < 2)
+            ? "a repeat still below 2/2"
+            : "retrain assigned";
+    return { status: "Retrain", why };
   }
-  if (certification?.status === "certified") return { status: "Certified", why: "" };
-  return { status: "Pending", why: certification?.doctor_decision ? "" : "SOP not approved yet" };
+  const why = !certification.sop_submitted_at
+    ? "Trello card not updated yet"
+    : certification.sop_status === "approved"
+      ? "scenarios not all passed yet"
+      : certification.sop_status === "needs_changes"
+        ? "Trello card needs changes"
+        : "waiting for VFDA to confirm the Trello card";
+  return { status: "Pending", why };
 }

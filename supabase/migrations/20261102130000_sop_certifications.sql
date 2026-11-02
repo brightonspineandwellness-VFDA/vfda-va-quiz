@@ -1,0 +1,59 @@
+-- Phase 7: SOP on Trello + certifications.
+--
+-- The office's Trello board is the SOP: the VA updates the card(s) and pastes
+-- the link(s); VFDA confirms on Trello that the doctor approved them. The app
+-- keeps sop_links / sop_status / sop_note / sop_confirmed_by / sop_confirmed_at.
+-- sop_text and doctor_decision stay in the table but are no longer used.
+--
+-- Workflow drills reuse attempts: kind 'retrain' (the workflow's version B
+-- scenarios) or 'recheck' (5 new situational variants), tied to a
+-- certification. Recheck variants are repeat-variant rows marked recheck.
+--
+-- Also fixes the report sender: ON CONFLICT can't use a partial unique index,
+-- so the notifications indexes become plain unique indexes (NULLs never
+-- clash, so attempt and certification rows still don't collide).
+--
+-- Safe to run more than once.
+
+-- Certifications: the SOP on Trello.
+alter table public.certifications add column if not exists sop_links text[] not null default '{}';
+alter table public.certifications add column if not exists sop_status text not null default 'pending';
+alter table public.certifications add column if not exists sop_note text;
+alter table public.certifications add column if not exists sop_confirmed_by uuid references public.profiles (id) on delete set null;
+alter table public.certifications add column if not exists sop_confirmed_at timestamptz;
+alter table public.certifications drop constraint if exists certifications_sop_status_check;
+alter table public.certifications add constraint certifications_sop_status_check
+  check (sop_status in ('pending', 'approved', 'needs_changes', 'rejected'));
+alter table public.certifications drop constraint if exists certifications_sop_links_trello;
+alter table public.certifications add constraint certifications_sop_links_trello
+  check (sop_links <@ array[]::text[] or array_to_string(sop_links, ' ') ~ '^(https://trello\.com/c/\S+)( https://trello\.com/c/\S+)*$');
+
+-- Doctors no longer decide in the app (they approve on Trello).
+drop policy if exists "doctor decides own VAs' SOPs" on public.certifications;
+
+-- Attempts: training days, plus workflow retrains and rechecks.
+alter table public.attempts add column if not exists kind text not null default 'day';
+alter table public.attempts drop constraint if exists attempts_kind_check;
+alter table public.attempts add constraint attempts_kind_check check (kind in ('day', 'retrain', 'recheck'));
+alter table public.attempts add column if not exists certification_id uuid references public.certifications (id) on delete cascade;
+alter table public.attempts drop constraint if exists attempts_drill_has_certification;
+alter table public.attempts add constraint attempts_drill_has_certification
+  check ((kind = 'day') = (certification_id is null));
+-- One attempt per day and version; drills can repeat.
+alter table public.attempts drop constraint if exists attempts_va_id_schedule_day_version_key;
+create unique index if not exists attempts_one_per_day
+  on public.attempts (va_id, schedule_day, version) where kind = 'day';
+create index if not exists attempts_certification_id_idx on public.attempts (certification_id);
+
+-- Recheck variants: new details for a recheck, never served as a repeat.
+alter table public.office_scenarios add column if not exists recheck boolean not null default false;
+
+-- Notifications: certification events (SOP submitted / confirmed), and
+-- indexes ON CONFLICT can use.
+alter table public.notifications add column if not exists event text not null default '';
+drop index if exists public.notifications_one_per_attempt_recipient;
+drop index if exists public.notifications_one_per_certification_recipient;
+create unique index if not exists notifications_attempt_recipient
+  on public.notifications (attempt_id, channel, recipient);
+create unique index if not exists notifications_certification_event_recipient
+  on public.notifications (certification_id, event, channel, recipient);

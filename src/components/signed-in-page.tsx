@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 export function SignedInPage({ area, children }: { area: string; children: ReactNode }) {
   return (
     <div className="flex flex-1 flex-col">
-      <header className="flex items-center justify-between gap-4 border-b border-foreground/10 px-6 py-4">
+      <header className="flex items-center justify-between gap-4 border-b border-foreground/10 px-6 py-4 print:hidden">
         <p className="font-semibold">
           VFDA VA Quiz App <span className="font-normal text-foreground/60">· {area}</span>
         </p>

@@ -7,10 +7,12 @@ import "server-only";
 // again only sends what hasn't gone out yet. Each send is tried twice.
 
 import {
+  escapeHtml,
   reportHtml,
   reportSections,
   reportSlack,
   reportText,
+  slackEscape,
   workflowStatus,
   type AttemptReport,
   type ReportItem,
@@ -45,7 +47,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
   const attempt = must(
     await db
       .from("attempts")
-      .select("id, va_id, office_id, schedule_day, version, first_try_points, max_points, result, time_spent, paste_log, fast_finish, submitted_at")
+      .select("id, va_id, office_id, schedule_day, version, kind, certification_id, first_try_points, max_points, result, time_spent, paste_log, fast_finish, submitted_at")
       .eq("id", attemptId)
       .maybeSingle(),
   );
@@ -58,8 +60,8 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
     db.from("attempts").select("id").eq("va_id", attempt.va_id).not("submitted_at", "is", null),
     db.from("workflows").select("code, name"),
-    db.from("office_workflows").select("code, name, card_answers").eq("office_id", attempt.office_id),
-    db.from("certifications").select("workflow, office_workflow_id, status, doctor_decision").eq("va_id", attempt.va_id),
+    db.from("office_workflows").select("id, code, name, card_answers").eq("office_id", attempt.office_id),
+    db.from("certifications").select("id, workflow, office_workflow_id, status, sop_status, sop_submitted_at").eq("va_id", attempt.va_id),
   ]);
 
   // Every graded item of this VA so far: this attempt's for the report, all of
@@ -112,19 +114,26 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     .filter((i): i is ReportItem => !!i);
 
   const names = new Map<string, string>((must(workflows) ?? []).map((w) => [w.code, w.name]));
+  const grayIds = new Map<string, string>();
   for (const g of must(grayWorkflows) ?? []) {
     names.set(g.code, g.name || String((g.card_answers as Record<string, unknown>)?.CARD_NAME ?? g.code));
+    grayIds.set(g.code, g.id);
   }
   const certs = must(certifications) ?? [];
+  const certOf = (code: string) =>
+    certs.find((c) => (grayIds.has(code) ? c.office_workflow_id === grayIds.get(code) : c.workflow === code)) ?? null;
+  // A retrain or recheck is reported under its workflow.
+  const drill = attempt.kind === "day" ? null : (attempt.kind as "retrain" | "recheck");
+  const drillWorkflow = drill ? (mine[0]?.workflow ?? "") : "";
   const dayWorkflows = [...new Set(mine.map((i) => i.workflow))].sort();
   const everything = allItems.map(toItem).filter((i): i is ReportItem => !!i);
 
   const report: AttemptReport = {
     vaName: must(va)?.full_name || must(va)?.email || "VA",
     officeName: must(office)?.name ?? "Office",
-    dayCode: attempt.schedule_day,
-    dayTitle: must(day)?.title ?? "",
-    version: attempt.version,
+    dayCode: drill ? `${drill === "retrain" ? "Retrain" : "Recheck"} ${drillWorkflow}` : attempt.schedule_day,
+    dayTitle: drill ? (names.get(drillWorkflow) ?? drillWorkflow) : (must(day)?.title ?? ""),
+    version: drill ? "A" : attempt.version,
     points: Number(attempt.first_try_points ?? 0),
     maxPoints: attempt.max_points ?? 0,
     result: attempt.result,
@@ -137,7 +146,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       name: names.get(code) ?? code,
       ...workflowStatus(
         everything.filter((i) => i.workflow === code),
-        certs.find((c) => c.workflow === code) ?? null,
+        certOf(code),
       ),
     })),
   };
@@ -237,45 +246,28 @@ export const sendTestSlack = () =>
 // The report
 // ---------------------------------------------------------------------------
 
-export async function sendAttemptReport(attemptId: string): Promise<{ sent: number; failed: number }> {
-  const db = createAdminClient();
-  const loaded = await loadAttemptReport(db, attemptId);
-  if (!loaded) return { sent: 0, failed: 0 };
-  const { report, doctorEmails } = loaded;
-  const subject = reportSections(report).subject;
-  const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const doctors = [...new Set(doctorEmails.map((e) => e.toLowerCase()))].filter((e) => !vfda.includes(e));
+type Target = { channel: "email" | "slack"; recipient: string; send: () => Promise<void> };
 
-  // VFDA's link opens the admin review page, the doctor's the read-only one.
-  const email = (to: string, area: "admin" | "doctor") => {
-    const link = attemptLink(attemptId, area);
-    return {
-      channel: "email" as const,
-      recipient: to,
-      send: () => sendEmail(to, subject, reportHtml(report, link), reportText(report, link), `attempt-${attemptId}-${to}`),
-    };
-  };
-  const targets: { channel: "email" | "slack"; recipient: string; send: () => Promise<void> }[] = [
-    ...vfda.map((to) => email(to, "admin")),
-    ...doctors.map((to) => email(to, "doctor")),
-    { channel: "slack", recipient: SLACK_RECIPIENT, send: () => postSlack(reportSlack(report, attemptLink(attemptId, "admin"))) },
-  ];
-
+// One notifications row per recipient, written before sending, so running
+// this again only sends what hasn't gone out yet. `key` picks the report
+// (an attempt, or a certification event).
+async function deliver(
+  db: Db,
+  key: { attempt_id: string } | { certification_id: string; event: string },
+  targets: Target[],
+): Promise<{ sent: number; failed: number }> {
+  const onConflict = "attempt_id" in key ? "attempt_id,channel,recipient" : "certification_id,event,channel,recipient";
   let sent = 0;
   let failed = 0;
   for (const t of targets) {
-    await db
+    const { error: upsertError } = await db
       .from("notifications")
-      .upsert(
-        { attempt_id: attemptId, channel: t.channel, recipient: t.recipient },
-        { onConflict: "attempt_id,channel,recipient", ignoreDuplicates: true },
-      );
+      .upsert({ ...key, channel: t.channel, recipient: t.recipient }, { onConflict, ignoreDuplicates: true });
+    if (upsertError) throw new Error(upsertError.message);
     const { data: row } = await db
       .from("notifications")
       .select("id, sent_at, attempts")
-      .eq("attempt_id", attemptId)
-      .eq("channel", t.channel)
-      .eq("recipient", t.recipient)
+      .match({ ...key, channel: t.channel, recipient: t.recipient })
       .maybeSingle();
     if (!row || row.sent_at) continue;
     // Claim this try, so two senders running at once don't both send.
@@ -292,10 +284,126 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
       await db.from("notifications").update({ sent_at: new Date().toISOString(), status: "sent", error: null }).eq("id", row.id);
       sent++;
     } else {
-      console.error("Report not sent", attemptId, t.channel, error);
+      console.error("Not sent", key, t.channel, error);
       await db.from("notifications").update({ status: "failed", error: error.slice(0, 500) }).eq("id", row.id);
       failed++;
     }
   }
   return { sent, failed };
+}
+
+export async function sendAttemptReport(attemptId: string): Promise<{ sent: number; failed: number }> {
+  const db = createAdminClient();
+  const loaded = await loadAttemptReport(db, attemptId);
+  if (!loaded) return { sent: 0, failed: 0 };
+  const { report, doctorEmails } = loaded;
+  const subject = reportSections(report).subject;
+  const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
+  const doctors = [...new Set(doctorEmails.map((e) => e.toLowerCase()))].filter((e) => !vfda.includes(e));
+
+  // VFDA's link opens the admin review page, the doctor's the read-only one.
+  const email = (to: string, area: "admin" | "doctor"): Target => {
+    const link = attemptLink(attemptId, area);
+    return {
+      channel: "email",
+      recipient: to,
+      send: () => sendEmail(to, subject, reportHtml(report, link), reportText(report, link), `attempt-${attemptId}-${to}`),
+    };
+  };
+  return deliver(db, { attempt_id: attemptId }, [
+    ...vfda.map((to) => email(to, "admin")),
+    ...doctors.map((to) => email(to, "doctor")),
+    { channel: "slack", recipient: SLACK_RECIPIENT, send: () => postSlack(reportSlack(report, attemptLink(attemptId, "admin"))) },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// SOP notices: a Trello card link submitted, and each status VFDA sets.
+// VFDA gets an email and a Slack post; on a submit, the doctor gets an email
+// asking them to review the card on Trello.
+// ---------------------------------------------------------------------------
+
+export type SopEvent = "submitted" | "approved" | "needs_changes" | "rejected";
+
+const SOP_EVENT_TEXT: Record<SopEvent, string> = {
+  submitted: "Trello card updated",
+  approved: "Doctor approved on Trello",
+  needs_changes: "Needs changes",
+  rejected: "Rejected (retrain)",
+};
+
+export async function sendSopNotice(certificationId: string, event: SopEvent): Promise<{ sent: number; failed: number }> {
+  const db = createAdminClient();
+  const cert = must(
+    await db
+      .from("certifications")
+      .select("id, va_id, workflow, office_workflow_id, sop_links, sop_status, sop_note, sop_submitted_at, sop_confirmed_at")
+      .eq("id", certificationId)
+      .maybeSingle(),
+  );
+  if (!cert) return { sent: 0, failed: 0 };
+  const va = must(await db.from("profiles").select("full_name, email, office_id").eq("id", cert.va_id).maybeSingle());
+  const officeId = va?.office_id as string | null;
+  const [office, workflow, gray, doctors] = await Promise.all([
+    officeId ? db.from("offices").select("name").eq("id", officeId).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    cert.workflow ? db.from("workflows").select("code, name").eq("code", cert.workflow).maybeSingle() : Promise.resolve({ data: null, error: null }),
+    cert.office_workflow_id
+      ? db.from("office_workflows").select("code, name, card_answers").eq("id", cert.office_workflow_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    officeId ? db.from("profiles").select("email").eq("office_id", officeId).eq("role", "doctor") : Promise.resolve({ data: [], error: null }),
+  ]);
+  const g = must(gray) as { code: string; name: string | null; card_answers: Record<string, unknown> | null } | null;
+  const wf = must(workflow) as { code: string; name: string } | null;
+  const code = wf?.code ?? g?.code ?? "";
+  const name = wf?.name ?? (g?.name || String(g?.card_answers?.CARD_NAME ?? code));
+  const vaName = (va?.full_name || va?.email || "VA") as string;
+  const officeName = ((must(office) as { name: string } | null)?.name ?? "Office") as string;
+  const links = (cert.sop_links as string[]) ?? [];
+  const note = (cert.sop_note as string | null)?.trim() || "";
+  const subject = `${vaName} – SOP ${code} ${name} – ${SOP_EVENT_TEXT[event]} – ${officeName}`;
+  const when = event === "submitted" ? cert.sop_submitted_at : cert.sop_confirmed_at;
+  const eventKey = `sop-${event}:${when ?? ""}`;
+
+  const lines = (audience: "vfda" | "doctor") => [
+    audience === "doctor"
+      ? `${vaName} updated your office's Trello card for ${code} ${name}. Please review it on Trello and approve it there, or comment on the card with what to change. VFDA confirms your approval in the app.`
+      : `${vaName} (${officeName}): ${code} ${name}. ${SOP_EVENT_TEXT[event]}.`,
+    ...links.map((l) => `Trello card: ${l}`),
+    ...(note && event !== "submitted" ? [`Note: ${note}`] : []),
+  ];
+  const html = (audience: "vfda" | "doctor", link: string) =>
+    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">${lines(audience)
+      .map((l) => {
+        const m = /^Trello card: (.*)$/.exec(l);
+        return m ? `<p>Trello card: <a href="${escapeHtml(m[1])}">${escapeHtml(m[1])}</a></p>` : `<p>${escapeHtml(l)}</p>`;
+      })
+      .join("")}<p><a href="${escapeHtml(link)}">Open in the app</a> (login required)</p></div>`;
+  const text = (audience: "vfda" | "doctor", link: string) => `${lines(audience).join("\n\n")}\n\nOpen in the app (login required): ${link}`;
+
+  const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
+  const doctorEmails = event === "submitted"
+    ? [...new Set(((must(doctors) ?? []) as { email: string | null }[]).map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter((e) => !vfda.includes(e))
+    : [];
+  const adminLink = `${appUrl()}/admin/sops`;
+  const doctorLink = `${appUrl()}/doctor/va`;
+  const email = (to: string, audience: "vfda" | "doctor"): Target => {
+    const link = audience === "vfda" ? adminLink : doctorLink;
+    return {
+      channel: "email",
+      recipient: to,
+      send: () => sendEmail(to, subject, html(audience, link), text(audience, link), `${certificationId}-${eventKey}-${to}`),
+    };
+  };
+  return deliver(db, { certification_id: certificationId, event: eventKey }, [
+    ...vfda.map((to) => email(to, "vfda")),
+    ...doctorEmails.map((to) => email(to, "doctor")),
+    {
+      channel: "slack",
+      recipient: SLACK_RECIPIENT,
+      send: () =>
+        postSlack({
+          text: [`*${slackEscape(subject)}*`, ...lines("vfda").slice(1).map(slackEscape), `<${adminLink}|SOPs to confirm>`].join("\n"),
+        }),
+    },
+  ]);
 }

@@ -4,8 +4,11 @@
 // add proof of work. Every unlock and grading rule is checked on the server
 // (src/lib/va-training.ts); the browser only ever gets display fields.
 
+import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { submitSopLinks } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
+import { sendSopNotice } from "@/lib/reports";
 import { createSessionClient } from "@/lib/supabase/server";
 import { loadToday, markCardsDone, submitAnswer, type SubmitOutcome, type SubmittedAnswer } from "@/lib/va-training";
 
@@ -29,11 +32,13 @@ export async function answerItem(
   scenarioId: string,
   phase: "first" | "repeat",
   answer: SubmittedAnswer,
+  drillId: string | null = null,
 ): Promise<ActionResult<SubmitOutcome>> {
   const user = await va();
   if (!user) return fail("VAs only.");
   if (!UUID.test(scenarioId) || (phase !== "first" && phase !== "repeat")) return fail("Invalid item.");
-  return submitAnswer(user, scenarioId, phase, answer ?? {});
+  if (drillId !== null && !UUID.test(drillId)) return fail("Invalid item.");
+  return submitAnswer(user, scenarioId, phase, answer ?? {}, drillId);
 }
 
 // Proof of work: a file already uploaded to the VA's own folder, or a link.
@@ -72,4 +77,15 @@ export async function addProof(
   const supabase = await createSessionClient();
   const { error } = await supabase.from("proof_uploads").insert({ va_id: user.id, schedule_day: day, ...row });
   return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+}
+
+// "Card updated": the Trello card link(s) for one workflow's SOP.
+export async function submitSop(certificationId: string, links: string): Promise<ActionResult> {
+  const user = await va();
+  if (!user) return fail("VAs only.");
+  if (!UUID.test(certificationId)) return fail("Invalid request.");
+  const error = await submitSopLinks(user.id, certificationId, String(links ?? ""));
+  if (error) return fail(error);
+  after(() => sendSopNotice(certificationId, "submitted").then(() => undefined));
+  return { ok: true, data: null };
 }

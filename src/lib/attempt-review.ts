@@ -80,7 +80,7 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
     await db
       .from("attempts")
       .select(
-        "id, va_id, office_id, schedule_day, version, started_at, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish",
+        "id, va_id, office_id, schedule_day, version, kind, started_at, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish, feedback_released_at",
       )
       .eq("id", attemptId)
       .maybeSingle(),
@@ -92,7 +92,7 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select(DAY_COLUMNS).eq("code", attempt.schedule_day).maybeSingle(),
     db.from("day_unlocks").select("version, status").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
-    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).eq("version", "B").maybeSingle(),
+    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).eq("version", "B").eq("kind", "day").maybeSingle(),
     db
       .from("attempt_items")
       .select(

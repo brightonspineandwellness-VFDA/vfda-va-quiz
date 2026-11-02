@@ -33,6 +33,8 @@ begin
     where u.va_id = p.id and p.office_id = office and p.role = 'va';
   delete from public.proof_uploads x using public.profiles p
     where x.va_id = p.id and p.office_id = office and p.role = 'va';
+  delete from public.certifications c using public.profiles p
+    where c.va_id = p.id and p.office_id = office and p.role = 'va';
   delete from public.office_scenarios where office_id = office and schedule_day in ('W1D1', 'W1D2');
 
   -- Multiple choice items whose options are built per office (options_rule)

@@ -4,7 +4,8 @@ import { OverrideForm } from "@/components/attempts/override-form";
 import { ActionButton } from "@/components/setup/action-button";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
 import { minutesText, RESULT_LABELS } from "@/lib/report";
-import { decideAttempt, resendAttemptReport } from "@/lib/va-admin-actions";
+import { decideAttempt, releaseFeedback, resendAttemptReport } from "@/lib/va-admin-actions";
+import { showDate } from "@/lib/va-flow";
 
 const UNLOCK_LABELS: Record<string, string> = {
   open: "open",
@@ -19,20 +20,23 @@ const UNLOCK_LABELS: Record<string, string> = {
 export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
   const { attempt, items, unlock } = data;
   const resultText = attempt.result ? RESULT_LABELS[attempt.result as keyof typeof RESULT_LABELS] : "not finished";
+  // A retrain or recheck of one workflow: VFDA decides its result when it's in review.
+  const drill = attempt.kind === "day" ? null : attempt.kind === "retrain" ? "Retrain" : "Recheck";
+  const workflow = items[0]?.workflow ?? "";
   const latest = !(attempt.version === "A" && data.hasVersionB);
-  const canApprove = latest && (unlock?.status === "in_review" || unlock?.status === "retake");
-  const canRetake = latest && attempt.version === "A" && unlock?.status === "in_review";
+  const canApprove = drill ? attempt.result === "review" : latest && (unlock?.status === "in_review" || unlock?.status === "retake");
+  const canRetake = drill ? attempt.result === "review" : latest && attempt.version === "A" && unlock?.status === "in_review";
 
   return (
     <>
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">
-          {data.vaName}: {attempt.schedule_day}
-          {attempt.version === "B" && " (version B)"}
+          {data.vaName}: {drill ? `${drill} ${workflow}` : attempt.schedule_day}
+          {!drill && attempt.version === "B" && " (version B)"}
         </h1>
         <p className="text-sm text-foreground/60">
           {data.officeName}
-          {data.day?.title && ` · ${data.day.title}`}
+          {!drill && data.day?.title && ` · ${data.day.title}`}
         </p>
       </div>
 
@@ -43,8 +47,14 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
         </dd>
         <dt className="text-foreground/60">Result</dt>
         <dd className="font-medium">{resultText}</dd>
-        <dt className="text-foreground/60">Day</dt>
-        <dd>{unlock ? (UNLOCK_LABELS[unlock.status] ?? unlock.status) : "–"}</dd>
+        {!drill && (
+          <>
+            <dt className="text-foreground/60">Day</dt>
+            <dd>{unlock ? (UNLOCK_LABELS[unlock.status] ?? unlock.status) : "–"}</dd>
+          </>
+        )}
+        <dt className="text-foreground/60">VA feedback</dt>
+        <dd>{attempt.feedback_released_at ? `released ${showDate(attempt.feedback_released_at.slice(0, 10))}` : "not released yet"}</dd>
         <dt className="text-foreground/60">Time spent</dt>
         <dd>{minutesText(attempt.time_spent)}</dd>
         <dt className="text-foreground/60">Flags</dt>
@@ -65,12 +75,20 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
           {(canApprove || canRetake) && (
             <div className="flex flex-wrap items-center gap-2">
               {canApprove && (
-                <ActionButton action={decideAttempt.bind(null, attempt.id, "pass")} label="Approve unlock" primary />
+                <ActionButton action={decideAttempt.bind(null, attempt.id, "pass")} label={drill ? "Passed" : "Approve unlock"} primary />
               )}
-              {canRetake && <ActionButton action={decideAttempt.bind(null, attempt.id, "retake")} label="Assign retake" />}
+              {canRetake && (
+                <ActionButton
+                  action={decideAttempt.bind(null, attempt.id, "retake")}
+                  label={drill ? "Failed (retrain)" : "Assign retake"}
+                />
+              )}
             </div>
           )}
-          {attempt.version === "B" && unlock?.status === "in_review" && (
+          {attempt.submitted_at && !attempt.feedback_released_at && (
+            <ActionButton action={releaseFeedback.bind(null, attempt.id)} label="Release feedback to VA" />
+          )}
+          {!drill && attempt.version === "B" && unlock?.status === "in_review" && (
             <p className="text-sm">Version B was the retake: approve it, or set up a call with the VA.</p>
           )}
         </div>

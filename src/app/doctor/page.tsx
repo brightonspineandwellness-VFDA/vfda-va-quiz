@@ -38,6 +38,9 @@ async function DoctorHome() {
           </Link>
         </>
       )}
+      <Link href="/doctor/va" className="self-start underline">
+        My VA: workflow certifications and Trello cards
+      </Link>
       <Results />
     </>
   );

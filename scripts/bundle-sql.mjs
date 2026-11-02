@@ -59,6 +59,12 @@ const PHASES = [
     title: "Phase 6b database changes (grading and reports: report status)",
     after: "phase6.sql",
   },
+  {
+    name: "phase7",
+    starts: "20261102130000",
+    title: "Phase 7 database changes (SOP on Trello, certifications, retrains and rechecks)",
+    after: "phase6b.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

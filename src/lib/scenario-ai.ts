@@ -248,3 +248,40 @@ ${wanted
   });
   return new Map(out.items.map((v) => [v.code, v]));
 }
+
+// ---------------------------------------------------------------------------
+// Recheck variants: new details for scenarios the VA was certified on.
+// ---------------------------------------------------------------------------
+
+export async function writeRecheckVariants(
+  items: { key: string; stem: string; correct_response: unknown; critical_fail: string | null }[],
+  rules: { key: string; value: string }[],
+) {
+  const schema = z.object({ items: z.array(z.object({ key: z.string(), stem: z.string() })) });
+  const text = `A VA certified on this workflow months ago is being rechecked. For each item below, write a new
+stem: the same skill, the same correct response, new details (different fake patient, time and
+situation), different from the original. Fake patients only.
+
+<office_rules>
+${rulesBlock(rules)}
+</office_rules>
+
+<items>
+${items
+  .map(
+    (i) =>
+      `## ${i.key}\nStem: ${i.stem}\nCorrect response: ${JSON.stringify(i.correct_response)}${i.critical_fail ? `\nCritical fail: ${i.critical_fail}` : ""}`,
+  )
+  .join("\n\n")}
+</items>`;
+  const out = await ask(schema, text, (o) => {
+    for (const i of items) {
+      const v = o.items.find((x) => x.key === i.key);
+      if (!v?.stem.trim()) return `missing ${i.key}`;
+      if (v.stem.trim() === i.stem.trim()) return `${i.key}: same as the original`;
+      if (hasPlaceholder(v.stem)) return `${i.key}: placeholder left`;
+    }
+    return null;
+  });
+  return new Map(out.items.map((v) => [v.key, v.stem.trim()]));
+}

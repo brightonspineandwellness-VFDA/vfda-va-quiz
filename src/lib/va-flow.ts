@@ -268,6 +268,7 @@ export type ServedItem = {
   stem: string;
   options: string[] | null; // already shuffled for this VA
   priorFeedback: Feedback | null; // shown above a repeat
+  drillId: string | null; // a workflow retrain or recheck, not a training day
 };
 
 export type ItemProgress = {

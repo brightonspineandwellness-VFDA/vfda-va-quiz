@@ -101,6 +101,7 @@ function AnswerForm({
         item.scenarioId,
         item.phase,
         isMc ? { choice: choice! } : { boxes, pastes: pastes.current },
+        item.drillId,
       );
       if (result.ok) onDone(result.data);
       else {

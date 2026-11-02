@@ -17,7 +17,14 @@ export default function AdminPage() {
 async function AdminHome() {
   const user = await requireRole("vfda_admin");
   const supabase = await createSessionClient();
-  const { count } = await supabase.from("offices").select("id", { count: "exact", head: true });
+  const [{ count }, { count: sops }] = await Promise.all([
+    supabase.from("offices").select("id", { count: "exact", head: true }),
+    supabase
+      .from("certifications")
+      .select("id", { count: "exact", head: true })
+      .eq("sop_status", "pending")
+      .not("sop_submitted_at", "is", null),
+  ]);
 
   return (
     <>
@@ -26,7 +33,10 @@ async function AdminHome() {
         Offices ({count ?? 0})
       </Link>
       <Link href="/admin/vas" className="self-start underline">
-        VA training (progress, proof of work, reviews)
+        VA progress (scores, flags, certifications, proof of work)
+      </Link>
+      <Link href="/admin/sops" className="self-start underline">
+        SOPs to confirm ({sops ?? 0})
       </Link>
       <Link href="/admin/bank" className="self-start underline">
         Library
