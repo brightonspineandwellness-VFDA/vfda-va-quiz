@@ -53,7 +53,11 @@ async function Offices() {
             <tbody>
               {offices.map((office) => (
                 <tr key={office.id} className="border-b border-foreground/10 align-top">
-                  <td className="py-2 pr-4 font-medium">{office.name}</td>
+                  <td className="py-2 pr-4 font-medium">
+                    <Link href={`/admin/offices/${office.id}`} className="underline">
+                      {office.name}
+                    </Link>
+                  </td>
                   <td className="py-2 pr-4">{STATUS_LABELS[office.status] ?? office.status}</td>
                   <td className="py-2 pr-4">
                     {office.doctors.length
@@ -69,6 +73,9 @@ async function Offices() {
                     <SetupStep steps={office.steps} />
                   </td>
                   <td className="py-2 pr-4">
+                    <Link href={`/admin/offices/${office.id}`} className="block underline">
+                      VAs
+                    </Link>
                     <Link href={`/admin/offices/${office.id}/rules`} className="block underline">
                       Cards &amp; rules
                     </Link>

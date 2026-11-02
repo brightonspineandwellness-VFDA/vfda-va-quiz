@@ -51,10 +51,13 @@ export async function decideReviewDay(vaId: string, day: string, decision: "pass
   if (!user) return fail("VFDA admins only.");
   if (!UUID.test(vaId) || !DAY_CODE.test(day)) return fail("Invalid request.");
   const supabase = await createSessionClient();
+  const { data: va } = await supabase.from("profiles").select("office_id").eq("id", vaId).maybeSingle();
+  if (!va?.office_id) return fail("This VA has no office.");
   const { data: unlock } = await supabase
     .from("day_unlocks")
     .select("version, status")
     .eq("va_id", vaId)
+    .eq("office_id", va.office_id)
     .eq("schedule_day", day)
     .maybeSingle();
   if (unlock?.status !== "in_review") return fail("This day isn't waiting for review.");
@@ -67,6 +70,7 @@ export async function decideReviewDay(vaId: string, day: string, decision: "pass
         : { status: "retake", version: "B", opens_on: nextTrainingDay(), unlocked_at: null },
     )
     .eq("va_id", vaId)
+    .eq("office_id", va.office_id)
     .eq("schedule_day", day)
     .eq("status", "in_review");
   return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
@@ -152,7 +156,7 @@ export async function decideAttempt(attemptId: string, decision: "pass" | "retak
   const supabase = await createSessionClient();
   const { data: attempt } = await supabase
     .from("attempts")
-    .select("va_id, schedule_day, version, submitted_at, kind, result")
+    .select("va_id, office_id, schedule_day, version, submitted_at, kind, result")
     .eq("id", attemptId)
     .maybeSingle();
   if (!attempt?.submitted_at) return fail("This attempt isn't finished.");
@@ -171,11 +175,12 @@ export async function decideAttempt(attemptId: string, decision: "pass" | "retak
   }
 
   const [{ data: unlock }, { data: versionB }] = await Promise.all([
-    supabase.from("day_unlocks").select("status").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
+    supabase.from("day_unlocks").select("status").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
     supabase
       .from("attempts")
       .select("id")
       .eq("va_id", attempt.va_id)
+      .eq("office_id", attempt.office_id)
       .eq("schedule_day", attempt.schedule_day)
       .eq("version", "B")
       .eq("kind", "day")
@@ -190,6 +195,7 @@ export async function decideAttempt(attemptId: string, decision: "pass" | "retak
       .from("day_unlocks")
       .update({ status: "passed", version: attempt.version, opens_on: null })
       .eq("va_id", attempt.va_id)
+      .eq("office_id", attempt.office_id)
       .eq("schedule_day", attempt.schedule_day)
       .eq("status", status)
       .select("status");
@@ -201,6 +207,7 @@ export async function decideAttempt(attemptId: string, decision: "pass" | "retak
     .from("day_unlocks")
     .update({ status: "retake", version: "B", opens_on: nextTrainingDay(), unlocked_at: null })
     .eq("va_id", attempt.va_id)
+    .eq("office_id", attempt.office_id)
     .eq("schedule_day", attempt.schedule_day)
     .eq("status", status)
     .select("status");

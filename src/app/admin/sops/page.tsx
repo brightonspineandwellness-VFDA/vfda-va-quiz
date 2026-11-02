@@ -29,14 +29,14 @@ async function Sops() {
   const supabase = await createSessionClient();
   const { data: certs } = await supabase
     .from("certifications")
-    .select("id, va_id, workflow, office_workflow_id, sop_links, sop_link, sop_submitted_at, sop_note")
+    .select("id, va_id, office_id, workflow, office_workflow_id, sop_links, sop_link, sop_submitted_at, sop_note")
     .eq("sop_status", "pending")
     .not("sop_submitted_at", "is", null)
     .order("sop_submitted_at");
   if (!certs?.length) return <p>Nothing waiting. Links appear here when a VA says a card is updated.</p>;
 
   const [vas, offices, workflows, gray] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email, office_id").in("id", [...new Set(certs.map((c) => c.va_id))]),
+    supabase.from("profiles").select("id, full_name, email").in("id", [...new Set(certs.map((c) => c.va_id))]),
     supabase.from("offices").select("id, name"),
     supabase.from("workflows").select("code, name"),
     supabase.from("office_workflows").select("id, code, name, card_answers"),
@@ -72,7 +72,7 @@ async function Sops() {
             return (
               <tr key={c.id} className="border-b border-foreground/10 align-top">
                 <td className="py-2 pr-3">{va?.full_name || va?.email}</td>
-                <td className="py-2 pr-3">{va?.office_id ? officeName.get(va.office_id) : "–"}</td>
+                <td className="py-2 pr-3">{officeName.get(c.office_id) ?? "–"}</td>
                 <td className="py-2 pr-3">
                   {code} {name}
                 </td>

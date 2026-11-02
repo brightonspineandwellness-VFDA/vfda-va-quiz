@@ -75,7 +75,7 @@ export async function addProof(
 
   // Written as the VA: row-level security checks it's their own, open day.
   const supabase = await createSessionClient();
-  const { error } = await supabase.from("proof_uploads").insert({ va_id: user.id, schedule_day: day, ...row });
+  const { error } = await supabase.from("proof_uploads").insert({ va_id: user.id, office_id: user.officeId, schedule_day: day, ...row });
   return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }
 

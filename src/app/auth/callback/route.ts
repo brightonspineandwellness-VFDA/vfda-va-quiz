@@ -35,11 +35,11 @@ export async function GET(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role")
+    .select("role, deactivated_at")
     .eq("id", user.id)
     .maybeSingle();
 
   return NextResponse.redirect(
-    new URL(homeFor(isRole(profile?.role) ? profile.role : null), request.url),
+    new URL(homeFor(isRole(profile?.role) && !profile.deactivated_at ? profile.role : null), request.url),
   );
 }

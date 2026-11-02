@@ -65,6 +65,12 @@ const PHASES = [
     title: "Phase 7 database changes (SOP on Trello, certifications, retrains and rechecks)",
     after: "phase6b.sql",
   },
+  {
+    name: "invite-va",
+    starts: "20261102140000",
+    title: "Invite VA database changes (VA invites, progress per office, deactivation)",
+    after: "phase7.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

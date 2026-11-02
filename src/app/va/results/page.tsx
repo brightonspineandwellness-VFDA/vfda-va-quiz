@@ -34,6 +34,7 @@ async function Results() {
       .from("attempts")
       .select("id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, feedback_released_at")
       .eq("va_id", user.id)
+      .eq("office_id", user.officeId ?? "")
       .not("submitted_at", "is", null)
       .order("submitted_at"),
     loadCertGrid(db, { vaIds: [user.id] }),

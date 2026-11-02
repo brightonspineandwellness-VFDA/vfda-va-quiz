@@ -49,18 +49,18 @@ async function Vas() {
   await requireRole("vfda_admin");
   const supabase = await createSessionClient();
   const [vas, offices, sequence, unlocks, attempts, proofs] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email, office_id, va_start_date").eq("role", "va").order("full_name"),
+    supabase.from("profiles").select("id, full_name, email, office_id, va_start_date").eq("role", "va").is("deactivated_at", null).order("full_name"),
     supabase.from("offices").select("id, name"),
     supabase.from("settings").select("value").eq("key", "sequence").maybeSingle(),
-    supabase.from("day_unlocks").select("va_id, schedule_day, version, status, cards_done_at, opens_on"),
+    supabase.from("day_unlocks").select("va_id, office_id, schedule_day, version, status, cards_done_at, opens_on"),
     supabase
       .from("attempts")
-      .select("id, va_id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
+      .select("id, va_id, office_id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
       .not("submitted_at", "is", null)
       .order("submitted_at"),
     supabase
       .from("proof_uploads")
-      .select("id, va_id, schedule_day, file_path, file_name, link_url, status, review_note, created_at")
+      .select("id, va_id, office_id, schedule_day, file_path, file_name, link_url, status, review_note, created_at")
       .order("created_at"),
   ]);
   const attemptRows = attempts.data ?? [];
@@ -100,10 +100,10 @@ async function Vas() {
   // One line per VA: where they are, how they score, what needs a look.
   const progress = vas.data.map((va) => {
     const days = (unlocks.data ?? [])
-      .filter((u) => u.va_id === va.id)
+      .filter((u) => u.va_id === va.id && u.office_id === va.office_id)
       .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
     const current = days.find((d) => d.status !== "passed");
-    const mine = attemptRows.filter((a) => a.va_id === va.id);
+    const mine = attemptRows.filter((a) => a.va_id === va.id && a.office_id === va.office_id);
     const its = (items ?? []).filter((i) => mine.some((a) => a.id === i.attempt_id));
     const repeats = its.filter((i) => i.repeat_scenario_id);
     const row = grid.rows.find((r) => r.vaId === va.id);
@@ -185,10 +185,10 @@ async function Vas() {
 
       {vas.data.map((va) => {
         const days = (unlocks.data ?? [])
-          .filter((u) => u.va_id === va.id)
+          .filter((u) => u.va_id === va.id && u.office_id === va.office_id)
           .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
-        const mine = attemptRows.filter((a) => a.va_id === va.id);
-        const proofRows = (proofs.data ?? []).filter((p) => p.va_id === va.id);
+        const mine = attemptRows.filter((a) => a.va_id === va.id && a.office_id === va.office_id);
+        const proofRows = (proofs.data ?? []).filter((p) => p.va_id === va.id && p.office_id === va.office_id);
         return (
           <section key={va.id} id={`va-${va.id}`} className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
             <div>

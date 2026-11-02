@@ -86,8 +86,8 @@ export async function loadToday(user: CurrentUser) {
       .maybeSingle(),
     db.from("schedule_days").select(DAY_COLUMNS),
     db.from("settings").select("key, value").in("key", ["conditions", "sequence"]),
-    db.from("day_unlocks").select(UNLOCK_COLUMNS).eq("va_id", user.id),
-    db.from("proof_uploads").select(PROOF_COLUMNS).eq("va_id", user.id).order("created_at"),
+    db.from("day_unlocks").select(UNLOCK_COLUMNS).eq("va_id", user.id).eq("office_id", officeId),
+    db.from("proof_uploads").select(PROOF_COLUMNS).eq("va_id", user.id).eq("office_id", officeId).order("created_at"),
     db
       .from("office_scenarios")
       .select("schedule_day, version, test_status")
@@ -131,6 +131,7 @@ export async function loadToday(user: CurrentUser) {
       .from("day_unlocks")
       .update({ status: "open", unlocked_at: new Date().toISOString() })
       .eq("va_id", user.id)
+      .eq("office_id", officeId)
       .eq("schedule_day", today.current.day.code)
       .in("status", ["locked", "retake"])
       .select("status");
@@ -157,13 +158,14 @@ export async function markCardsDone(user: CurrentUser): Promise<string | null> {
         .from("day_unlocks")
         .update({ cards_done_at: now })
         .eq("va_id", user.id)
+        .eq("office_id", user.officeId)
         .eq("schedule_day", day.day.code)
         .is("cards_done_at", null)
     : await db
         .from("day_unlocks")
         .upsert(
-          { va_id: user.id, schedule_day: day.day.code, version: "A", status: "locked", cards_done_at: now },
-          { onConflict: "va_id,schedule_day", ignoreDuplicates: true },
+          { va_id: user.id, office_id: user.officeId, schedule_day: day.day.code, version: "A", status: "locked", cards_done_at: now },
+          { onConflict: "va_id,office_id,schedule_day", ignoreDuplicates: true },
         );
   if (error) return "Couldn't save. Try again.";
   // Opens the day now if nothing else is in the way.
@@ -202,10 +204,10 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
   const current = loaded.today.current;
   const db = createAdminClient();
   const officeId = user.officeId;
-  const key = { va_id: user.id, schedule_day: current.day.code, version: current.version, kind: "day" };
+  const key = { va_id: user.id, office_id: officeId, schedule_day: current.day.code, version: current.version, kind: "day" };
 
   // Created on the first visit (a second request at the same time hits the unique index).
-  const { error: insertError } = await db.from("attempts").insert({ ...key, office_id: officeId });
+  const { error: insertError } = await db.from("attempts").insert(key);
   if (insertError && insertError.code !== "23505") throw new Error(insertError.message);
   const [attempt, scenarios] = await Promise.all([
     db.from("attempts").select("id, started_at, submitted_at").match(key).single(),
@@ -242,6 +244,7 @@ async function openDrill(user: CurrentUser, attemptId: string): Promise<DayConte
     .select("id, started_at, submitted_at, kind, schedule_day, version, certification_id")
     .eq("id", attemptId)
     .eq("va_id", user.id)
+    .eq("office_id", user.officeId ?? "")
     .neq("kind", "day")
     .maybeSingle();
   if (!attempt) return null;
@@ -726,6 +729,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     .from("day_unlocks")
     .update(unlock)
     .eq("va_id", ctx.user.id)
+    .eq("office_id", ctx.user.officeId!)
     .eq("schedule_day", current.day.code)
     .eq("status", "open");
 

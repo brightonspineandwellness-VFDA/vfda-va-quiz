@@ -64,10 +64,11 @@ export type CertRow = {
   sop_confirmed_at: string | null;
   certified_at: string | null;
   recheck_date: string | null;
+  office_id: string;
 };
 
 export const CERT_COLUMNS =
-  "id, va_id, workflow, office_workflow_id, status, sop_links, sop_link, sop_status, sop_note, sop_submitted_at, sop_confirmed_at, certified_at, recheck_date";
+  "id, va_id, office_id, workflow, office_workflow_id, status, sop_links, sop_link, sop_status, sop_note, sop_submitted_at, sop_confirmed_at, certified_at, recheck_date";
 
 const settingValue = (rows: { key: string; value: unknown }[], key: string) => rows.find((r) => r.key === key)?.value;
 
@@ -135,8 +136,9 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
     db
       .from("attempts")
       .select("id, kind, schedule_day, version, submitted_at, result, certification_id, created_at")
-      .eq("va_id", vaId),
-    db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId),
+      .eq("va_id", vaId)
+      .eq("office_id", officeId),
+    db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId).eq("office_id", officeId),
     db.from("settings").select("key, value").eq("key", "certification"),
   ]);
   const attempts = (must(attemptsRes) ?? []) as AttemptRow[];
@@ -206,12 +208,12 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
       if (!dayAttempts.some((a) => a.schedule_day === lastDay)) continue;
       const { data, error } = await db
         .from("certifications")
-        .insert({ va_id: vaId, workflow: w.grayId ? null : w.code, office_workflow_id: w.grayId, status: "pending" })
+        .insert({ va_id: vaId, office_id: officeId, workflow: w.grayId ? null : w.code, office_workflow_id: w.grayId, status: "pending" })
         .select(CERT_COLUMNS)
         .single();
       if (error) {
         // Created by a request running at the same time.
-        const again = must(await db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId)) as CertRow[];
+        const again = must(await db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId).eq("office_id", officeId)) as CertRow[];
         certs = again;
         cert = certFor(certs, w);
         if (!cert) throw new Error(error.message);
@@ -355,9 +357,10 @@ export async function openDueRechecks(today: string, limit = 5) {
 }
 
 async function openRecheck(db: Db, cert: CertRow) {
-  const profile = must(await db.from("profiles").select("office_id").eq("id", cert.va_id).maybeSingle());
-  if (!profile?.office_id) return false;
-  const officeId = profile.office_id as string;
+  // Only while the VA is active and still at the office the certification is for.
+  const profile = must(await db.from("profiles").select("office_id, deactivated_at").eq("id", cert.va_id).maybeSingle());
+  if (profile?.office_id !== cert.office_id || profile.deactivated_at) return false;
+  const officeId = cert.office_id;
   let code = cert.workflow;
   if (!code && cert.office_workflow_id) {
     code = (must(await db.from("office_workflows").select("code").eq("id", cert.office_workflow_id).maybeSingle()) as { code: string } | null)?.code ?? null;
@@ -441,6 +444,7 @@ export async function assignRetrainFor(certificationId: string): Promise<string 
   if (!cert) return "Certification not found.";
   const profile = must(await db.from("profiles").select("office_id").eq("id", cert.va_id).maybeSingle());
   if (!profile?.office_id) return "This VA has no office.";
+  if (profile.office_id !== cert.office_id) return "This VA has moved to another office.";
   const { data: open } = await db.from("attempts").select("id").eq("certification_id", cert.id).is("submitted_at", null).limit(1);
   if (open?.length) return "A retrain or recheck is already open for this workflow.";
   const { workflows } = await officeWorkflows(db, profile.office_id);
@@ -464,8 +468,8 @@ export async function loadVaTasks(vaId: string, officeId: string) {
   const db = createAdminClient();
   const [{ workflows }, certsRes, drillsRes] = await Promise.all([
     officeWorkflows(db, officeId),
-    db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId),
-    db.from("attempts").select("id, kind, certification_id").eq("va_id", vaId).neq("kind", "day").is("submitted_at", null).order("created_at"),
+    db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId).eq("office_id", officeId),
+    db.from("attempts").select("id, kind, certification_id").eq("va_id", vaId).eq("office_id", officeId).neq("kind", "day").is("submitted_at", null).order("created_at"),
   ]);
   const certs = (must(certsRes) ?? []) as CertRow[];
   const workflowOf = (c: CertRow) => workflows.find((w) => (c.office_workflow_id ? w.grayId === c.office_workflow_id : w.code === c.workflow));
@@ -527,7 +531,7 @@ export type GridRow = {
 // `db` decides what's visible: the admin's or doctor's session (row-level
 // security), or the service role for a VA's own row.
 export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?: string }) {
-  let vaQuery = db.from("profiles").select("id, full_name, email, office_id").eq("role", "va").order("full_name");
+  let vaQuery = db.from("profiles").select("id, full_name, email, office_id").eq("role", "va").is("deactivated_at", null).order("full_name");
   if (filter.vaIds) vaQuery = vaQuery.in("id", filter.vaIds.length ? filter.vaIds : ["00000000-0000-0000-0000-000000000000"]);
   if (filter.officeId) vaQuery = vaQuery.eq("office_id", filter.officeId);
   const [vas, offices, standard] = await Promise.all([
@@ -554,7 +558,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
   const rows: GridRow[] = vaRows.map((va) => {
     const list = va.office_id ? (workflowsOf.get(va.office_id) ?? []) : [];
     const cell = (w: { code: string; name: string }, ow: OfficeWorkflow | undefined): GridCell => {
-      const c = ow ? certs.find((x) => x.va_id === va.id && (ow.grayId ? x.office_workflow_id === ow.grayId : x.workflow === ow.code)) : undefined;
+      const c = ow ? certs.find((x) => x.va_id === va.id && x.office_id === va.office_id && (ow.grayId ? x.office_workflow_id === ow.grayId : x.workflow === ow.code)) : undefined;
       return {
         code: w.code,
         name: w.name,

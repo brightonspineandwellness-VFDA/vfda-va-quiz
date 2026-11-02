@@ -24,7 +24,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("full_name, role, office_id")
+    .select("full_name, role, office_id, deactivated_at")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -32,7 +32,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     id: user.id,
     email: user.email ?? "",
     fullName: profile?.full_name ?? "",
-    role: isRole(profile?.role) ? profile.role : null,
+    // A deactivated account keeps its profile but has no access.
+    role: isRole(profile?.role) && !profile.deactivated_at ? profile.role : null,
     officeId: profile?.office_id ?? null,
   };
 });

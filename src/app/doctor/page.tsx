@@ -68,7 +68,7 @@ async function Results() {
         {attempts.map((a) => (
           <li key={a.id}>
             <Link href={`/doctor/attempts/${a.id}`} className="underline">
-              {name.get(a.va_id) ?? "VA"} · {a.schedule_day}
+              {name.get(a.va_id) ?? "Former VA"} · {a.schedule_day}
               {a.version === "B" && " (B)"}
             </Link>{" "}
             · {Number(a.first_try_points)}/{a.max_points} ·{" "}

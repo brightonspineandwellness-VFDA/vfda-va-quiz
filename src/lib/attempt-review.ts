@@ -91,8 +91,8 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
     db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select(DAY_COLUMNS).eq("code", attempt.schedule_day).maybeSingle(),
-    db.from("day_unlocks").select("version, status").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
-    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("schedule_day", attempt.schedule_day).eq("version", "B").eq("kind", "day").maybeSingle(),
+    db.from("day_unlocks").select("version, status").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
+    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).eq("schedule_day", attempt.schedule_day).eq("version", "B").eq("kind", "day").maybeSingle(),
     db
       .from("attempt_items")
       .select(

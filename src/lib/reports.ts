@@ -58,10 +58,10 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select("title").eq("code", attempt.schedule_day).maybeSingle(),
     db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
-    db.from("attempts").select("id").eq("va_id", attempt.va_id).not("submitted_at", "is", null),
+    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).not("submitted_at", "is", null),
     db.from("workflows").select("code, name"),
     db.from("office_workflows").select("id, code, name, card_answers").eq("office_id", attempt.office_id),
-    db.from("certifications").select("id, workflow, office_workflow_id, status, sop_status, sop_submitted_at").eq("va_id", attempt.va_id),
+    db.from("certifications").select("id, workflow, office_workflow_id, status, sop_status, sop_submitted_at").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id),
   ]);
 
   // Every graded item of this VA so far: this attempt's for the report, all of
@@ -158,7 +158,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
 // Channels
 // ---------------------------------------------------------------------------
 
-async function sendEmail(to: string, subject: string, html: string, text: string, idempotencyKey: string) {
+export async function sendEmail(to: string, subject: string, html: string, text: string, idempotencyKey: string) {
   const key = process.env.RESEND_API_KEY;
   const from = reportFrom();
   if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM_EMAIL are needed.");
@@ -188,7 +188,7 @@ async function postSlack(payload: { text: string }) {
 }
 
 // Runs a send, and once more if it fails. Null when it went out, else the last error.
-async function tryTwice(send: () => Promise<void>): Promise<string | null> {
+export async function tryTwice(send: () => Promise<void>): Promise<string | null> {
   let error = "";
   for (let i = 0; i < 2; i++) {
     try {
@@ -337,13 +337,13 @@ export async function sendSopNotice(certificationId: string, event: SopEvent): P
   const cert = must(
     await db
       .from("certifications")
-      .select("id, va_id, workflow, office_workflow_id, sop_links, sop_status, sop_note, sop_submitted_at, sop_confirmed_at")
+      .select("id, va_id, office_id, workflow, office_workflow_id, sop_links, sop_status, sop_note, sop_submitted_at, sop_confirmed_at")
       .eq("id", certificationId)
       .maybeSingle(),
   );
   if (!cert) return { sent: 0, failed: 0 };
-  const va = must(await db.from("profiles").select("full_name, email, office_id").eq("id", cert.va_id).maybeSingle());
-  const officeId = va?.office_id as string | null;
+  const va = must(await db.from("profiles").select("full_name, email").eq("id", cert.va_id).maybeSingle());
+  const officeId = cert.office_id as string | null;
   const [office, workflow, gray, doctors] = await Promise.all([
     officeId ? db.from("offices").select("name").eq("id", officeId).maybeSingle() : Promise.resolve({ data: null, error: null }),
     cert.workflow ? db.from("workflows").select("code, name").eq("code", cert.workflow).maybeSingle() : Promise.resolve({ data: null, error: null }),
