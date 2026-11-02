@@ -1,8 +1,12 @@
 @import "tailwindcss";
 
+/* Always dark: dark: classes follow the "dark" class on <html>, not the device setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #000000;
+  --foreground: #ededed;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -12,11 +16,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Bigger text everywhere: Tailwind sizes are in rem, so this scales them all. */
+html {
+  font-size: 112.5%;
 }
 
 body {

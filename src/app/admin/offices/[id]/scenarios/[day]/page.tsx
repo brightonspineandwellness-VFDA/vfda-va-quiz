@@ -152,7 +152,7 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
           <p className="font-medium">This office</p>
           <p className="whitespace-pre-line">{row.stem}</p>
           {row.type === "mc" &&
-            (row.options ? <Options options={row.options} answer={row.answer} /> : <p className="text-amber-700">No options yet</p>)}
+            (row.options ? <Options options={row.options} answer={row.answer} /> : <p className="text-amber-700 dark:text-amber-300">No options yet</p>)}
         </div>
       </div>
       {row.type === "situational" && (
