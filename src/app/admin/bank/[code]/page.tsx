@@ -131,7 +131,7 @@ function ScenarioItem({ scenario: s, dayFormat }: { scenario: Scenario; dayForma
         <span className="font-mono font-medium">{s.code}</span>
         <span className="ml-2 text-xs text-foreground/60">
           Part {s.part}
-          {s.part_title && ` (${s.part_title})`} · v{s.version} ·{" "}
+          {s.part_title && ` (${s.part_title})`} ·{" "}
           {s.type === "mc" ? "multiple choice" : "situational"} · {s.points} pt{s.points > 1 ? "s" : ""}
           {s.condition !== "always" && ` · only if ${s.condition}`}
           {s.escalation_level !== "none" && ` · ${ESCALATION_LABELS[s.escalation_level].toLowerCase()}`}

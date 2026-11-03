@@ -54,6 +54,7 @@ async function Results() {
     .from("attempts")
     .select("id, va_id, kind, schedule_day, first_try_points, max_points, result, submitted_at")
     .not("submitted_at", "is", null)
+    .is("archived_at", null)
     .order("submitted_at", { ascending: false })
     .limit(50);
   if (!attempts?.length) return null;

@@ -9,7 +9,7 @@ import { requireRole } from "@/lib/auth";
 import { approveDay, buildDay, regenerateScenario, removeScenario, reopenDay } from "@/lib/scenario-actions";
 import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import { correctResponseToText, LETTERS, type CorrectResponse } from "@/lib/scenario-build";
-import { loadScenarioDay, type ScenarioRow } from "@/lib/scenario-data";
+import { loadScenarioDay, rebuildNote, type ScenarioRow } from "@/lib/scenario-data";
 
 export const maxDuration = 300;
 
@@ -43,10 +43,11 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
   if (!data) notFound();
   const { office, summary, rows, masters } = data;
   const state = dayState(summary);
-  const approved = !!summary.status?.approved_at;
+  const approved = summary.approved;
   const repeatOf = (r: ScenarioRow) => rows.find((x) => x.parent_scenario_id === r.id);
-  // One attempt per day: older builds may still hold a version B, which is never used.
   const items = rows.filter((r) => r.version === "A" && !r.is_repeat_variant);
+  const note = rebuildNote(summary);
+  const built = summary.status?.build_status === "done";
   const review = items.filter((r) => r.test_status === "needs_review");
   const item = (r: ScenarioRow) => (
     <Item
@@ -68,7 +69,10 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
         <h1 className="text-2xl font-semibold">
           {summary.code}: {summary.title}
         </h1>
-        <p className="text-sm text-foreground/60">{KIND_LABELS[summary.kind]}</p>
+        <p className="text-sm text-foreground/60">
+          {KIND_LABELS[summary.kind]}
+          {summary.status?.build_version ? ` · version ${summary.status.build_version}` : ""}
+        </p>
         <p className={`text-sm ${TONES[state.tone]}`}>{state.label}</p>
         {summary.kind !== "skipped" && (
           <p className="text-sm text-foreground/60">
@@ -77,19 +81,26 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
         )}
       </div>
       <div className="flex flex-wrap gap-2">
-        {summary.status?.build_status === "done" && !approved && (
+        {built && !approved && (
           <ActionButton action={approveDay.bind(null, office.id, day)} label="Approve day" primary disabled={review.length > 0} />
         )}
-        {approved && !summary.started && <ActionButton action={reopenDay.bind(null, office.id, day)} label="Reopen" />}
-        {!summary.started && !approved && summary.status?.build_status !== "running" && (
+        {approved && !summary.liveTaken && <ActionButton action={reopenDay.bind(null, office.id, day)} label="Reopen" />}
+        {summary.status?.build_status !== "running" && (
           <ActionButton
             action={buildDay.bind(null, office.id, day)}
-            label={summary.status?.build_status === "done" ? "Rebuild (replaces edits)" : "Build"}
+            label={built ? `Rebuild (new version ${(summary.status?.build_version ?? 0) + 1})` : "Build"}
             pendingLabel="Starting…"
           />
         )}
       </div>
-      {approved && <p className="text-sm text-foreground/70">Approved days can&apos;t be edited. Reopen the day first.</p>}
+      {note && <p className="text-sm text-amber-700 dark:text-amber-300">{note}</p>}
+      {approved && (
+        <p className="text-sm text-foreground/70">
+          {summary.liveTaken
+            ? "A live version a VA has taken can't be edited. Rebuild to make a new version."
+            : "Approved days can't be edited. Reopen the day first."}
+        </p>
+      )}
 
       {review.length > 0 && (
         <section className="flex flex-col gap-3 rounded-lg border-2 border-red-700/60 p-3 dark:border-red-400/60">

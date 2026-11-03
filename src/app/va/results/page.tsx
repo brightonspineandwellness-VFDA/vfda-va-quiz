@@ -36,6 +36,7 @@ async function Results() {
       .eq("va_id", user.id)
       .eq("office_id", user.officeId ?? "")
       .not("submitted_at", "is", null)
+      .is("archived_at", null)
       .order("submitted_at"),
     loadCertGrid(db, { vaIds: [user.id] }),
   ]);

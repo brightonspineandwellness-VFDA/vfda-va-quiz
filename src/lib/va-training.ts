@@ -80,7 +80,7 @@ export async function loadToday(user: CurrentUser) {
   if (!user.officeId) return { kind: "no_office" as const };
   const officeId = user.officeId;
 
-  const [office, days, settings, unlocks, proofs, scenarios] = await Promise.all([
+  const [office, days, settings, unlocks, proofs, scenarios, officeDays] = await Promise.all([
     db
       .from("offices")
       .select("name, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
@@ -96,16 +96,17 @@ export async function loadToday(user: CurrentUser) {
       .eq("office_id", officeId)
       .eq("version", "A")
       .eq("is_repeat_variant", false),
+    db.from("office_days").select("schedule_day, live_version").eq("office_id", officeId).not("live_version", "is", null),
   ]);
   const officeRow = must(office);
   if (!officeRow) return { kind: "no_office" as const };
   const settingRows = must(settings) ?? [];
   const scenarioRows = must(scenarios) ?? [];
 
-  // A day is approved once VFDA has set all its scenarios live.
-  const byDay = new Map<string, string[]>();
-  for (const s of scenarioRows) byDay.set(s.schedule_day, [...(byDay.get(s.schedule_day) ?? []), s.test_status]);
-  const approved = new Set([...byDay].filter(([, st]) => st.every((x) => x === "live")).map(([k]) => k));
+  // A day is approved once VFDA has approved a version of it: the live version,
+  // which new attempts get.
+  const liveVersions = new Map(((must(officeDays) ?? []) as { schedule_day: string; live_version: number }[]).map((d) => [d.schedule_day, d.live_version]));
+  const approved = new Set(liveVersions.keys());
 
   const path = trainingPath({
     sequence: (settingValue(settingRows, "sequence") as string[] | undefined) ?? [],
@@ -131,7 +132,7 @@ export async function loadToday(user: CurrentUser) {
     if (opened?.length) today.current.status = "open";
   }
 
-  return { kind: "ok" as const, officeName: officeRow.name as string, today, proofs: proofRows };
+  return { kind: "ok" as const, officeName: officeRow.name as string, today, proofs: proofRows, liveVersions };
 }
 
 // "Mark today's cards done" for the next day. Opens it at once when VFDA has
@@ -215,26 +216,36 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
   const current = loaded.today.current;
   const db = createAdminClient();
   const officeId = user.officeId;
-  // One attempt per day.
+  // One attempt per day (archived ones, reset by VFDA for testing, don't count).
   const key = { va_id: user.id, office_id: officeId, schedule_day: current.day.code, version: "A", kind: "day" };
+  const findAttempt = async () =>
+    must(
+      await db.from("attempts").select("id, started_at, submitted_at, build_version").match(key).is("archived_at", null).maybeSingle(),
+    ) as (DayContext["attempt"] & { build_version: number | null }) | null;
 
-  // Created on the first visit (a second request at the same time hits the unique index).
-  const { error: insertError } = await db.from("attempts").insert(key);
-  if (insertError && insertError.code !== "23505") throw new Error(insertError.message);
-  const [attempt, scenarios] = await Promise.all([
-    db.from("attempts").select("id, started_at, submitted_at").match(key).single(),
-    db
-      .from("office_scenarios")
-      .select(DISPLAY_COLUMNS)
-      .eq("office_id", officeId)
-      .eq("schedule_day", current.day.code)
-      .eq("version", "A")
-      .eq("is_repeat_variant", false)
-      .eq("test_status", "live")
-      .order("position")
-      .order("code"),
-  ]);
-  const attemptRow = must(attempt) as DayContext["attempt"];
+  // The version the VA started on stays theirs, even after VFDA approves (or
+  // reopens) a newer one. A new attempt gets the live version.
+  let attemptRow = await findAttempt();
+  if (!attemptRow) {
+    const live = loaded.liveVersions.get(current.day.code);
+    if (!live) return null;
+    // Created on the first visit (a second request at the same time hits the unique index).
+    const { error: insertError } = await db.from("attempts").insert({ ...key, build_version: live });
+    if (insertError && insertError.code !== "23505") throw new Error(insertError.message);
+    attemptRow = await findAttempt();
+    if (!attemptRow) throw new Error("The attempt couldn't be started.");
+  }
+  const scenarios = await db
+    .from("office_scenarios")
+    .select(DISPLAY_COLUMNS)
+    .eq("office_id", officeId)
+    .eq("schedule_day", current.day.code)
+    .eq("build_version", attemptRow.build_version ?? 1)
+    .eq("version", "A")
+    .eq("is_repeat_variant", false)
+    .eq("test_status", "live")
+    .order("position")
+    .order("code");
   const items = must(await db.from("attempt_items").select(ITEM_COLUMNS).eq("attempt_id", attemptRow.id));
   return {
     db,

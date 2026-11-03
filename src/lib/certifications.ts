@@ -137,7 +137,9 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
       .from("attempts")
       .select("id, kind, schedule_day, version, submitted_at, result, certification_id, created_at")
       .eq("va_id", vaId)
-      .eq("office_id", officeId),
+      .eq("office_id", officeId)
+      // Archived attempts (reset for testing) are no evidence.
+      .is("archived_at", null),
     db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId).eq("office_id", officeId),
     db.from("settings").select("key, value").eq("key", "certification"),
   ]);
@@ -224,7 +226,7 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
     }
 
     // Evidence: the latest finished recheck, else the day attempt of each of
-    // the workflow's days (the latest, where an older retake left two).
+    // the workflow's days (the latest one that isn't archived).
     const current = certStatus(cert.status);
     const recheck = latestBy(attempts.filter((a) => a.certification_id === cert!.id && a.kind === "recheck"));
     const dayIds = w.days.map((d) => latestBy(dayAttempts.filter((a) => a.schedule_day === d))?.id);
@@ -328,7 +330,7 @@ async function openRecheck(db: Db, cert: CertRow) {
     code = (must(await db.from("office_workflows").select("code").eq("id", cert.office_workflow_id).maybeSingle()) as { code: string } | null)?.code ?? null;
   }
   if (!code) return false;
-  const pool =
+  let pool =
     must(
       await db
         .from("office_scenarios")
@@ -340,6 +342,14 @@ async function openRecheck(db: Db, cert: CertRow) {
         .eq("is_repeat_variant", false)
         .eq("test_status", "live"),
     ) ?? [];
+  // Only each day's live version (older versions stay for the VAs who took them).
+  const live = new Map(
+    ((must(await db.from("office_days").select("schedule_day, live_version").eq("office_id", officeId)) ?? []) as {
+      schedule_day: string;
+      live_version: number | null;
+    }[]).map((d) => [d.schedule_day, d.live_version]),
+  );
+  pool = pool.filter((p) => p.build_version === live.get(p.schedule_day));
   if (!pool.length) return false;
   const picked = shuffle(pool).slice(0, RECHECK_ITEMS);
   const stems = await writeRecheckVariants(

@@ -17,7 +17,8 @@ export default function SystemLogPage() {
       <p className="text-sm text-foreground/70">
         Every check a scenario failed while it was built, regenerated or rechecked: the item, the field, what Claude wrote and
         why it was rejected (and master items the day rules moved or left out). Most are fixed by the automatic rewrite; the
-        rest show as &ldquo;needs review&rdquo; on the day.
+        rest show as &ldquo;needs review&rdquo; on the day. Also every &ldquo;Reset day (test)&rdquo;: who reset which VA&rsquo;s
+        day, and when.
       </p>
       <Suspense fallback={<Loading />}>
         <DayRules />

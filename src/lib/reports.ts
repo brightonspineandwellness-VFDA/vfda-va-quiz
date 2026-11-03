@@ -68,6 +68,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       .eq("va_id", attempt.va_id)
       .eq("office_id", attempt.office_id)
       .not("submitted_at", "is", null)
+      .is("archived_at", null)
       .order("submitted_at"),
     db.from("workflows").select("code, name, pass_standard"),
     db.from("office_workflows").select("id, code, name, card_answers").eq("office_id", attempt.office_id),

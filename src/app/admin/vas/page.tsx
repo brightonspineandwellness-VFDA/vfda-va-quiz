@@ -3,12 +3,14 @@ import { Suspense } from "react";
 import { AttemptLink, ReportStatus } from "@/components/attempts/attempt-review";
 import { CertGrid } from "@/components/certs/cert-grid";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { ActionButton } from "@/components/setup/action-button";
 import { ProofReview, StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
 import { daysBetween, SOP_WAIT_FLAG_DAYS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
+import { resetDay } from "@/lib/va-admin-actions";
 import { percentOf, resultLabel, trend, unlockStatus } from "@/lib/va-flow";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
@@ -51,7 +53,7 @@ const minutes = (s: number | null) => (s === null ? "–" : `${Math.max(1, Math.
 async function Vas() {
   await requireRole("vfda_admin");
   const supabase = await createSessionClient();
-  const [vas, offices, sequence, unlocks, attempts, proofs] = await Promise.all([
+  const [vas, offices, sequence, unlocks, attempts, proofs, dayAttempts] = await Promise.all([
     supabase.from("profiles").select("id, full_name, email, office_id, va_start_date").eq("role", "va").is("deactivated_at", null).order("full_name"),
     supabase.from("offices").select("id, name"),
     supabase.from("settings").select("value").eq("key", "sequence").maybeSingle(),
@@ -60,12 +62,23 @@ async function Vas() {
       .from("attempts")
       .select("id, va_id, office_id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
       .not("submitted_at", "is", null)
+      // Archived attempts (reset for testing) don't count.
+      .is("archived_at", null)
       .order("submitted_at"),
     supabase
       .from("proof_uploads")
       .select("id, va_id, office_id, schedule_day, file_path, file_name, link_url, status, review_note, created_at")
       .order("created_at"),
+    // Every day attempt, archived ones too, for "Reset day (test)".
+    supabase
+      .from("attempts")
+      .select("id, va_id, office_id, schedule_day, build_version, submitted_at, archived_at, archived_by")
+      .eq("kind", "day")
+      .order("started_at"),
   ]);
+  const resetBy = [...new Set((dayAttempts.data ?? []).map((a) => a.archived_by).filter((x): x is string => !!x))];
+  const { data: resetters } = resetBy.length ? await supabase.from("profiles").select("id, email").in("id", resetBy) : { data: [] };
+  const emailOf = new Map((resetters ?? []).map((p) => [p.id, p.email as string]));
   const attemptRows = attempts.data ?? [];
   const { data: items } = attemptRows.length
     ? await supabase
@@ -203,6 +216,9 @@ async function Vas() {
           .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
         const mine = attemptRows.filter((a) => a.va_id === va.id && a.office_id === va.office_id);
         const proofRows = (proofs.data ?? []).filter((p) => p.va_id === va.id && p.office_id === va.office_id);
+        const taken = (dayAttempts.data ?? []).filter((a) => a.va_id === va.id && a.office_id === va.office_id);
+        const resettable = taken.filter((a) => !a.archived_at);
+        const resets = taken.filter((a) => a.archived_at);
         return (
           <section key={va.id} id={`va-${va.id}`} className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
             <div>
@@ -285,6 +301,42 @@ async function Vas() {
                     })}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {taken.length > 0 && (
+              <div className="flex flex-col gap-2 rounded-md border border-dashed border-foreground/25 p-3 text-sm">
+                <h3 className="font-medium">Test tools</h3>
+                <p className="text-foreground/70">
+                  Reset day (test): archives this VA&rsquo;s attempt (kept, no longer counted in scores or reports) and lets them
+                  take the day again on the live version. Logged to the{" "}
+                  <Link href="/admin/logs" className="underline">
+                    System log
+                  </Link>
+                  .
+                </p>
+                {resettable.length > 0 && (
+                  <div className="flex flex-wrap gap-3">
+                    {resettable.map((a) => (
+                      <span key={a.id} className="inline-flex flex-wrap items-center gap-2">
+                        <span>
+                          {a.schedule_day} (version {a.build_version ?? 1}, {a.submitted_at ? "finished" : "in progress"})
+                        </span>
+                        <ActionButton action={resetDay.bind(null, va.id, a.schedule_day)} label="Reset day (test)" pendingLabel="Resetting…" />
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {resets.length > 0 && (
+                  <ul className="text-foreground/70">
+                    {resets.map((a) => (
+                      <li key={a.id}>
+                        {a.schedule_day} version {a.build_version ?? 1}: reset by {a.archived_by ? (emailOf.get(a.archived_by) ?? "VFDA") : "VFDA"} on{" "}
+                        {new Date(a.archived_at!).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })} (archived)
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
 

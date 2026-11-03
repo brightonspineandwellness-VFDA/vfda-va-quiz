@@ -7,7 +7,7 @@ import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
 import { approveDay, buildDay, reopenDay } from "@/lib/scenario-actions";
 import { dayState, KIND_LABELS, TONES } from "@/components/scenarios/day-state";
-import { loadScenarioOverview } from "@/lib/scenario-data";
+import { loadScenarioOverview, rebuildNote } from "@/lib/scenario-data";
 
 // Build buttons start the build after the response is sent.
 export const maxDuration = 300;
@@ -35,8 +35,8 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
   if (!data) notFound();
   const { office, days } = data;
   const running = days.some((d) => d.status?.build_status === "running");
-  const toBuild = days.filter((d) => !d.started && !d.status?.approved_at && d.status?.build_status !== "running");
-  const approved = days.filter((d) => d.status?.approved_at).length;
+  const toBuild = days.filter((d) => !d.approved && d.status?.build_status !== "running");
+  const approved = days.filter((d) => d.approved).length;
 
   return (
     <>
@@ -59,8 +59,9 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
         <Link href={`/admin/offices/${office.id}/rules`} className="underline">
           Cards page
         </Link>
-        . Review each day, edit anything, then approve it. A day opens to VAs only once it&apos;s approved. Rebuilding
-        replaces the day, including your edits.
+        . Review each day, edit anything, then approve it. A day opens to VAs only once it&apos;s approved. Every
+        rebuild is a new version (your edits stay on the old one): VAs who already took a version keep it, and new
+        attempts get the new version once you approve it.
       </p>
       <BuildAllButton officeId={office.id} days={toBuild.map((d) => d.code)} />
 
@@ -91,24 +92,24 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
                   </td>
                   <td className={`py-2 pr-3 ${TONES[state.tone]}`}>
                     {state.label}
-                    {d.started && <p className="text-foreground/60">A VA has started this day</p>}
+                    {rebuildNote(d) && <p className="text-foreground/60">{rebuildNote(d)}</p>}
                   </td>
                   <td className="py-2 pr-3">
                     {built ? `${d.countA} (repeats: ${d.repeats})` : "–"}
                   </td>
                   <td className="py-2 pr-3">
                     <div className="flex flex-wrap gap-2">
-                      {!d.started && !d.status?.approved_at && d.status?.build_status !== "running" && (
+                      {d.status?.build_status !== "running" && (
                         <ActionButton
                           action={buildDay.bind(null, office.id, d.code)}
                           label={built || d.status?.build_status === "failed" ? "Rebuild" : "Build"}
                           pendingLabel="Starting…"
                         />
                       )}
-                      {built && !d.status?.approved_at && (
+                      {built && !d.approved && (
                         <ActionButton action={approveDay.bind(null, office.id, d.code)} label="Approve day" primary />
                       )}
-                      {d.status?.approved_at && !d.started && (
+                      {d.approved && !d.liveTaken && (
                         <ActionButton action={reopenDay.bind(null, office.id, d.code)} label="Reopen" />
                       )}
                     </div>

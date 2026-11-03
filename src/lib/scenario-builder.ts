@@ -10,9 +10,11 @@ import "server-only";
 // follow: its own that keep the rules, plus those moved in from other days. A
 // day with no card mapped falls back to those master items filled with the
 // office's rules. The gray card day is written from the gray cards (1-2 items
-// each). Replaces the day's office_scenarios as drafts for VFDA to review.
-// Never runs on a day a VA has already started. Skipped days (extra phone
-// drills, settings.skipped_day_rule) don't follow the day rules.
+// each). Every build is a new build_version of the day's office_scenarios, as
+// drafts for VFDA to review; older versions are never changed, so a day can be
+// rebuilt after VAs have taken it (they keep their version; new attempts get
+// the version VFDA approves next). Skipped days (extra phone drills,
+// settings.skipped_day_rule) don't follow the day rules.
 
 import { aiErrorMessage } from "@/lib/ai";
 import { GRAY_DAY, GRAY_ITEM_CAP, grayPlan, isMustAsk } from "@/lib/card-map";
@@ -97,13 +99,29 @@ export async function loadOfficeBuild(db: Db, officeId: string) {
   };
 }
 
-export async function dayHasAttempts(db: Db, officeId: string, day: string) {
+// Attempts (archived ones too) on one build version of a day: that version is
+// then never changed.
+export async function versionHasAttempts(db: Db, officeId: string, day: string, version: number) {
   const { count } = await db
     .from("attempts")
     .select("id", { count: "exact", head: true })
     .eq("office_id", officeId)
-    .eq("schedule_day", day);
+    .eq("schedule_day", day)
+    .eq("kind", "day")
+    .eq("build_version", version);
   return (count ?? 0) > 0;
+}
+
+// The day's latest build version (what VFDA reviews) and its live one (what
+// new attempts get).
+export async function dayVersions(db: Db, officeId: string, day: string) {
+  const { data } = await db
+    .from("office_days")
+    .select("build_version, live_version")
+    .eq("office_id", officeId)
+    .eq("schedule_day", day)
+    .maybeSingle();
+  return { latest: (data?.build_version as number | null) ?? null, live: (data?.live_version as number | null) ?? null };
 }
 
 // Marks the day as building. False when another build is already running.
@@ -127,15 +145,16 @@ type Row = Omit<DraftScenario, "options_rule" | "wants_repeat"> & {
   id: string;
   office_id: string;
   schedule_day: string;
-  version: "A" | "B";
+  version: "A";
+  build_version: number;
   is_repeat_variant: boolean;
   parent_scenario_id: string | null;
   test_status: "draft" | "needs_review";
   review_error: string | null;
 };
 
-// Drafts become rows, with the repeat variants of situational items.
-function toRows(officeId: string, day: string, drafts: DraftScenario[], variants: Map<string, Variant>): Row[] {
+// Drafts become rows of one build version, with the repeat variants of situational items.
+function toRows(officeId: string, day: string, buildVersion: number, drafts: DraftScenario[], variants: Map<string, Variant>): Row[] {
   const rows: Row[] = [];
   const base = (d: DraftScenario): Row => {
     const { options_rule: _rule, wants_repeat: _repeat, ...rest } = d;
@@ -147,6 +166,7 @@ function toRows(officeId: string, day: string, drafts: DraftScenario[], variants
       office_id: officeId,
       schedule_day: day,
       version: "A",
+      build_version: buildVersion,
       is_repeat_variant: false,
       parent_scenario_id: null,
       test_status: d.review_error ? "needs_review" : "draft",
@@ -365,7 +385,6 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
   const failures: CheckFailure[] = [];
   const log = (f: CheckFailure) => failures.push(f);
   try {
-    if (await dayHasAttempts(db, officeId, dayCode)) throw new Error("A VA has already started this day; it can't be rebuilt.");
     const src = await loadDaySources(db, officeId, dayCode);
     const { ctx, entry, ruleList, standards, cards, rules, slots, pool, boxes, grayCards, workflows } = src;
     // Master items the day rules moved away or left out, for the System log.
@@ -446,8 +465,9 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
     // Repeat variants, for items that are complete (not for one that needs review).
     const complete = drafts.filter((d) => d.missing_keys.length === 0 && !d.review_error && (d.type !== "mc" || d.options));
     const variants = await writeVariants(complete, ruleList, log);
-    await replaceDay(db, officeId, dayCode, toRows(officeId, dayCode, drafts, variants));
-    await finishBuild(db, officeId, dayCode);
+    const version = await nextVersion(db, officeId, dayCode);
+    await insertVersion(db, toRows(officeId, dayCode, version, drafts, variants));
+    await finishBuild(db, officeId, dayCode, version);
     await logCheckFailures(db, officeId, dayCode, failures);
   } catch (e) {
     await logCheckFailures(db, officeId, dayCode, failures);
@@ -460,21 +480,34 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
   }
 }
 
-async function replaceDay(db: Db, officeId: string, day: string, rows: Row[]) {
-  if (await dayHasAttempts(db, officeId, day)) throw new Error("A VA started this day during the build; nothing was changed.");
-  // Repeat variants go with their parents (on delete cascade).
-  must(await db.from("office_scenarios").delete().eq("office_id", officeId).eq("schedule_day", day).eq("is_repeat_variant", false));
+// One more than any version of the day so far.
+async function nextVersion(db: Db, officeId: string, day: string) {
+  const { data } = await db
+    .from("office_scenarios")
+    .select("build_version")
+    .eq("office_id", officeId)
+    .eq("schedule_day", day)
+    .order("build_version", { ascending: false })
+    .limit(1);
+  const { latest } = await dayVersions(db, officeId, day);
+  return Math.max(Number(data?.[0]?.build_version ?? 0), latest ?? 0) + 1;
+}
+
+// A new version is only ever added: older versions stay as they are.
+async function insertVersion(db: Db, rows: Row[]) {
   const parents = rows.filter((r) => !r.is_repeat_variant);
   const repeats = rows.filter((r) => r.is_repeat_variant);
   if (parents.length) must(await db.from("office_scenarios").insert(parents));
   if (repeats.length) must(await db.from("office_scenarios").insert(repeats));
 }
 
-async function finishBuild(db: Db, officeId: string, day: string) {
+// The new version is the one VFDA reviews; the live version (if any) stays
+// live for VAs until VFDA approves the new one.
+async function finishBuild(db: Db, officeId: string, day: string, version: number) {
   must(
     await db
       .from("office_days")
-      .update({ build_status: "done", built_at: new Date().toISOString(), build_error: null, approved_at: null, approved_by: null })
+      .update({ build_status: "done", built_at: new Date().toISOString(), build_error: null, build_version: version })
       .eq("office_id", officeId)
       .eq("schedule_day", day),
   );
@@ -486,19 +519,21 @@ async function finishBuild(db: Db, officeId: string, day: string) {
     .in("status", ["setup", "rules_in_review", "gap_list"]);
 }
 
-// Every built day of every office, rechecked against the day rules: an item
-// that breaks them needs review (with the reason, logged), and an approved day
-// with such an item goes back to draft for VFDA. Days a VA has started, and
-// skipped days (phone drills), are left alone.
+// Every built day of every office, rechecked against the day rules (its
+// latest version): an item that breaks them needs review (with the reason,
+// logged), and a live version with such an item goes back to draft for VFDA.
+// A version a VA has taken, and skipped days (phone drills), are left alone.
 export async function recheckBuiltDays(db: Db) {
-  const built = must(await db.from("office_days").select("office_id, schedule_day, kind, approved_at").eq("build_status", "done")) ?? [];
+  const built =
+    must(await db.from("office_days").select("office_id, schedule_day, kind, build_version, live_version").eq("build_status", "done")) ?? [];
   const rulesByOffice = new Map<string, DayRules>();
   let flagged = 0;
   let reopened = 0;
   let started = 0;
   for (const d of built) {
     if (d.kind === "skipped") continue;
-    if (await dayHasAttempts(db, d.office_id, d.schedule_day)) {
+    const version = (d.build_version as number | null) ?? 1;
+    if (await versionHasAttempts(db, d.office_id, d.schedule_day, version)) {
       started++;
       continue;
     }
@@ -511,6 +546,7 @@ export async function recheckBuiltDays(db: Db) {
           .select("id, code, type, stem, source_card, part_title, test_status")
           .eq("office_id", d.office_id)
           .eq("schedule_day", d.schedule_day)
+          .eq("build_version", version)
           .eq("is_repeat_variant", false),
       ) ?? [];
     const failures: CheckFailure[] = [];
@@ -529,7 +565,7 @@ export async function recheckBuiltDays(db: Db) {
     if (!failures.length) continue;
     flagged += failures.length;
     await logCheckFailures(db, d.office_id, d.schedule_day, failures);
-    if (d.approved_at) {
+    if (d.live_version === version) {
       // Back to draft: VAs wait for it ("Your quiz is being prepared") until VFDA approves it again.
       must(
         await db
@@ -537,12 +573,13 @@ export async function recheckBuiltDays(db: Db) {
           .update({ test_status: "draft" })
           .eq("office_id", d.office_id)
           .eq("schedule_day", d.schedule_day)
+          .eq("build_version", version)
           .eq("test_status", "live"),
       );
       must(
         await db
           .from("office_days")
-          .update({ approved_at: null, approved_by: null })
+          .update({ approved_at: null, approved_by: null, live_version: null })
           .eq("office_id", d.office_id)
           .eq("schedule_day", d.schedule_day),
       );

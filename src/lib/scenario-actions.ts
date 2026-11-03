@@ -1,10 +1,11 @@
 "use server";
 
 // VFDA's scenario review (/admin/offices/[id]/scenarios): build or rebuild a
-// day, edit, regenerate or remove a scenario, approve a day (sets it live for
-// VAs; not while an item needs review) or reopen it, and recheck built days
-// against the day rules (/admin/logs). VFDA admins only. Building runs after
-// the response is sent.
+// day (each build is a new version; VAs who took an older one keep it), edit,
+// regenerate or remove a scenario of the latest version, approve it (it becomes
+// the live version for new attempts; not while an item needs review) or reopen
+// a live version no VA has taken, and recheck built days against the day rules
+// (/admin/logs). VFDA admins only. Building runs after the response is sent.
 
 import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
@@ -13,7 +14,16 @@ import { GRAY_DAY } from "@/lib/card-map";
 import { checkBuiltItem, keyPoints, parseDayRules } from "@/lib/day-rules";
 import { regenerateCardItem, writeVariants, type CheckFailure } from "@/lib/scenario-ai";
 import { checkMc, correctResponseFromText, placeholdersIn, type CorrectResponse } from "@/lib/scenario-build";
-import { buildOfficeDay, claimBuild, dayHasAttempts, loadDaySources, loadOfficeBuild, logCheckFailures, recheckBuiltDays } from "@/lib/scenario-builder";
+import {
+  buildOfficeDay,
+  claimBuild,
+  dayVersions,
+  loadDaySources,
+  loadOfficeBuild,
+  logCheckFailures,
+  recheckBuiltDays,
+  versionHasAttempts,
+} from "@/lib/scenario-builder";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,7 +42,7 @@ export async function buildDay(officeId: string, day: string): Promise<ActionRes
   const ctx = await loadOfficeBuild(db, officeId);
   const entry = ctx?.days.find((d) => d.day.code === day);
   if (!entry) return fail("This day isn't part of the office's training.");
-  if (await dayHasAttempts(db, officeId, day)) return fail("A VA has already started this day; it can't be rebuilt.");
+  // A VA who already took a version keeps it: the rebuild is a new version.
   if (!(await claimBuild(officeId, day, entry.kind))) return fail("This day is already being built.");
   after(() => buildOfficeDay(officeId, day));
   return { ok: true, data: null };
@@ -43,16 +53,22 @@ export async function approveDay(officeId: string, day: string): Promise<ActionR
   if (!user) return fail("VFDA admins only.");
   if (!UUID.test(officeId) || !DAY_CODE.test(day)) return fail("Invalid request.");
   const supabase = await createSessionClient();
-  const [{ data: status }, { data: scenarios }] = await Promise.all([
-    supabase.from("office_days").select("build_status").eq("office_id", officeId).eq("schedule_day", day).maybeSingle(),
-    supabase
-      .from("office_scenarios")
-      .select("version, type, options, missing_keys, is_repeat_variant, test_status")
-      .eq("office_id", officeId)
-      .eq("schedule_day", day),
-  ]);
-  if (status?.build_status !== "done") return fail("Build the day first.");
-  // One attempt per day: only version A is used (older builds may still have a version B).
+  const { data: status } = await supabase
+    .from("office_days")
+    .select("build_status, build_version, live_version")
+    .eq("office_id", officeId)
+    .eq("schedule_day", day)
+    .maybeSingle();
+  if (status?.build_status !== "done" || !status.build_version) return fail("Build the day first.");
+  // The latest version is the one approved.
+  const version = status.build_version as number;
+  if (status.live_version === version) return { ok: true, data: null };
+  const { data: scenarios } = await supabase
+    .from("office_scenarios")
+    .select("version, type, options, missing_keys, is_repeat_variant, test_status")
+    .eq("office_id", officeId)
+    .eq("schedule_day", day)
+    .eq("build_version", version);
   const rows = (scenarios ?? []).filter((r) => r.version === "A");
   if (!rows.some((r) => !r.is_repeat_variant)) return fail("This day has no scenarios.");
   const review = rows.filter((r) => r.test_status === "needs_review").length;
@@ -66,11 +82,13 @@ export async function approveDay(officeId: string, day: string): Promise<ActionR
     .from("office_scenarios")
     .update({ test_status: "live" })
     .eq("office_id", officeId)
-    .eq("schedule_day", day);
+    .eq("schedule_day", day)
+    .eq("build_version", version);
   if (error) return fail("Couldn't approve. Try again.");
+  // New attempts get this version; attempts already started keep theirs.
   await supabase
     .from("office_days")
-    .update({ approved_at: now, approved_by: user.id })
+    .update({ approved_at: now, approved_by: user.id, live_version: version })
     .eq("office_id", officeId)
     .eq("schedule_day", day);
 
@@ -81,7 +99,7 @@ export async function approveDay(officeId: string, day: string): Promise<ActionR
     .from("office_days")
     .select("schedule_day")
     .eq("office_id", officeId)
-    .not("approved_at", "is", null);
+    .not("live_version", "is", null);
   const done = new Set((approved ?? []).map((d) => d.schedule_day));
   if (ctx && ctx.days.every((d) => done.has(d.day.code))) {
     await supabase.from("offices").update({ status: "va_training" }).eq("id", officeId).eq("status", "scenarios_in_review");
@@ -89,21 +107,26 @@ export async function approveDay(officeId: string, day: string): Promise<ActionR
   return { ok: true, data: null };
 }
 
-// Takes a day back from VAs to change it. Not once a VA has started it.
+// Takes the live version back from VAs to change it. Only while no VA has
+// taken it; otherwise rebuild (a new version).
 export async function reopenDay(officeId: string, day: string): Promise<ActionResult> {
   if (!(await admin())) return fail("VFDA admins only.");
   if (!UUID.test(officeId) || !DAY_CODE.test(day)) return fail("Invalid request.");
-  if (await dayHasAttempts(createAdminClient(), officeId, day)) return fail("A VA has already started this day.");
+  const db = createAdminClient();
+  const { latest, live } = await dayVersions(db, officeId, day);
+  if (!live || live !== latest) return fail("Only the live version, when it's the latest, can be reopened.");
+  if (await versionHasAttempts(db, officeId, day, live)) return fail(`A VA has taken version ${live}. Rebuild instead: that makes version ${live + 1}.`);
   const supabase = await createSessionClient();
   const { error } = await supabase
     .from("office_scenarios")
     .update({ test_status: "vfda_reviewed" })
     .eq("office_id", officeId)
-    .eq("schedule_day", day);
+    .eq("schedule_day", day)
+    .eq("build_version", live);
   if (error) return fail("Couldn't reopen. Try again.");
   await supabase
     .from("office_days")
-    .update({ approved_at: null, approved_by: null })
+    .update({ approved_at: null, approved_by: null, live_version: null })
     .eq("office_id", officeId)
     .eq("schedule_day", day);
   return { ok: true, data: null };
@@ -218,7 +241,6 @@ export async function regenerateScenario(scenarioId: string): Promise<ActionResu
   if (!row || row.is_repeat_variant) return fail("Scenario not found.");
   if (row.test_status === "live") return fail("This day is approved. Reopen it to make changes.");
   const db = createAdminClient();
-  if (await dayHasAttempts(db, row.office_id, row.schedule_day)) return fail("A VA has already started this day.");
   const failures: CheckFailure[] = [];
   try {
     const src = await loadDaySources(db, row.office_id, row.schedule_day);
@@ -297,7 +319,6 @@ export async function removeScenario(scenarioId: string): Promise<ActionResult> 
   const row = await reviewableItem(scenarioId);
   if (!row || row.is_repeat_variant) return fail("Scenario not found.");
   if (row.test_status === "live") return fail("This day is approved. Reopen it to make changes.");
-  if (await dayHasAttempts(createAdminClient(), row.office_id, row.schedule_day)) return fail("A VA has already started this day.");
   const supabase = await createSessionClient();
   const { error } = await supabase.from("office_scenarios").delete().eq("id", scenarioId).neq("test_status", "live");
   return error ? fail("Couldn't remove. Try again.") : { ok: true, data: null };

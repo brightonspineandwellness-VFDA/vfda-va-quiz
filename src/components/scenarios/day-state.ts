@@ -13,10 +13,14 @@ export function dayState(d: DaySummary): { label: string; tone: "muted" | "ok" |
   if (!s || s.build_status === "none") return { label: "Not built", tone: "muted" };
   if (s.build_status === "running") return { label: "Building…", tone: "muted" };
   if (s.build_status === "failed") return { label: `Build failed: ${s.build_error ?? "unknown error"}`, tone: "bad" };
-  if (s.approved_at) return { label: "Approved (live for VAs)", tone: "ok" };
-  if (d.needsReview) return { label: `${d.needsReview} item${d.needsReview > 1 ? "s" : ""} need${d.needsReview > 1 ? "" : "s"} review`, tone: "bad" };
-  if (d.missing) return { label: `${d.missing} need office rules`, tone: "warn" };
-  return { label: "Ready for review", tone: "warn" };
+  if (d.approved) return { label: `Approved: version ${s.live_version} live for VAs`, tone: "ok" };
+  // A newer version being reviewed while an older one stays live.
+  const draft = s.live_version ? `Version ${s.build_version} (version ${s.live_version} live for VAs): ` : "";
+  if (d.needsReview) {
+    return { label: `${draft}${d.needsReview} item${d.needsReview > 1 ? "s" : ""} need${d.needsReview > 1 ? "" : "s"} review`, tone: "bad" };
+  }
+  if (d.missing) return { label: `${draft}${d.missing} need office rules`, tone: "warn" };
+  return { label: `${draft}Ready for review`, tone: "warn" };
 }
 
 export const TONES = {

@@ -1,8 +1,8 @@
 "use server";
 
 // VFDA's side of VA training (/admin/vas): accept proof of work or ask for a
-// redo, set a VA's training start date, and override a score (which changes
-// only the label). Nothing here blocks or unlocks a day.
+// redo, set a VA's training start date, override a score (which changes only
+// the label), and "Reset day (test)". Nothing else here blocks or unlocks a day.
 // VFDA admins only; writes as the admin (row-level security applies).
 
 import { after } from "next/server";
@@ -11,8 +11,9 @@ import { getCurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
 import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestSlack } from "@/lib/reports";
-import { createSessionClient } from "@/lib/supabase/server";
+import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
+const DAY_CODE = /^W\dD\d$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (error: string) => ({ ok: false, error }) as const;
 
@@ -158,5 +159,57 @@ export async function confirmSop(
   if (error || !data?.length) return fail("Couldn't save. Try again.");
   await recalculateCertifications(data[0].va_id);
   after(() => sendSopNotice(certificationId, decision).then(() => undefined));
+  return { ok: true, data: null };
+}
+
+// "Reset day (test)": archives the VA's attempt at one day (kept, marked
+// archived, with who and when; no longer counted in scores or reports) and
+// opens the day again, so the VA takes it on the live version. Logged to the
+// System log.
+export async function resetDay(vaId: string, day: string): Promise<ActionResult> {
+  const user = await admin();
+  if (!user) return fail("VFDA admins only.");
+  if (!UUID.test(vaId) || !DAY_CODE.test(day)) return fail("Invalid request.");
+  const supabase = await createSessionClient();
+  const { data: va } = await supabase.from("profiles").select("full_name, email, office_id").eq("id", vaId).eq("role", "va").maybeSingle();
+  if (!va?.office_id) return fail("VA not found.");
+  const now = new Date().toISOString();
+  const { data: archived, error } = await supabase
+    .from("attempts")
+    .update({ archived_at: now, archived_by: user.id })
+    .eq("va_id", vaId)
+    .eq("office_id", va.office_id)
+    .eq("schedule_day", day)
+    .eq("kind", "day")
+    .is("archived_at", null)
+    .select("id, build_version, submitted_at");
+  if (error) return fail("Couldn't reset. Try again.");
+  if (!archived?.length) return fail(`${va.full_name || va.email} has no attempt at ${day} to reset.`);
+  await supabase
+    .from("day_unlocks")
+    .update({ status: "open", unlocked_at: now })
+    .eq("va_id", vaId)
+    .eq("office_id", va.office_id)
+    .eq("schedule_day", day);
+  const a = archived[0];
+  const { error: logError } = await createAdminClient()
+    .from("system_logs")
+    .insert({
+      kind: "day_reset",
+      office_id: va.office_id,
+      schedule_day: day,
+      item: (va.full_name || va.email).slice(0, 200),
+      field: "attempt",
+      value: `${a.id} (version ${a.build_version ?? 1}, ${a.submitted_at ? "finished" : "in progress"})`,
+      reason: `Reset day (test) by ${user.email} at ${now}: attempt archived; the VA takes the day again on the live version.`,
+    });
+  if (logError) console.error("System log not written", logError.message);
+  after(async () => {
+    try {
+      await recalculateCertifications(vaId);
+    } catch (e) {
+      console.error("Certifications not recalculated after a reset", vaId, e);
+    }
+  });
   return { ok: true, data: null };
 }
