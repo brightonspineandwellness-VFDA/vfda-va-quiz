@@ -34,7 +34,7 @@ type ScenarioRow = {
   office_workflow_id: string | null;
   schedule_day: string;
   version: "A" | "B";
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   test_status: string;
 };

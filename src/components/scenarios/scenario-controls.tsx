@@ -51,7 +51,7 @@ export function BuildAllButton({ officeId, days }: { officeId: string; days: str
 
 type EditorProps = {
   id: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   isRepeat: boolean;
   initial: ScenarioEdit;
 };
@@ -106,6 +106,7 @@ export function ScenarioEditor({ id, type, isRepeat, initial }: EditorProps) {
           </label>
         </>
       )}
+      {!isRepeat && type === "describe" && field("correctResponse", "Key points (one per line)", 5)}
       {!isRepeat && type === "situational" && (
         <>
           {field("correctResponse", "Correct response (one step per line; keep any Say:/Do:/Book: headings)", 6)}

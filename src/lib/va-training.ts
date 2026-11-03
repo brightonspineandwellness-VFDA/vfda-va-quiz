@@ -14,6 +14,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import {
   addTrainingDays,
   ANSWER_BOXES,
+  formatOf,
   buildToday,
   certificationRules,
   cleanPasteLog,
@@ -53,7 +54,7 @@ const DISPLAY_COLUMNS = "id, type, points, answer_format, stem, options, workflo
 
 type DisplayScenario = {
   id: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   answer_format: AnswerFormat | null;
   stem: string;
@@ -316,7 +317,7 @@ function toServed(
     workflow: shown.workflow,
     partTitle: shown.part_title,
     type: shown.type,
-    format: shown.answer_format ?? ctx.current.day.answer_format,
+    format: formatOf(shown.type, shown.answer_format, ctx.current.day.answer_format),
     stem: shown.stem,
     options,
     priorFeedback,
@@ -507,8 +508,8 @@ export async function submitAnswer(
     return { ok: true, data: { feedback: null, repeat: null } };
   }
 
-  // Situational: the boxes for this answer format.
-  const format: AnswerFormat = (key.answer_format as AnswerFormat | null) ?? ctx.current.day.answer_format;
+  // Situational and describe: the boxes for this answer format.
+  const format: AnswerFormat = formatOf(key.type, key.answer_format as AnswerFormat | null, ctx.current.day.answer_format);
   const boxes = ANSWER_BOXES[format];
   const given = answer.boxes ?? {};
   const texts = boxes.map((b) => ({ key: b.key, label: b.label, text: String(given[b.key] ?? "").slice(0, MAX_BOX_CHARS) }));
@@ -531,6 +532,7 @@ export async function submitAnswer(
   if (!claimed) return { ok: false, error: "This item was already answered. Moving on to the next one." };
 
   const grade = await gradeSituational({
+    kind: key.type === "describe" ? "describe" : "situational",
     stem: key.stem,
     boxes: texts,
     correctResponse: key.correct_response,
@@ -542,9 +544,9 @@ export async function submitAnswer(
     navigationRule: settings.navigationRule,
   });
 
-  // Below 2/2 on the first try: the repeat variant comes right away.
+  // Below 2/2 on the first try: the repeat variant comes right away (situational only).
   let repeat: DisplayScenario | null = null;
-  if (phase === "first" && grade && grade.score < 2) {
+  if (phase === "first" && grade && grade.score < 2 && key.type === "situational") {
     const { data } = await ctx.db
       .from("office_scenarios")
       .select(DISPLAY_COLUMNS)

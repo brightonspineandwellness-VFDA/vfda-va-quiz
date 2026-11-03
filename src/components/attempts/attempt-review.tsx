@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { OverrideForm } from "@/components/attempts/override-form";
 import { ActionButton } from "@/components/setup/action-button";
+import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
 import { minutesText } from "@/lib/report";
 import { resendAttemptReport } from "@/lib/va-admin-actions";
@@ -98,13 +99,13 @@ function Item({ item, admin }: { item: ReviewItem; admin: boolean }) {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="font-semibold">{item.code}</span>
         <span className="text-sm text-foreground/60">
-          {item.workflow} · {item.type === "mc" ? "multiple choice" : "situational"}
+          {item.workflow} · {ITEM_TYPE_LABELS[item.type]}
           {item.seconds !== null && ` · ${Math.max(1, Math.round(item.seconds / 60))} min`}
         </span>
         <span className="flex flex-wrap gap-1 text-xs">
           {item.criticalError && <Badge tone="red">critical error</Badge>}
           {item.needsReview && <Badge tone="amber">needs review</Badge>}
-          {item.type === "situational" && item.confidence !== null && item.confidence < 0.7 && !o && (
+          {item.type !== "mc" && item.confidence !== null && item.confidence < 0.7 && !o && (
             <Badge tone="amber">low confidence</Badge>
           )}
           {item.fast && <Badge tone="amber">fast</Badge>}

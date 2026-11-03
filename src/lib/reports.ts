@@ -118,7 +118,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       critical_error: i.critical_error,
       critical_quote: i.critical_quote,
       fast: i.fast,
-      low_confidence: s.type === "situational" && i.ai_confidence !== null && i.ai_confidence < LOW_CONFIDENCE,
+      low_confidence: s.type !== "mc" && i.ai_confidence !== null && i.ai_confidence < LOW_CONFIDENCE,
       overridden: !!row.vfda_override,
     };
   };

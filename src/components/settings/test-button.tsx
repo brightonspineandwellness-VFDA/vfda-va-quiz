@@ -3,8 +3,16 @@
 import { useState, useTransition } from "react";
 import type { ActionResult } from "@/lib/interview-actions";
 
-// Runs one test send and says how it went.
-export function TestButton({ action, label }: { action: () => Promise<ActionResult<string>>; label: string }) {
+// Runs one test send (or another one-off action) and says how it went.
+export function TestButton({
+  action,
+  label,
+  pendingLabel = "Sending…",
+}: {
+  action: () => Promise<ActionResult<string>>;
+  label: string;
+  pendingLabel?: string;
+}) {
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -22,7 +30,7 @@ export function TestButton({ action, label }: { action: () => Promise<ActionResu
         }
         className="rounded-lg border border-foreground/25 px-4 py-2 text-sm font-medium hover:bg-foreground/5 disabled:opacity-60"
       >
-        {pending ? "Sending…" : label}
+        {pending ? pendingLabel : label}
       </button>
       {message && (
         <span className={`text-sm ${message.ok ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>

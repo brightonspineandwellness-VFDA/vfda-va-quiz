@@ -2,16 +2,18 @@
 
 // VFDA's scenario review (/admin/offices/[id]/scenarios): build or rebuild a
 // day, edit, regenerate or remove a scenario, approve a day (sets it live for
-// VAs; not while an item needs review) or reopen it. VFDA admins only.
-// Building runs after the response is sent.
+// VAs; not while an item needs review) or reopen it, and recheck built days
+// against the day rules (/admin/logs). VFDA admins only. Building runs after
+// the response is sent.
 
 import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import type { ActionResult } from "@/lib/interview-actions";
 import { GRAY_DAY } from "@/lib/card-map";
+import { checkBuiltItem, keyPoints, parseDayRules } from "@/lib/day-rules";
 import { regenerateCardItem, writeVariants, type CheckFailure } from "@/lib/scenario-ai";
 import { checkMc, correctResponseFromText, placeholdersIn, type CorrectResponse } from "@/lib/scenario-build";
-import { buildOfficeDay, claimBuild, dayHasAttempts, loadDaySources, loadOfficeBuild, logCheckFailures } from "@/lib/scenario-builder";
+import { buildOfficeDay, claimBuild, dayHasAttempts, loadDaySources, loadOfficeBuild, logCheckFailures, recheckBuiltDays } from "@/lib/scenario-builder";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -111,9 +113,14 @@ export type ScenarioEdit = {
   stem: string;
   options: string; // one per line (multiple choice)
   answer: string; // letter (multiple choice)
-  correctResponse: string; // one step per line, or Say:/Do:/Book: headings
+  correctResponse: string; // one step (or key point) per line, or Say:/Do:/Book: headings
   criticalFail: string;
 };
+
+async function dayRules() {
+  const { data } = await createAdminClient().from("settings").select("value").eq("key", "day_rules").maybeSingle();
+  return parseDayRules(data?.value);
+}
 
 export async function editScenario(scenarioId: string, edit: ScenarioEdit): Promise<ActionResult> {
   if (!(await admin())) return fail("VFDA admins only.");
@@ -121,7 +128,7 @@ export async function editScenario(scenarioId: string, edit: ScenarioEdit): Prom
   const supabase = await createSessionClient();
   const { data: row } = await supabase
     .from("office_scenarios")
-    .select("office_id, schedule_day, type, correct_response, test_status, is_repeat_variant, review_error")
+    .select("office_id, schedule_day, type, correct_response, test_status, is_repeat_variant, review_error, source_card, part_title")
     .eq("id", scenarioId)
     .maybeSingle();
   if (!row) return fail("Scenario not found.");
@@ -138,6 +145,10 @@ export async function editScenario(scenarioId: string, edit: ScenarioEdit): Prom
       if (bad) return fail(`Multiple choice ${bad}.`);
       update.options = options;
       update.answer = answer;
+    } else if (row.type === "describe") {
+      const parsed = correctResponseFromText(edit.correctResponse, null);
+      if (typeof parsed === "string") return fail("Write at least one key point.");
+      update.correct_response = parsed;
     } else {
       const cr = row.correct_response;
       const keys = cr && !Array.isArray(cr) ? Object.keys(cr) : null;
@@ -154,10 +165,13 @@ export async function editScenario(scenarioId: string, edit: ScenarioEdit): Prom
     .eq("id", scenarioId)
     .single();
   update.missing_keys = placeholdersIn({ ...current, ...update, edited_by_vfda: undefined });
-  // VFDA's edit settles an item that needed review.
-  if (row.test_status === "needs_review") Object.assign(update, { test_status: "draft", review_error: null });
+  // VFDA's edit settles an item that needed review, unless it still breaks the day rules.
+  const broken = row.is_repeat_variant ? null : checkBuiltItem({ ...row, stem }, row.schedule_day, await dayRules());
+  if (broken) Object.assign(update, { test_status: "needs_review", review_error: `${broken.field}: ${broken.reason}` });
+  else if (row.test_status === "needs_review") Object.assign(update, { test_status: "draft", review_error: null });
   const { error } = await supabase.from("office_scenarios").update(update).eq("id", scenarioId).neq("test_status", "live");
   if (error) return fail("Couldn't save. Try again.");
+  if (broken) return fail(`Saved, but it still needs review: ${broken.reason}.`);
   if (row.test_status === "needs_review" && row.type === "situational") after(() => addRepeat(scenarioId));
   return { ok: true, data: null };
 }
@@ -189,7 +203,7 @@ async function reviewableItem(scenarioId: string) {
   const supabase = await createSessionClient();
   const { data: row } = await supabase
     .from("office_scenarios")
-    .select("id, office_id, schedule_day, code, type, workflow, part_title, stem, options, answer, correct_response, critical_fail, escalation_level, source_card, source_quote, test_status, review_error, is_repeat_variant")
+    .select("id, office_id, schedule_day, code, type, workflow, part_title, stem, options, answer, correct_response, critical_fail, escalation_level, source_card, source_quote, test_status, review_error, is_repeat_variant, answer_format")
     .eq("id", scenarioId)
     .maybeSingle();
   return row;
@@ -208,9 +222,11 @@ export async function regenerateScenario(scenarioId: string): Promise<ActionResu
   const failures: CheckFailure[] = [];
   try {
     const src = await loadDaySources(db, row.office_id, row.schedule_day);
-    if (!src.cards.length) return fail("No card is mapped to this day: edit the item instead.");
+    if (!src.cards.length) return fail("No card this day may use is mapped to it: edit or remove the item instead.");
     const cr = row.correct_response as CorrectResponse | null;
     const item = await regenerateCardItem({
+      day: row.schedule_day,
+      rules: src.rules,
       item: {
         code: row.code,
         type: row.type,
@@ -219,7 +235,11 @@ export async function regenerateScenario(scenarioId: string): Promise<ActionResu
         stem: row.stem,
         options: row.options,
         answer: row.answer,
-        correct_response: cr ? (Array.isArray(cr) ? [{ box: null, steps: cr }] : Object.entries(cr).map(([box, steps]) => ({ box, steps }))) : null,
+        correct_response: cr
+          ? Array.isArray(cr) || row.type === "describe"
+            ? [{ box: null, steps: keyPoints(cr) }]
+            : Object.entries(cr).map(([box, steps]) => ({ box, steps }))
+          : null,
         critical_fail: row.critical_fail,
         escalation_level: row.escalation_level,
         source_card: row.source_card ?? "",
@@ -236,6 +256,10 @@ export async function regenerateScenario(scenarioId: string): Promise<ActionResu
     const { error } = await db
       .from("office_scenarios")
       .update({
+        // The day rules may have changed its type (situational -> describe).
+        type: item.type,
+        points: item.type === "mc" ? 1 : 2,
+        answer_format: item.type === "describe" ? null : row.answer_format,
         stem: item.stem,
         options: item.options,
         answer: item.answer,
@@ -279,3 +303,19 @@ export async function removeScenario(scenarioId: string): Promise<ActionResult> 
   return error ? fail("Couldn't remove. Try again.") : { ok: true, data: null };
 }
 
+
+// Rechecks every built day against the day rules: items that break them need
+// review, and an approved day that changes goes back to draft. Days a VA has
+// started are never changed.
+export async function recheckDayRules(): Promise<ActionResult<string>> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  try {
+    const r = await recheckBuiltDays(createAdminClient());
+    return {
+      ok: true,
+      data: `${r.flagged} item(s) now need review; ${r.reopened} approved day(s) back to draft; ${r.started} day(s) a VA started left alone.`,
+    };
+  } catch (e) {
+    return fail(`Couldn't recheck: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}

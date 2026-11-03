@@ -4,15 +4,17 @@ import "server-only";
 // items are written from the office's own cards mapped to it, with the master
 // day as the pattern; gray card items from the gray cards. Also multiple
 // choice options from an options rule (days with no card), a skipped day's
-// phone drills, and a repeat variant for each situational item. Card-first
-// items are checked one by one (forgiving source matching: src/lib/
-// source-match.ts); a failing item is rewritten up to twice, then kept as
-// "needs review" so the rest of the day still builds. Other answers are
-// checked as a whole and retried once. VFDA reviews all of it.
+// phone drills, and a repeat variant for each situational item. Every day
+// keeps its day rules (src/lib/day-rules.ts: sources, item types, banned
+// topics). Card-first items are checked one by one (forgiving source matching:
+// src/lib/source-match.ts, then the day rules); a failing item is rewritten up
+// to twice, then kept as "needs review" so the rest of the day still builds.
+// Other answers are checked as a whole and retried once. VFDA reviews all of it.
 // AI_MODE=mock writes stand-ins without calling Claude.
 
 import { z } from "zod";
 import { aiMode, askStructured } from "@/lib/ai";
+import { checkDayItem, ITEM_TYPE_LABELS, ruleFor, rulesPrompt, typeOnDay, type DayRules, type ItemType } from "@/lib/day-rules";
 import {
   BUTTON_WORDS,
   checkMc,
@@ -54,8 +56,9 @@ async function ask<S extends z.ZodType>(
 }
 
 const mock = () => aiMode() === "mock";
-// Mock text: placeholders turned into plain words, so checks still pass.
-const unplaceholder = (s: string) => s.replace(/\{([A-Z0-9_]+)\}/g, (_, k: string) => k.toLowerCase().replace(/_/g, " "));
+// Mock text: placeholders turned into neutral words, so checks still pass
+// (not the key's own words: "escalation contact" would break a day's topics).
+const unplaceholder = (s: string) => s.replace(/\{([A-Z0-9_]+)\}/g, "the office's rule");
 const MOCK_OPTIONS = ["The office's way (right)", "Guess and move on", "Ask the patient to call back later", "Skip it"];
 
 const McSchema = z.object({ code: z.string(), options: z.array(z.string()), answer: z.string().describe("A, B, C or D") });
@@ -88,13 +91,13 @@ const ITEM_REWRITES = 2;
 const BoxSteps = z.object({ box: z.string().nullable().describe("The box name (e.g. Say), or null for a plain step list"), steps: z.array(z.string()) });
 const CardItemSchema = z.object({
   based_on: z.string().nullable().describe("The master item code this follows, or null for a new item"),
-  type: z.enum(["mc", "situational"]),
+  type: z.enum(["mc", "situational", "describe"]),
   workflow: z.string().describe("Workflow code, e.g. WF04"),
   part_title: z.string(),
   stem: z.string(),
   options: z.array(z.string()).nullable(),
   answer: z.string().nullable().describe("A, B, C or D"),
-  correct_response: z.array(BoxSteps).nullable(),
+  correct_response: z.array(BoxSteps).nullable().describe("Situational: the steps; describe: the key points (one list, box null)"),
   critical_fail: z.string().nullable(),
   escalation_level: z.enum(["none", "approval", "immediate"]),
   source_card: z.string().describe(`One of the allowed card names, exactly as listed, or "${STANDARDS_SOURCE}"`),
@@ -110,6 +113,7 @@ answer format, the mix of multiple choice and situational items, difficulty).
 - When a master item needs something the cards don't cover: use the VFDA standard for it if there is one
   (source_card "${STANDARDS_SOURCE}", quote the standard). If there's no standard either, drop that master
   item and write a different item from what the cards do cover. Never ask the doctor; never invent office policy.
+- Every item keeps the day rules below: its allowed cards, item types and banned topics.
 - Never write about exact buttons, menus or click paths. For the EHR, texting or phone system, the VA describes
   what they'd do in their own words; correct responses say what is done, not where to click.
 - Multiple choice: 4 options (text only, no A-D letters), one right (the card's way), realistic decoys, right
@@ -124,18 +128,26 @@ const allowedNames = (cards: CardSource[]) =>
 const cardsBlock = (cards: CardSource[]) =>
   cards.map((c) => `## ${c.title}${c.workflow ? ` (${c.workflow})` : ""}\n${c.text}`).join("\n\n");
 
-// What every card-first prompt carries: the cards, workflows and standards.
+// What every card-first prompt carries: the cards, workflows, standards and day rules.
 type ItemContext = {
+  day: string;
+  rules: DayRules;
   cards: CardSource[];
   standards: { key: string; value: string }[];
   boxes: string[] | null;
-  // Gray card items: situational, plain step lists.
+  // Gray card items: written answers (no multiple choice), plain step lists.
   gray: boolean;
   sources: string;
   log: LogFailure;
 };
 
-const sourcesBlock = (cards: CardSource[], workflows: WorkflowFields[], standards: { key: string; value: string }[]) => `<cards>
+const sourcesBlock = (
+  cards: CardSource[],
+  workflows: WorkflowFields[],
+  standards: { key: string; value: string }[],
+  day: string,
+  rules: DayRules,
+) => `<cards>
 ${cardsBlock(cards)}
 </cards>
 ${workflows.length ? `\n<workflows>\n${JSON.stringify(workflows, null, 1)}\n</workflows>\n` : ""}
@@ -143,7 +155,11 @@ ${workflows.length ? `\n<workflows>\n${JSON.stringify(workflows, null, 1)}\n</wo
 ${rulesBlock(standards)}
 </vfda_standards>
 
-${allowedNames(cards)}`;
+${allowedNames(cards)}
+
+<day_rules>
+${rulesPrompt(day, rules, cards.map((c) => c.title))}
+</day_rules>`;
 
 function toCorrectResponse(raw: RawCardItem["correct_response"], boxes: string[] | null): CorrectResponse | null {
   if (!raw?.length) return null;
@@ -153,13 +169,20 @@ function toCorrectResponse(raw: RawCardItem["correct_response"], boxes: string[]
 
 const shown = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v) ?? "").slice(0, 500);
 
-// Everything but the source: one failure, or null.
+// Everything but the source: one failure, or null. The day rules (item type,
+// banned topics) are checked here too.
 function checkContent(i: RawCardItem, ctx: ItemContext): Omit<CheckFailure, "item"> | null {
-  if (ctx.gray && i.type !== "situational") return { field: "type", value: i.type, reason: "gray card items are situational" };
+  if (ctx.gray && i.type === "mc") return { field: "type", value: i.type, reason: "gray card items are written answers, not multiple choice" };
   if (!i.stem.trim()) return { field: "stem", value: "", reason: "empty" };
+  const broken = checkDayItem(i, ctx.day, ctx.rules);
+  if (broken) return broken;
   if (i.type === "mc") {
     const bad = checkMc(i.options, i.answer);
     if (bad) return { field: "options", value: shown({ options: i.options, answer: i.answer }), reason: bad };
+  } else if (i.type === "describe") {
+    if (!i.correct_response?.some((b) => b.steps.some((s) => s.trim()))) {
+      return { field: "correct_response", value: shown(i.correct_response), reason: "a describe item needs the key points a good answer covers" };
+    }
   } else {
     if (!i.correct_response?.some((b) => b.steps.some((s) => s.trim()))) {
       return { field: "correct_response", value: shown(i.correct_response), reason: "a situational item needs steps" };
@@ -188,9 +211,10 @@ function toCardItem(i: RawCardItem, card: CardSource | null, boxes: string[] | n
     // The app shows its own A-D letters.
     options: i.type === "mc" ? (i.options ?? []).map((o) => o.trim().replace(/^[A-D][).:]\s+/, "")) : null,
     answer: i.type === "mc" ? (i.answer ?? "").trim().toUpperCase() : null,
-    correct_response: i.type === "situational" ? toCorrectResponse(i.correct_response, boxes) : null,
-    critical_fail: i.critical_fail?.trim() || null,
-    escalation_level: i.escalation_level,
+    // Describe: the key points as one list.
+    correct_response: i.type === "mc" ? null : toCorrectResponse(i.correct_response, i.type === "describe" ? null : boxes),
+    critical_fail: i.type === "describe" ? null : i.critical_fail?.trim() || null,
+    escalation_level: i.type === "describe" ? "none" : i.escalation_level,
     source_card: i.source_card,
     source_quote: i.source_quote.trim().slice(0, 1000),
     source_document_id: card?.id ?? null,
@@ -210,8 +234,26 @@ function checkCardItem(i: RawCardItem, ctx: ItemContext): { item: CardItem } | {
 
 const itemLabel = (n: number, i: { based_on: string | null; type: string }) => `item ${n + 1}${i.based_on ? ` (${i.based_on})` : ""} ${i.type}`;
 
+const boxesText = (type: ItemType, ctx: ItemContext) =>
+  type === "describe"
+    ? "; correct_response is the key points (one list, box null)"
+    : type === "mc"
+      ? ""
+      : ctx.gray || !ctx.boxes
+        ? "; correct_response as a plain list of steps (box null)"
+        : `; correct_response split into ${ctx.boxes.join(", ")}`;
+
+// The type a rewrite must have: a type the day doesn't allow becomes one it
+// does (situational -> describe); gray card items are never multiple choice.
+function rewriteType(type: ItemType, ctx: ItemContext): ItemType {
+  const rule = ruleFor(ctx.rules, ctx.day);
+  const t = typeOnDay(type, rule);
+  return ctx.gray && t === "mc" ? typeOnDay("situational", rule) : t;
+}
+
 // Asks Claude to rewrite one item, saying exactly what was wrong.
 async function rewriteItem(raw: RawCardItem, failure: Omit<CheckFailure, "item">, ctx: ItemContext): Promise<RawCardItem> {
+  const type = rewriteType(raw.type, ctx);
   const out = await askStructured(z.object({ item: CardItemSchema }), {
     system: SYSTEM,
     effort: "medium",
@@ -223,9 +265,9 @@ async function rewriteItem(raw: RawCardItem, failure: Omit<CheckFailure, "item">
 
 ${ctx.sources}
 
-Rewrite ONLY the item below so it passes the check. Keep its type (${raw.type})${raw.based_on ? ` and based_on ${raw.based_on}` : ""}${
-          ctx.gray ? "; situational, correct_response as a plain list of steps (box null)" : ctx.boxes ? `; correct_response split into ${ctx.boxes.join(", ")}` : ""
-        }.
+Rewrite ONLY the item below so it passes the check. ${type === raw.type ? "Keep its type" : "Make it type"} "${type}" (${ITEM_TYPE_LABELS[type]})${
+          raw.based_on ? `, based_on ${raw.based_on}` : ""
+        }${boxesText(type, ctx)}.
 What was wrong: ${failure.field}${failure.value ? ` ${JSON.stringify(failure.value)}` : ""}: ${failure.reason}.
 
 <item>
@@ -287,73 +329,102 @@ async function askItems(text: string, countProblem: (items: RawCardItem[]) => st
   return items;
 }
 
+const countText = (counts: Record<ItemType, number>) =>
+  (Object.keys(ITEM_TYPE_LABELS) as ItemType[])
+    .filter((t) => counts[t])
+    .map((t) => `${counts[t]} ${ITEM_TYPE_LABELS[t]}`)
+    .join(", ");
+
+const typeCounts = (items: { type: ItemType }[]) => ({
+  mc: items.filter((i) => i.type === "mc").length,
+  situational: items.filter((i) => i.type === "situational").length,
+  describe: items.filter((i) => i.type === "describe").length,
+});
+
+// A day: as many items, of the same types, as its own master items (`slots`,
+// already in the day's types), following the master items it may use
+// (`pool`: its own that keep the day rules, plus any moved in from other
+// days); slots the pool doesn't cover are new items from the day's cards.
 export async function writeCardDay(input: {
   day: { code: string; title: string; answer_format: string };
-  masters: DraftScenario[];
+  slots: DraftScenario[];
+  pool: DraftScenario[];
   cards: CardSource[];
   workflows: WorkflowFields[];
   standards: { key: string; value: string }[];
   boxes: string[] | null;
+  rules: DayRules;
   log?: LogFailure;
 }): Promise<CardItem[]> {
-  const mcCount = input.masters.filter((m) => m.type === "mc").length;
-  const total = input.masters.length;
+  const want = typeCounts(input.slots);
+  const total = input.slots.length;
   if (mock()) return mockCardDay(input);
   const log = input.log ?? (() => {});
-  const sources = sourcesBlock(input.cards, input.workflows, input.standards);
-  const ctx: ItemContext = { cards: input.cards, standards: input.standards, boxes: input.boxes, gray: false, sources, log };
+  const sources = sourcesBlock(input.cards, input.workflows, input.standards, input.day.code, input.rules);
+  const ctx: ItemContext = { day: input.day.code, rules: input.rules, cards: input.cards, standards: input.standards, boxes: input.boxes, gray: false, sources, log };
 
-  const text = `Write the test for training day ${input.day.code} "${input.day.title}" at this office: exactly ${total} items,
-${mcCount} multiple choice and ${total - mcCount} situational, like the master day below.
-${input.boxes ? `Situational correct responses are split into the boxes ${input.boxes.join(", ")} (each with steps).` : "Situational correct responses are a plain list of steps (box null)."}
+  const text = `Write the test for training day ${input.day.code} "${input.day.title}" at this office: exactly ${total} items:
+${countText(want)}.
+Follow the master items below where they fit (based_on = their code); write every other item new (based_on null)
+from this day's own cards.
+${want.situational ? (input.boxes ? `Situational correct responses are split into the boxes ${input.boxes.join(", ")} (each with steps).` : "Situational correct responses are a plain list of steps (box null).") : ""}
 
 ${CARD_RULES}
 
-<master_day>
-${input.masters
-  .map(
-    (m) =>
-      `## ${m.code} (${m.type}, ${m.points} pt, ${m.workflow}, ${m.part_title})\n${m.stem}` +
-      (m.type === "mc"
-        ? m.options
-          ? `\nOptions: ${m.options.map((o, k) => `${LETTERS[k]}) ${o}`).join(" | ")}\nAnswer: ${m.answer}`
-          : `\nOptions rule: ${m.options_rule ?? ""}`
-        : `\nCorrect response: ${JSON.stringify(m.correct_response)}${m.critical_fail ? `\nCritical fail: ${m.critical_fail}` : ""}`),
-  )
-  .join("\n\n")}
-</master_day>
+<master_items>
+${
+  input.pool
+    .map(
+      (m) =>
+        `## ${m.code} (${m.type}, ${m.points} pt, ${m.workflow}, ${m.part_title})\n${m.stem}` +
+        (m.type === "mc"
+          ? m.options
+            ? `\nOptions: ${m.options.map((o, k) => `${LETTERS[k]}) ${o}`).join(" | ")}\nAnswer: ${m.answer}`
+            : `\nOptions rule: ${m.options_rule ?? ""}`
+          : m.type === "describe"
+            ? `\nKey points: ${JSON.stringify(m.correct_response)}`
+            : `\nCorrect response: ${JSON.stringify(m.correct_response)}${m.critical_fail ? `\nCritical fail: ${m.critical_fail}` : ""}`),
+    )
+    .join("\n\n") || "(none: write every item new from the cards)"
+}
+</master_items>
 
 ${sources}`;
   const items = await askItems(
     text,
     (items) => {
       if (items.length !== total) return `need exactly ${total} items, got ${items.length}`;
-      const mc = items.filter((i) => i.type === "mc").length;
-      return mc === mcCount ? null : `need exactly ${mcCount} multiple choice items, got ${mc}`;
+      const got = typeCounts(items);
+      const off = (Object.keys(want) as ItemType[]).filter((t) => got[t] !== want[t]);
+      return off.length ? `need exactly ${countText(want)}; got ${countText(got) || "none"}` : null;
     },
     log,
   );
   return Promise.all(items.map((i, n) => settleItem(i, itemLabel(n, i), ctx)));
 }
 
-// Gray card day: `count` situational items per card (1-2, planned by grayPlan).
+// Gray card day: `count` written items per card (1-2, planned by grayPlan):
+// situational where the day allows it, otherwise describe.
 export async function writeCardGrayItems(input: {
+  day: string;
   cards: (CardSource & { count: number })[];
   standards: { key: string; value: string }[];
+  rules: DayRules;
   log?: LogFailure;
 }): Promise<CardItem[]> {
   const total = input.cards.reduce((n, c) => n + c.count, 0);
+  const log = input.log ?? (() => {});
+  const sources = sourcesBlock(input.cards, [], input.standards, input.day, input.rules);
+  const ctx: ItemContext = { day: input.day, rules: input.rules, cards: input.cards, standards: input.standards, boxes: null, gray: true, sources, log };
+  const type = rewriteType("situational", ctx);
   if (mock()) {
     return input.cards.flatMap((c) =>
-      Array.from({ length: c.count }, (_, k) => mockItem(c, "situational", `${c.title}: a patient asks about this (${k + 1})`, null)),
+      Array.from({ length: c.count }, (_, k) => mockItem(c, type, `${c.title}: what do you do here? (${k + 1})`, null)),
     );
   }
-  const log = input.log ?? (() => {});
-  const sources = sourcesBlock(input.cards, [], input.standards);
-  const ctx: ItemContext = { cards: input.cards, standards: input.standards, boxes: null, gray: true, sources, log };
-  const text = `Write the gray card day: situational phone and task scenarios from this office's extra cards.
-Exactly the number of items listed per card (${total} in all), each with based_on null, type "situational" and
-correct_response as a plain list of steps (box null). The cards are the source.
+  const text = `Write the gray card day: ${type === "situational" ? "task scenarios" : "short questions the VA answers in their own words"} from this office's extra cards.
+Exactly the number of items listed per card (${total} in all), each with based_on null, type "${type}" and
+correct_response as a plain list of ${type === "describe" ? "key points" : "steps"} (box null). The cards are the source.
 Items per card: ${input.cards.map((c) => `"${c.title}": ${c.count}${c.tags?.length ? ` (${c.tags.join(", ")})` : ""}`).join("; ")}.
 
 ${CARD_RULES}
@@ -379,6 +450,7 @@ ${sources}`;
 // VFDA's "Regenerate" on an item that needs review: rewritten from the same
 // cards (up to ITEM_REWRITES times), told what was wrong.
 export async function regenerateCardItem(input: {
+  day: string;
   item: Omit<RawCardItem, "based_on"> & { based_on?: string | null; code: string };
   problem: string;
   cards: CardSource[];
@@ -386,27 +458,30 @@ export async function regenerateCardItem(input: {
   standards: { key: string; value: string }[];
   boxes: string[] | null;
   gray: boolean;
+  rules: DayRules;
   log?: LogFailure;
 }): Promise<CardItem> {
   const log = input.log ?? (() => {});
   const ctx: ItemContext = {
+    day: input.day,
+    rules: input.rules,
     cards: input.cards,
     standards: input.standards,
     boxes: input.boxes,
     gray: input.gray,
-    sources: sourcesBlock(input.cards, input.workflows, input.standards),
+    sources: sourcesBlock(input.cards, input.workflows, input.standards, input.day, input.rules),
     log,
   };
   const raw: RawCardItem = { ...input.item, based_on: input.item.based_on ?? null };
   if (mock()) {
     const card = input.cards[0];
-    return card ? mockItem(card, raw.type, raw.stem, null) : toCardItem(raw, null, input.boxes, input.problem);
+    return card ? mockItem(card, rewriteType(raw.type, ctx), `${card.title}: ${raw.stem}`, null) : toCardItem(raw, null, input.boxes, input.problem);
   }
   const [field, ...rest] = input.problem.split(": ");
   return settleItem(raw, input.item.code, ctx, { field: rest.length ? field : "item", value: "", reason: rest.length ? rest.join(": ") : input.problem });
 }
 
-function mockItem(card: CardSource, type: "mc" | "situational", stem: string, basedOn: DraftScenario | null): CardItem {
+function mockItem(card: CardSource, type: ItemType, stem: string, basedOn: DraftScenario | null): CardItem {
   const quote = card.text.split(/\n/).find((l) => l.trim())?.trim().slice(0, 120) ?? card.title;
   const cr = basedOn?.correct_response;
   return {
@@ -420,11 +495,15 @@ function mockItem(card: CardSource, type: "mc" | "situational", stem: string, ba
     correct_response:
       type === "mc"
         ? null
-        : cr
-          ? (JSON.parse(unplaceholder(JSON.stringify(cr))) as CorrectResponse)
-          : [`follows "${card.title}" step by step`, "documents what was done"],
-    critical_fail: basedOn?.critical_fail ? unplaceholder(basedOn.critical_fail) : null,
-    escalation_level: (basedOn?.escalation_level as CardItem["escalation_level"]) ?? "none",
+        : type === "describe"
+          ? cr && Array.isArray(cr)
+            ? cr.map(unplaceholder)
+            : [`explains "${card.title}" in their own words`, "names why it matters to patients"]
+          : cr
+            ? (JSON.parse(unplaceholder(JSON.stringify(cr))) as CorrectResponse)
+            : [`follows "${card.title}" step by step`, "documents what was done"],
+    critical_fail: type !== "describe" && basedOn?.critical_fail ? unplaceholder(basedOn.critical_fail) : null,
+    escalation_level: type === "describe" ? "none" : ((basedOn?.escalation_level as CardItem["escalation_level"]) ?? "none"),
     source_card: card.title,
     source_quote: quote,
     source_document_id: card.id,
@@ -432,8 +511,16 @@ function mockItem(card: CardSource, type: "mc" | "situational", stem: string, ba
   };
 }
 
-function mockCardDay(input: { masters: DraftScenario[]; cards: CardSource[] }): CardItem[] {
-  return input.masters.map((m, n) => mockItem(input.cards[n % input.cards.length], m.type, m.stem, m));
+// Mock: the pool's items first, in the slots' types; new items for the rest.
+function mockCardDay(input: { slots: DraftScenario[]; pool: DraftScenario[]; cards: CardSource[] }): CardItem[] {
+  const free = [...input.pool];
+  return input.slots.map((slot, n) => {
+    const card = input.cards[n % input.cards.length];
+    const k = free.findIndex((m) => m.type === slot.type);
+    if (k < 0) return mockItem(card, slot.type, `${card.title}: question ${n + 1}`, null);
+    const m = free.splice(k, 1)[0];
+    return mockItem(card, m.type, m.stem, m);
+  });
 }
 
 // ---------------------------------------------------------------------------

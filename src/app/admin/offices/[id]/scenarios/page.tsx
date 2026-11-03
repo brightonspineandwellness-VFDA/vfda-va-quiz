@@ -49,9 +49,13 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
       </div>
       <p className="text-sm text-foreground/70">
         Card-first: Claude writes each day from the office&apos;s own cards mapped to it, with the master day as the
-        pattern (same number of items, same multiple choice / situational split) and the VFDA standards where the
-        cards are silent. Every item shows the card and the card&apos;s words it came from, plus the repeat variant a
-        VA gets right after a situational answer below 2/2. A day with no card mapped is built from the master bank. Map cards on the{" "}
+        pattern (same number of items) and the VFDA standards where the cards are silent, keeping the{" "}
+        <Link href="/admin/logs" className="underline">
+          day rules
+        </Link>{" "}
+        (which cards, item types and topics each day may have). Every item shows the card and the card&apos;s words it
+        came from, plus the repeat variant a VA gets right after a situational answer below 2/2 (describe items have
+        none). A day with no card mapped is built from the master bank. Map cards on the{" "}
         <Link href={`/admin/offices/${office.id}/rules`} className="underline">
           Cards page
         </Link>

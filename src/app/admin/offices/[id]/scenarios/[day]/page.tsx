@@ -7,6 +7,7 @@ import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
 import { approveDay, buildDay, regenerateScenario, removeScenario, reopenDay } from "@/lib/scenario-actions";
+import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import { correctResponseToText, LETTERS, type CorrectResponse } from "@/lib/scenario-build";
 import { loadScenarioDay, type ScenarioRow } from "@/lib/scenario-data";
 
@@ -149,7 +150,7 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
       )}
       <p className="text-sm text-foreground/60">
         {row.code} · {row.workflow}
-        {row.part_title && ` · ${row.part_title}`} · {row.type === "mc" ? "multiple choice" : "situational"} ·{" "}
+        {row.part_title && ` · ${row.part_title}`} · {ITEM_TYPE_LABELS[row.type]} ·{" "}
         {row.points} pt{row.points === 1 ? "" : "s"}
         {row.formula && ` · formula ${row.formula}`}
         {row.edited_by_vfda && " · edited by VFDA"}
@@ -181,6 +182,12 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
             (row.options ? <Options options={row.options} answer={row.answer} /> : <p className="text-amber-700 dark:text-amber-300">No options yet</p>)}
         </div>
       </div>
+      {row.type === "describe" && (
+        <div className="text-sm">
+          <p className="font-medium">Key points (graded 0–2 on the VA&rsquo;s own words; no repeat)</p>
+          <pre className="whitespace-pre-wrap font-sans">{correctResponseToText(row.correct_response)}</pre>
+        </div>
+      )}
       {row.type === "situational" && (
         <div className="text-sm">
           <p className="font-medium">Correct response</p>

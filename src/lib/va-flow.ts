@@ -7,7 +7,8 @@
 
 import { applies, normalizeRemoteAccess, type Profile } from "@/lib/interview";
 
-export type AnswerFormat = "steps_say_doc" | "say_do_book";
+// "describe": one box, the VA's own words (describe items).
+export type AnswerFormat = "steps_say_doc" | "say_do_book" | "describe";
 // "done": the day's one attempt was submitted. Older rows may still say
 // passed / in_review / submitted / retake; every one of those counts as done.
 export type UnlockStatus = "locked" | "open" | "done";
@@ -193,7 +194,12 @@ export const ANSWER_BOXES: Record<AnswerFormat, { key: string; label: string; hi
     { key: "do", label: "Do", hint: "What you do in the EHR, texting or phone system (describe it)" },
     { key: "book", label: "Book", hint: "What you book, and when" },
   ],
+  describe: [{ key: "answer", label: "Your answer", hint: "In your own words" }],
 };
+
+// The boxes an item is answered in: describe items always have one.
+export const formatOf = (type: string, own: AnswerFormat | null | undefined, day: AnswerFormat): AnswerFormat =>
+  type === "describe" ? "describe" : (own ?? day);
 
 // What the VA's browser gets for one item. Display only: no answer keys.
 export type Feedback = { reason: string; missedSteps: string[]; repeatNext: boolean; ungraded: boolean };
@@ -207,7 +213,7 @@ export type ServedItem = {
   dayTitle: string;
   workflow: string;
   partTitle: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   format: AnswerFormat;
   stem: string;
   options: string[] | null; // already shuffled for this VA
@@ -225,7 +231,7 @@ export type ItemProgress = {
 
 // The item to show now: the first scenario not answered yet, or the repeat of
 // one just missed. Items already answered are never shown again.
-export function nextItem<S extends { id: string; type: "mc" | "situational" }>(
+export function nextItem<S extends { id: string; type: "mc" | "situational" | "describe" }>(
   scenarios: S[],
   items: ItemProgress[],
 ): { scenario: S; phase: "first" | "repeat"; item: ItemProgress | null } | null {
@@ -284,7 +290,7 @@ export function certificationRules(grading: unknown): CertificationRules {
 }
 
 export type GradedItem = {
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   first_score: number | null;
   repeat_score: number | null;
@@ -326,10 +332,11 @@ export function dayResult(items: GradedItem[], rules: CertificationRules) {
   const points = graded.reduce((n, i) => n + (i.first_score ?? 0), 0);
   const percent = max > 0 ? Math.round((points * 100) / max) : 0;
   const criticalErrors = items.filter((i) => i.critical_error).length;
-  const situational = items.filter((i) => i.type === "situational");
-  const repeatsBelow = situational.filter((i) => i.repeat_score !== null && i.repeat_score < 2).length;
-  const lowConfidence = situational.filter((i) => i.ai_confidence !== null && i.ai_confidence < rules.lowConfidenceBelow).length;
-  const ungraded = situational.filter((i) => i.first_score === null).length;
+  // Written answers (situational and describe) are graded by Claude.
+  const written = items.filter((i) => i.type !== "mc");
+  const repeatsBelow = written.filter((i) => i.repeat_score !== null && i.repeat_score < 2).length;
+  const lowConfidence = written.filter((i) => i.ai_confidence !== null && i.ai_confidence < rules.lowConfidenceBelow).length;
+  const ungraded = written.filter((i) => i.first_score === null).length;
 
   // Exact shares (79.6% is not 80%); `percent` is rounded for display only.
   const below = (p: number) => max === 0 || points * 100 < p * max;
@@ -367,12 +374,12 @@ export const percentOf = (points: number | string | null, max: number | null) =>
 // ---------------------------------------------------------------------------
 
 // Seconds an item normally takes before other VAs' times are known.
-const DEFAULT_SECONDS = { mc: 20, situational: 120 } as const;
+const DEFAULT_SECONDS = { mc: 20, situational: 120, describe: 90 } as const;
 const MIN_SAMPLES = 5;
 // "Much faster" = under a third of normal.
 export const FAST_RATIO = 1 / 3;
 
-export function normalSeconds(type: "mc" | "situational", samples: number[]): number {
+export function normalSeconds(type: "mc" | "situational" | "describe", samples: number[]): number {
   if (samples.length < MIN_SAMPLES) return DEFAULT_SECONDS[type];
   const sorted = [...samples].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);

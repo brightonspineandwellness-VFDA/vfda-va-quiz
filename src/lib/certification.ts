@@ -38,7 +38,7 @@ export const SOP_WAIT_FLAG_DAYS = 3;
 
 // One graded item of the workflow, after any VFDA override.
 export type EvidenceItem = {
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   first_score: number | null;
   repeat_score: number | null;
@@ -73,7 +73,7 @@ export function evaluateWorkflow(input: {
   const percent = max > 0 ? Math.round((points * 100) / max) : null;
 
   if (!input.allDone || !items.length) return { status: "pending", reason: "scenarios not finished yet", percent };
-  if (items.some((i) => i.type === "situational" && i.first_score === null)) {
+  if (items.some((i) => i.type !== "mc" && i.first_score === null)) {
     return { status: "pending", reason: "an answer needs VFDA to score it", percent };
   }
   if (items.some((i) => i.critical_error)) return { status: "coaching", reason: "critical error", percent };

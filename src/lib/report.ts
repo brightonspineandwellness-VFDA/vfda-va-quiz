@@ -8,7 +8,7 @@ import { RESULT_LABELS, type ResultLabel, type Trend } from "@/lib/va-flow";
 export type ReportItem = {
   code: string;
   workflow: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   first_score: number | null;
   repeat_score: number | null;
@@ -68,7 +68,7 @@ export function reportSections(r: AttemptReport) {
     r.fastFinish && "finished much faster than normal",
     r.items.some((i) => i.fast) && `${r.items.filter((i) => i.fast).length} item(s) answered much faster than normal`,
     r.pastes > 0 && `${r.pastes} paste(s) logged`,
-    r.items.some((i) => i.type === "situational" && i.first_score === null) && "an answer couldn't be graded automatically (needs review)",
+    r.items.some((i) => i.type !== "mc" && i.first_score === null) && "an answer couldn't be graded automatically (needs review)",
     r.items.some((i) => i.low_confidence) && "a low-confidence grade (VFDA reviews)",
     r.items.some((i) => i.overridden) && "a score was changed by VFDA",
   ].filter((f): f is string => !!f);

@@ -89,6 +89,12 @@ const PHASES = [
     title: "Scenario checks database changes (items needing review, System log)",
     after: "results-labels.sql",
   },
+  {
+    name: "day-rules",
+    starts: "20261103140000",
+    title: "Day rules database changes (per-day topics and item types, describe items)",
+    after: "scenario-checks.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

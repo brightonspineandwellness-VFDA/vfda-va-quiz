@@ -9,6 +9,7 @@ import "server-only";
 import type { createSessionClient } from "@/lib/supabase/server";
 import {
   ANSWER_BOXES,
+  formatOf,
   certificationRules,
   dayResult,
   withOverride,
@@ -25,7 +26,7 @@ const DAY_COLUMNS =
 type Scenario = {
   id: string;
   code: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   workflow: string;
   part_title: string;
@@ -46,7 +47,7 @@ export type ReviewItem = {
   id: string;
   code: string;
   workflow: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   first: ReviewAnswer;
   repeat: ReviewAnswer | null;
@@ -71,7 +72,7 @@ function answerParts(answer: unknown, scenario: Scenario | null, dayFormat: Answ
   if (!answer || typeof answer !== "object") return [];
   const a = answer as Record<string, unknown>;
   if (scenario?.type === "mc") return [{ label: `Picked ${String(a.choice ?? "?")}`, text: String(a.text ?? "") }];
-  const boxes = ANSWER_BOXES[scenario?.answer_format ?? dayFormat];
+  const boxes = ANSWER_BOXES[formatOf(scenario?.type ?? "situational", scenario?.answer_format, dayFormat)];
   return boxes.map((b) => ({ label: b.label, text: String(a[b.key] ?? "") }));
 }
 
@@ -144,7 +145,7 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
       criticalError: i.critical_error,
       criticalQuote: i.critical_quote,
       confidence: i.ai_confidence === null ? null : Number(i.ai_confidence),
-      needsReview: parent?.type === "situational" && !!i.first_answer && (i.first_score === null || !!first?.ungraded),
+      needsReview: !!parent && parent.type !== "mc" && !!i.first_answer && (i.first_score === null || !!first?.ungraded),
       seconds: i.time_per_item,
       fast: i.fast,
       pastes: Array.isArray(i.paste_log) ? i.paste_log.length : 0,

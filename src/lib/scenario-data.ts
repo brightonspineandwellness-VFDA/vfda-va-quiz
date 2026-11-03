@@ -23,7 +23,7 @@ export type ScenarioRow = {
   part: string;
   part_title: string;
   code: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   points: number;
   answer_format: string | null;
   stem: string;

@@ -4,6 +4,7 @@
 // with the office's accepted rules. Claude's part (src/lib/scenario-ai.ts) is
 // checked here too, so nothing malformed reaches the database.
 
+import type { ItemType } from "@/lib/day-rules";
 import { applies, MATRIX_COLUMNS, type MatrixRow, type Profile } from "@/lib/interview";
 
 export type MasterScenario = {
@@ -186,7 +187,7 @@ export type DraftScenario = {
   part: string;
   part_title: string;
   code: string;
-  type: "mc" | "situational";
+  type: ItemType;
   points: number;
   answer_format: string | null;
   stem: string;
@@ -288,9 +289,10 @@ export function correctResponseFromText(text: string, keys: string[] | null): Co
 }
 
 // ---------------------------------------------------------------------------
-// Card-first items: Claude's items for a day become drafts in the master's
-// slots (same codes, parts and points), matched by type and, where it says
-// so, by the master item it follows.
+// Card-first items: Claude's items for a day become drafts in the day's own
+// master slots (same codes, parts and points), matched by type and, where it
+// says so, by the master item it follows (one of the day's pool: its own, or
+// one moved in from another day by the day rules).
 // ---------------------------------------------------------------------------
 
 // Never about exact buttons or click paths: the VA says it in their own words.
@@ -298,7 +300,7 @@ export const BUTTON_WORDS = /\b(click(s|ed|ing)?|button(s)?)\b/i;
 
 export type CardItem = {
   based_on: string | null;
-  type: "mc" | "situational";
+  type: ItemType;
   workflow: string;
   part_title: string;
   stem: string;
@@ -314,17 +316,20 @@ export type CardItem = {
   review_error: string | null;
 };
 
-export function cardDrafts(items: CardItem[], masters: DraftScenario[]): DraftScenario[] {
-  const free = [...masters];
+export function cardDrafts(items: CardItem[], slots: DraftScenario[], pool: DraftScenario[] = slots): DraftScenario[] {
+  const free = [...slots];
   const take = (item: CardItem) => {
     let i = free.findIndex((m) => m.code === item.based_on && m.type === item.type);
     if (i < 0) i = free.findIndex((m) => m.type === item.type);
     return i < 0 ? undefined : free.splice(i, 1)[0];
   };
+  const used = new Set<string>();
   return items.map((item, n) => {
     const slot = take(item);
+    const base = pool.find((m) => m.code === item.based_on && m.type === item.type && !used.has(m.code));
+    if (base) used.add(base.code);
     return {
-      scenario_id: slot && slot.code === item.based_on ? slot.scenario_id : null,
+      scenario_id: base?.scenario_id ?? null,
       office_workflow_id: null,
       workflow: item.workflow,
       part: slot?.part ?? "A",
@@ -332,16 +337,17 @@ export function cardDrafts(items: CardItem[], masters: DraftScenario[]): DraftSc
       code: slot?.code ?? `C${n + 1}`,
       type: item.type,
       points: item.type === "mc" ? 1 : 2,
-      answer_format: slot?.answer_format ?? null,
+      answer_format: item.type === "describe" ? null : (slot?.answer_format ?? null),
       stem: item.stem,
       options: item.type === "mc" ? item.options : null,
       answer: item.type === "mc" ? item.answer : null,
-      correct_response: item.type === "situational" ? item.correct_response : null,
-      critical_fail: item.critical_fail,
-      escalation_level: item.escalation_level,
+      correct_response: item.type === "mc" ? null : item.correct_response,
+      critical_fail: item.type === "describe" ? null : item.critical_fail,
+      escalation_level: item.type === "describe" ? "none" : item.escalation_level,
       formula: null,
       missing_keys: [],
       options_rule: null,
+      // No immediate repeat for multiple choice or describe items.
       wants_repeat: item.type === "situational",
       position: slot?.position ?? n,
       source_card: item.source_card,

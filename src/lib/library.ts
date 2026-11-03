@@ -49,7 +49,7 @@ export type Scenario = {
   part: string;
   part_title: string;
   condition: string;
-  type: "mc" | "situational";
+  type: "mc" | "situational" | "describe";
   stem: string;
   options: string[] | null;
   options_rule: string | null;

@@ -1,0 +1,254 @@
+-- Per-day topic and item-type rules for building scenarios.
+--
+-- settings.day_rules: for each day, the cards it may be written from, its item
+-- types (multiple choice, situational, describe) and the topics it must never
+-- touch, plus where a master item that breaks its own day's rules moves.
+-- Editable here later; the app falls back to the same defaults
+-- (src/lib/day-rules.ts) when the row is missing. Existing day_rules are kept.
+--
+-- New item type "describe": a short question the VA answers in their own
+-- words, graded 0/1/2 against key points from the card. No repeat.
+--
+-- Days already built are rechecked from the app (System log, "Recheck built
+-- days against the day rules"), not here.
+--
+-- Safe to run more than once.
+
+alter table public.office_scenarios drop constraint if exists office_scenarios_type_check;
+alter table public.office_scenarios add constraint office_scenarios_type_check
+  check (type in ('mc', 'situational', 'describe'));
+
+insert into public.settings (key, value) values ('day_rules', $day_rules$
+{
+  "topics": {
+    "911": [
+      "\\b911\\b"
+    ],
+    "phone calls": [
+      "\\bphone calls?\\b",
+      "\\bcall(s|er|ers|ing)?\\b",
+      "\\bcalled (you|the office|in|back)\\b",
+      "\\bcallbacks?\\b",
+      "\\bvoicemails?\\b",
+      "\\bon the phone\\b",
+      "\\banswer(s|ed|ing)? the phone\\b",
+      "\\bphone (script|line)s?\\b",
+      "\\b(inbound|outbound) calls?\\b"
+    ],
+    "emergencies": [
+      "\\bemergenc(y|ies)\\b",
+      "\\burgent (symptoms?|care)\\b"
+    ],
+    "red flags": [
+      "\\bred[- ]flags?\\b",
+      "\\bchest pain\\b",
+      "\\bnumb(ness)?\\b",
+      "\\btingl\\w*",
+      "\\b(bladder|bowel) (control|problems?)\\b",
+      "\\bcan'?t feel\\b"
+    ],
+    "escalating a patient": [
+      "\\bescalat\\w*"
+    ],
+    "care plans": [
+      "\\bcare plans?\\b",
+      "\\btreatment plans?\\b",
+      "\\bplan of care\\b"
+    ],
+    "report of findings": [
+      "\\breport of findings\\b",
+      "\\bROF\\b"
+    ],
+    "scheduling cadence": [
+      "\\bcadence\\b",
+      "\\bvisit frequency\\b",
+      "\\b\\w+ (times|visits) (a|per) week\\b"
+    ],
+    "billing": [
+      "\\bbill(s|ed|ing)?\\b",
+      "\\binvoices?\\b",
+      "\\bpayments?\\b",
+      "\\bbalances?\\b",
+      "\\bcharges?\\b",
+      "\\bfees?\\b",
+      "\\bcosts?\\b",
+      "\\bprices?\\b"
+    ],
+    "insurance": [
+      "\\binsurance\\b",
+      "\\binsurers?\\b",
+      "\\bco-?pays?\\b",
+      "\\bdeductibles?\\b",
+      "\\bclaims?\\b",
+      "\\bEOBs?\\b",
+      "\\bcoverage\\b",
+      "\\bmedicare\\b"
+    ],
+    "upset patients": [
+      "\\bupset\\b",
+      "\\bangry\\b",
+      "\\bfrustrat\\w*",
+      "\\byell\\w*",
+      "\\brude\\b"
+    ],
+    "complaints": [
+      "\\bcomplain\\w*"
+    ],
+    "billing disputes": [
+      "\\bdisput\\w*",
+      "\\boverchar\\w*",
+      "\\brefunds?\\b",
+      "\\b(wrong|surprise) (bill|charge)s?\\b"
+    ]
+  },
+  "default": {
+    "types": [
+      "mc",
+      "describe"
+    ],
+    "banned": [
+      "phone calls",
+      "emergencies",
+      "911",
+      "red flags",
+      "care plans",
+      "report of findings"
+    ]
+  },
+  "days": {
+    "W1D1": {
+      "focus": "Basics of chiropractic and VA onboarding: what this office does and why, its mission and values, the VA's role.",
+      "sources": [
+        "Basics of Chiropractic",
+        "VA Onboarding"
+      ],
+      "standards": false,
+      "types": [
+        "mc",
+        "describe"
+      ],
+      "banned": [
+        "phone calls",
+        "emergencies",
+        "911",
+        "red flags",
+        "escalating a patient",
+        "care plans",
+        "report of findings",
+        "scheduling cadence",
+        "billing",
+        "insurance"
+      ]
+    },
+    "W1D2": {
+      "focus": "Using the office's EHR, described in the VA's own words.",
+      "types": [
+        "mc",
+        "situational",
+        "describe"
+      ],
+      "banned": [
+        "phone calls",
+        "emergencies",
+        "911",
+        "red flags",
+        "care plans",
+        "report of findings"
+      ]
+    },
+    "W1D4": {
+      "focus": "Scheduling cadence, care plans and report of findings visits.",
+      "types": [
+        "mc",
+        "situational",
+        "describe"
+      ],
+      "banned": [
+        "phone calls",
+        "emergencies",
+        "911",
+        "red flags"
+      ]
+    },
+    "W1D5": {
+      "focus": "New patient and re-exam checklists, care plans and report of findings visits.",
+      "types": [
+        "mc",
+        "situational",
+        "describe"
+      ],
+      "banned": [
+        "phone calls",
+        "emergencies",
+        "911",
+        "red flags"
+      ]
+    },
+    "W2D1": {
+      "focus": "Basic phone handling: routine inbound and outbound calls, booking, rescheduling, voicemail, common questions.",
+      "types": [
+        "mc",
+        "situational",
+        "describe"
+      ],
+      "banned": [
+        "upset patients",
+        "emergencies",
+        "911",
+        "red flags",
+        "escalating a patient",
+        "complaints",
+        "billing disputes",
+        "care plans",
+        "report of findings"
+      ]
+    },
+    "W2D2": {
+      "focus": "Challenging and advanced phone handling: upset patients, emergencies and 911, red flags, escalation, complaints, billing disputes on the phone.",
+      "types": [
+        "mc",
+        "situational",
+        "describe"
+      ],
+      "banned": [
+        "care plans",
+        "report of findings"
+      ]
+    }
+  },
+  "moves": [
+    {
+      "topics": [
+        "upset patients",
+        "emergencies",
+        "911",
+        "red flags",
+        "escalating a patient",
+        "complaints",
+        "billing disputes"
+      ],
+      "to": "W2D2"
+    },
+    {
+      "topics": [
+        "phone calls"
+      ],
+      "to": "W2D1"
+    },
+    {
+      "topics": [
+        "report of findings"
+      ],
+      "to": "W1D5"
+    },
+    {
+      "topics": [
+        "care plans",
+        "scheduling cadence"
+      ],
+      "to": "W1D4"
+    }
+  ]
+}
+$day_rules$::jsonb)
+on conflict (key) do nothing;
