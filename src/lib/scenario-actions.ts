@@ -12,8 +12,17 @@ import { getCurrentUser } from "@/lib/auth";
 import type { ActionResult } from "@/lib/interview-actions";
 import { GRAY_DAY } from "@/lib/card-map";
 import { checkBuiltItem, keyPoints, parseDayRules } from "@/lib/day-rules";
-import { regenerateCardItem, writeVariants, type CheckFailure } from "@/lib/scenario-ai";
-import { checkMc, correctResponseFromText, placeholdersIn, type CorrectResponse } from "@/lib/scenario-build";
+import type { InterviewQuestion } from "@/lib/interview";
+import { buildOptions, regenerateCardItem, writeVariants, type CheckFailure } from "@/lib/scenario-ai";
+import {
+  checkMc,
+  correctResponseFromText,
+  fill,
+  placeholdersIn,
+  ruleFromText,
+  type CorrectResponse,
+  type DraftScenario,
+} from "@/lib/scenario-build";
 import {
   buildOfficeDay,
   claimBuild,
@@ -22,6 +31,7 @@ import {
   loadOfficeBuild,
   logCheckFailures,
   recheckBuiltDays,
+  refillOffice,
   versionHasAttempts,
 } from "@/lib/scenario-builder";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
@@ -338,5 +348,80 @@ export async function recheckDayRules(): Promise<ActionResult<string>> {
     };
   } catch (e) {
     return fail(`Couldn't recheck: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// The rule slot a missing {KEY} is answered in: the key itself, or for a
+// derived placeholder (e.g. NOT_OFFERED_ITEM) the rule it comes from.
+async function slotFor(key: string) {
+  const db = createAdminClient();
+  const { data: own } = await db.from("rule_slots").select("key, answer_type").eq("key", key).maybeSingle();
+  if (own) return own as { key: string; answer_type: InterviewQuestion["answer_type"] };
+  const { data: setting } = await db.from("settings").select("value").eq("key", "derived_placeholders").maybeSingle();
+  const derived = ((setting?.value ?? []) as { key: string; from_key: string }[]).find((d) => d.key === key);
+  if (!derived) return null;
+  const { data: from } = await db.from("rule_slots").select("key, answer_type").eq("key", derived.from_key).maybeSingle();
+  return (from as { key: string; answer_type: InterviewQuestion["answer_type"] } | null) ?? null;
+}
+
+// Answers a missing rule from the scenario review screen: an accepted office
+// rule (source vfda), then every scenario of the office that waits for it is
+// refilled (no rebuild). Options built from a rule and repeat variants follow
+// after the response.
+export async function answerMissingRule(officeId: string, key: string, text: string): Promise<ActionResult<string>> {
+  const user = await admin();
+  if (!user) return fail("VFDA admins only.");
+  if (!UUID.test(officeId) || !/^[A-Z][A-Z0-9_]{0,99}$/.test(key) || typeof text !== "string" || text.length > 20000) return fail("Invalid request.");
+  const slot = await slotFor(key);
+  if (!slot) return fail(`{${key}} isn't an office rule: edit the scenario instead.`);
+  const parsed = ruleFromText(slot, text);
+  if ("error" in parsed) return fail(parsed.error);
+
+  const supabase = await createSessionClient();
+  const now = new Date().toISOString();
+  const answer = { rule: parsed.value, source: "vfda", status: "accepted", vfda_reviewed_by: user.id, vfda_reviewed_at: now };
+  // One answer per rule without a card (doctor, VFDA or default): VFDA's replaces it.
+  const { data: existing } = await supabase
+    .from("office_rules")
+    .select("id")
+    .eq("office_id", officeId)
+    .eq("rule_slot_key", slot.key)
+    .is("source_document_id", null)
+    .maybeSingle();
+  const { error } = existing
+    ? await supabase.from("office_rules").update(answer).eq("id", existing.id)
+    : await supabase.from("office_rules").insert({ office_id: officeId, rule_slot_key: slot.key, ...answer });
+  if (error) return fail("Couldn't save the rule. Try again.");
+
+  const db = createAdminClient();
+  const { changed, complete, values } = await refillOffice(db, officeId);
+  if (complete.length) after(() => completeRefilled(complete, values));
+  const from = slot.key === key ? "" : ` (as ${slot.key})`;
+  return { ok: true, data: `Saved${from}. ${changed.length} scenario${changed.length === 1 ? "" : "s"} refilled.` };
+}
+
+// Scenarios that just got all their rules: multiple choice options built
+// from their rule, and a repeat variant for situational items.
+async function completeRefilled(ids: string[], values: Record<string, string>) {
+  const db = createAdminClient();
+  const { data: rows } = await db.from("office_scenarios").select("id, code, type, stem, options, scenario_id, is_repeat_variant").in("id", ids);
+  const ruleList = Object.entries(values).map(([key, value]) => ({ key, value }));
+  for (const row of rows ?? []) {
+    if (row.is_repeat_variant) continue;
+    try {
+      if (row.type === "mc" && !row.options && row.scenario_id) {
+        const { data: master } = await db.from("scenarios").select("options_rule, answer").eq("id", row.scenario_id).maybeSingle();
+        if (!master?.options_rule) continue;
+        const missing = new Set<string>();
+        const draft = { code: row.code, stem: row.stem, options_rule: fill(master.options_rule, values, missing), answer: fill(master.answer, values, missing) };
+        if (missing.size) continue;
+        const built = (await buildOptions([draft as DraftScenario], ruleList)).get(row.code);
+        if (built) await db.from("office_scenarios").update({ options: built.options, answer: built.answer }).eq("id", row.id).neq("test_status", "live");
+      } else if (row.type === "situational") {
+        await addRepeat(row.id);
+      }
+    } catch (e) {
+      console.error("Couldn't finish a refilled scenario", row.id, e);
+    }
   }
 }

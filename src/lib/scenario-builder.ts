@@ -36,6 +36,8 @@ import {
 import {
   cardDrafts,
   fillMaster,
+  missingSlots,
+  refillRow,
   responseBoxes,
   officeDays,
   placeholderValues,
@@ -44,6 +46,7 @@ import {
   type DayKind,
   type DerivedPlaceholder,
   type DraftScenario,
+  type FillableRow,
   type MasterScenario,
   type RuleForBuild,
 } from "@/lib/scenario-build";
@@ -400,9 +403,6 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
       } else {
         // No card for this day: the master items it may use, filled with the office's rules.
         drafts = fallbackDrafts(slots, pool);
-        if (drafts.length < slots.length) {
-          log({ item: "day", field: "items", value: `${drafts.length} of ${slots.length}`, reason: "not enough master items keep the day rules; map a card to this day to fill the rest" });
-        }
         // Options built from a rule: only once every rule they use is there.
         const toBuild = drafts.filter((d) => d.options_rule && d.missing_keys.length === 0);
         const built = await buildOptions(toBuild, ruleList);
@@ -415,6 +415,19 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
             d.options = null;
           }
         }
+      }
+      // Fewer items than the schedule's count (the day rules moved some away,
+      // or Claude wrote too few): extra items from the day's master bank and cards.
+      const short = missingSlots(slots, drafts);
+      if (short.length) {
+        log({
+          item: "day",
+          field: "items",
+          value: `${drafts.length} of ${slots.length}`,
+          reason: `fewer items than the schedule's count: ${short.length} more written from the day's master bank${cards.length ? " and cards" : ""}`,
+        });
+        const extra = await writeCardDay({ day: entry.day, slots: short, pool, cards, workflows, standards, boxes, rules, existing: drafts.map((d) => d.stem), log });
+        drafts = [...drafts, ...cardDrafts(extra, short, [])];
       }
     } else if (entry.kind === "gray" && cards.length) {
       // Gray cards: 1-2 items each, patient-facing or risky cards first.
@@ -587,4 +600,44 @@ export async function recheckBuiltDays(db: Db) {
     }
   }
   return { flagged, reopened, started };
+}
+
+// The office's rule values, as a build fills them (accepted rules plus
+// settings.derived_placeholders).
+export async function officeValues(db: Db, officeId: string) {
+  const [rules, settings] = await Promise.all([
+    db.from("office_rules").select("rule_slot_key, rule, source_document_id, source").eq("office_id", officeId).eq("status", "accepted"),
+    db.from("settings").select("key, value").eq("key", "derived_placeholders"),
+  ]);
+  return placeholderValues(
+    (must(rules) ?? []) as RuleForBuild[],
+    (settingOf(must(settings) ?? [], "derived_placeholders") ?? []) as DerivedPlaceholder[],
+    officeId,
+  );
+}
+
+// Every scenario of the office still waiting for rules, refilled with the
+// rules it has now (no rebuild). Live scenarios never wait for rules.
+// Returns the scenarios changed and those now complete.
+export async function refillOffice(db: Db, officeId: string) {
+  const values = await officeValues(db, officeId);
+  const rows =
+    must(
+      await db
+        .from("office_scenarios")
+        .select("id, stem, options, answer, correct_response, critical_fail, missing_keys, test_status")
+        .eq("office_id", officeId)
+        .neq("test_status", "live"),
+    ) ?? [];
+  const changed: string[] = [];
+  const complete: string[] = [];
+  for (const row of rows) {
+    if (!row.missing_keys?.length) continue;
+    const patch = refillRow(row as FillableRow, values);
+    if (!patch) continue;
+    must(await db.from("office_scenarios").update(patch).eq("id", row.id).neq("test_status", "live"));
+    changed.push(row.id);
+    if (!patch.missing_keys.length) complete.push(row.id);
+  }
+  return { changed, complete, values };
 }

@@ -5,7 +5,7 @@
 // checked here too, so nothing malformed reaches the database.
 
 import type { ItemType } from "@/lib/day-rules";
-import { applies, MATRIX_COLUMNS, type MatrixRow, type Profile } from "@/lib/interview";
+import { applies, checkAnswerValue, MATRIX_COLUMNS, type InterviewQuestion, type MatrixRow, type Profile } from "@/lib/interview";
 
 export type MasterScenario = {
   id: string;
@@ -178,6 +178,64 @@ export function fill<T>(value: T, values: Record<string, string>, missing: Set<s
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fill(v, values, missing)])) as T;
   }
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Answering a missing rule from the review screen: the typed answer as a rule
+// value, and a built scenario refilled once its rules are there.
+// ---------------------------------------------------------------------------
+
+// One box of text as the slot's answer type (a list: one item per line).
+// Tables (matrix) are answered on the Cards & rules page.
+export function ruleFromText(slot: Pick<InterviewQuestion, "key" | "answer_type">, text: string): { value: unknown } | { error: string } {
+  const t = text.trim();
+  if (!t) return { error: "Type the office's answer first." };
+  let value: unknown;
+  switch (slot.answer_type) {
+    case "matrix":
+      return { error: "This rule is a table: answer it on the Cards & rules page." };
+    case "list":
+      value = t.split("\n").map((l) => l.replace(/^\s*[-•*]\s*/, "").trim()).filter(Boolean);
+      break;
+    case "yesno":
+      value = t.toLowerCase();
+      break;
+    case "upload":
+      value = { text: t, links: [] };
+      break;
+    default:
+      value = t;
+  }
+  if (PLACEHOLDER_TEST.test(JSON.stringify(value))) return { error: "The answer can't contain {PLACEHOLDERS}." };
+  const problem = checkAnswerValue(slot as InterviewQuestion, value);
+  return problem ? { error: problem } : { value };
+}
+
+const PLACEHOLDER_TEST = /\{[A-Z][A-Z0-9_]*\}/;
+
+export type FillableRow = {
+  stem: string;
+  options: string[] | null;
+  answer: string | null;
+  correct_response: CorrectResponse | null;
+  critical_fail: string | null;
+  missing_keys: string[];
+};
+
+// Every {KEY} the values now cover is filled in; null when nothing changed.
+export function refillRow(row: FillableRow, values: Record<string, string>): FillableRow | null {
+  if (!row.missing_keys.some((k) => values[k] !== undefined)) return null;
+  const missing = new Set<string>();
+  const out: FillableRow = {
+    stem: fill(row.stem, values, missing),
+    options: fill(row.options, values, missing),
+    answer: fill(row.answer, values, missing),
+    correct_response: fill(row.correct_response, values, missing),
+    critical_fail: fill(row.critical_fail, values, missing),
+    missing_keys: [],
+  };
+  out.missing_keys = [...missing].sort();
+  return out;
 }
 
 export type DraftScenario = {
@@ -356,6 +414,21 @@ export function cardDrafts(items: CardItem[], slots: DraftScenario[], pool: Draf
       review_error: item.review_error,
     };
   });
+}
+
+// The day's own slots not filled yet, when it has fewer items than its
+// schedule count: the types still short first, never a code already used.
+export function missingSlots(slots: DraftScenario[], drafts: { code: string; type: string }[]): DraftScenario[] {
+  const gap = slots.length - drafts.length;
+  if (gap <= 0) return [];
+  const used = new Set(drafts.map((d) => d.code));
+  const free = slots.filter((s) => !used.has(s.code));
+  const out: DraftScenario[] = [];
+  const short = (t: string) =>
+    slots.filter((s) => s.type === t).length - drafts.filter((d) => d.type === t).length - out.filter((o) => o.type === t).length;
+  for (const s of free) if (out.length < gap && short(s.type) > 0) out.push(s);
+  for (const s of free) if (out.length < gap && !out.includes(s)) out.push(s);
+  return out;
 }
 
 // The boxes a correct response is split into for this day (e.g. Say/Do/Book),

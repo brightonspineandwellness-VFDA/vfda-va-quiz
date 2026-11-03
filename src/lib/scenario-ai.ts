@@ -122,6 +122,17 @@ answer format, the mix of multiple choice and situational items, difficulty).
   the VA must get approval first, otherwise "none".
 - Fake patients only: made-up first names; no real people, dates of birth, phone numbers, emails, insurance or card numbers.`;
 
+// A day with no card: extra items are written from its master bank instead.
+export const BANK_SOURCE = "Master bank";
+const BANK_RULES = `Write from this day's master bank (the master items below) and the VFDA standards: new items on the same
+skills and the same office rules, in new situations with new fake patients. Never copy a master item.
+- source_card: "${BANK_SOURCE}"; source_quote: the code of the master item the new item is built on.
+- Never write about exact buttons, menus or click paths; never invent office policy.
+- Multiple choice: 4 options (text only, no A-D letters), one right, realistic decoys, right one at a random position.
+- critical_fail only where something must never happen; escalation_level "immediate" for those, "approval" when
+  the VA must get approval first, otherwise "none".
+- Fake patients only: made-up first names; no real people, dates of birth, phone numbers, emails, insurance or card numbers.`;
+
 const allowedNames = (cards: CardSource[]) =>
   `Allowed card names (source_card must be exactly one of these):\n${[...cards.map((c) => c.title), STANDARDS_SOURCE].map((n) => `- ${n}`).join("\n")}`;
 
@@ -137,6 +148,8 @@ type ItemContext = {
   boxes: string[] | null;
   // Gray card items: written answers (no multiple choice), plain step lists.
   gray: boolean;
+  // No card: items come from the master bank (no source check against cards).
+  bank?: boolean;
   sources: string;
   log: LogFailure;
 };
@@ -227,6 +240,7 @@ function toCardItem(i: RawCardItem, card: CardSource | null, boxes: string[] | n
 function checkCardItem(i: RawCardItem, ctx: ItemContext): { item: CardItem } | { failure: Omit<CheckFailure, "item"> } {
   const bad = checkContent(i, ctx);
   if (bad) return { failure: bad };
+  if (ctx.bank) return { item: toCardItem({ ...i, source_card: BANK_SOURCE, source_quote: i.source_quote.trim().slice(0, 200) }, null, ctx.boxes) };
   const src = resolveSource(i.source_card, i.source_quote, ctx.cards, ctx.standards);
   if (!src.ok) return { failure: { field: src.field, value: shown(src.value), reason: src.reason } };
   return { item: toCardItem({ ...i, source_card: src.source_card, source_quote: src.source_quote }, src.card, ctx.boxes) };
@@ -261,7 +275,7 @@ async function rewriteItem(raw: RawCardItem, failure: Omit<CheckFailure, "item">
     content: [
       {
         type: "text",
-        text: `${CARD_RULES}
+        text: `${ctx.bank ? BANK_RULES : CARD_RULES}
 
 ${ctx.sources}
 
@@ -345,6 +359,9 @@ const typeCounts = (items: { type: ItemType }[]) => ({
 // already in the day's types), following the master items it may use
 // (`pool`: its own that keep the day rules, plus any moved in from other
 // days); slots the pool doesn't cover are new items from the day's cards.
+// With `existing`, only the items still missing are written (`slots` are the
+// missing ones), different from those; with no cards they come from the
+// day's master bank.
 export async function writeCardDay(input: {
   day: { code: string; title: string; answer_format: string };
   slots: DraftScenario[];
@@ -354,23 +371,41 @@ export async function writeCardDay(input: {
   standards: { key: string; value: string }[];
   boxes: string[] | null;
   rules: DayRules;
+  existing?: string[];
   log?: LogFailure;
 }): Promise<CardItem[]> {
   const want = typeCounts(input.slots);
   const total = input.slots.length;
+  const bank = !input.cards.length;
   if (mock()) return mockCardDay(input);
   const log = input.log ?? (() => {});
-  const sources = sourcesBlock(input.cards, input.workflows, input.standards, input.day.code, input.rules);
-  const ctx: ItemContext = { day: input.day.code, rules: input.rules, cards: input.cards, standards: input.standards, boxes: input.boxes, gray: false, sources, log };
+  const sources = bank
+    ? `${input.workflows.length ? `<workflows>\n${JSON.stringify(input.workflows, null, 1)}\n</workflows>\n\n` : ""}<vfda_standards>
+${rulesBlock(input.standards)}
+</vfda_standards>
 
-  const text = `Write the test for training day ${input.day.code} "${input.day.title}" at this office: exactly ${total} items:
+<day_rules>
+${rulesPrompt(input.day.code, input.rules, [])}
+</day_rules>`
+    : sourcesBlock(input.cards, input.workflows, input.standards, input.day.code, input.rules);
+  const ctx: ItemContext = { day: input.day.code, rules: input.rules, cards: input.cards, standards: input.standards, boxes: input.boxes, gray: false, bank, sources, log };
+
+  const text = `${
+    input.existing
+      ? `Training day ${input.day.code} "${input.day.title}" at this office has ${input.existing.length} items (below) and needs ${total} more: write exactly ${total} new items, different from those:`
+      : `Write the test for training day ${input.day.code} "${input.day.title}" at this office: exactly ${total} items:`
+  }
 ${countText(want)}.
-Follow the master items below where they fit (based_on = their code); write every other item new (based_on null)
-from this day's own cards.
+${
+  bank
+    ? "Build each on one of the master items below (based_on null), from this day's master bank."
+    : `Follow the master items below where they fit (based_on = their code); write every other item new (based_on null)
+from this day's own cards.`
+}
 ${want.situational ? (input.boxes ? `Situational correct responses are split into the boxes ${input.boxes.join(", ")} (each with steps).` : "Situational correct responses are a plain list of steps (box null).") : ""}
 
-${CARD_RULES}
-
+${bank ? BANK_RULES : CARD_RULES}
+${input.existing ? `\n<items_already_in_the_day>\n${input.existing.map((s) => `- ${s}`).join("\n")}\n</items_already_in_the_day>\n` : ""}
 <master_items>
 ${
   input.pool
@@ -511,11 +546,17 @@ function mockItem(card: CardSource, type: ItemType, stem: string, basedOn: Draft
   };
 }
 
-// Mock: the pool's items first, in the slots' types; new items for the rest.
-function mockCardDay(input: { slots: DraftScenario[]; pool: DraftScenario[]; cards: CardSource[] }): CardItem[] {
-  const free = [...input.pool];
+// Mock: the pool's items first, in the slots' types; new items for the rest
+// (extra items: only new ones, from the master bank when there's no card).
+function mockCardDay(input: { slots: DraftScenario[]; pool: DraftScenario[]; cards: CardSource[]; existing?: string[]; day: { code: string } }): CardItem[] {
+  const bank: CardSource = { id: "", title: BANK_SOURCE, text: input.pool[0]?.code ?? input.day.code, workflow: null };
+  const free = input.existing ? [] : [...input.pool];
   return input.slots.map((slot, n) => {
-    const card = input.cards[n % input.cards.length];
+    const card = input.cards.length ? input.cards[n % input.cards.length] : bank;
+    if (input.existing) {
+      const item = mockItem(card, slot.type, `${input.day.code}: extra question ${n + 1} (${card.title})`, null);
+      return card === bank ? { ...item, source_document_id: null } : item;
+    }
     const k = free.findIndex((m) => m.type === slot.type);
     if (k < 0) return mockItem(card, slot.type, `${card.title}: question ${n + 1}`, null);
     const m = free.splice(k, 1)[0];

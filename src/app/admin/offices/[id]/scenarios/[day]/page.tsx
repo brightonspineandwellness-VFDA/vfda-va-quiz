@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { dayState, KIND_LABELS, TONES } from "@/components/scenarios/day-state";
+import { Blanks, RuleAnswerBox } from "@/components/scenarios/missing-rules";
 import { AutoRefresh, ScenarioEditor } from "@/components/scenarios/scenario-controls";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
@@ -9,7 +10,7 @@ import { requireRole } from "@/lib/auth";
 import { approveDay, buildDay, regenerateScenario, removeScenario, reopenDay } from "@/lib/scenario-actions";
 import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import { correctResponseToText, LETTERS, type CorrectResponse } from "@/lib/scenario-build";
-import { loadScenarioDay, rebuildNote, type ScenarioRow } from "@/lib/scenario-data";
+import { loadScenarioDay, rebuildNote, type MissingRule, type ScenarioRow } from "@/lib/scenario-data";
 
 export const maxDuration = 300;
 
@@ -41,7 +42,7 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
   if (!UUID.test(id) || !DAY_CODE.test(day)) notFound();
   const data = await loadScenarioDay(id, day);
   if (!data) notFound();
-  const { office, summary, rows, masters } = data;
+  const { office, summary, rows, masters, missing } = data;
   const state = dayState(summary);
   const approved = summary.approved;
   const repeatOf = (r: ScenarioRow) => rows.find((x) => x.parent_scenario_id === r.id);
@@ -56,6 +57,8 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
       master={r.scenario_id ? (masters.get(r.scenario_id) as Master | undefined) : undefined}
       repeat={repeatOf(r)}
       locked={approved}
+      officeId={office.id}
+      missing={missing.filter((m) => r.missing_keys.includes(m.key))}
     />
   );
 
@@ -102,6 +105,26 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
         </p>
       )}
 
+      {missing.length > 0 && !approved && (
+        <section className="flex flex-col gap-3 rounded-lg border-2 border-amber-600/60 p-3 dark:border-amber-400/60">
+          <h2 className="text-lg font-semibold text-amber-800 dark:text-amber-300">
+            {missing.length} office rule{missing.length > 1 ? "s" : ""} missing
+          </h2>
+          <p className="text-sm">
+            Type the office&rsquo;s answer: it&rsquo;s saved as an accepted rule and fills every scenario of this office that
+            uses it, without a rebuild.
+          </p>
+          <ul className="flex flex-col gap-3">
+            {missing.map((m) => (
+              <li key={m.key} className="flex flex-col gap-1">
+                <RuleAnswerBox officeId={office.id} rule={m} />
+                <span className="text-xs text-foreground/60">Used by {m.items.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {review.length > 0 && (
         <section className="flex flex-col gap-3 rounded-lg border-2 border-red-700/60 p-3 dark:border-red-400/60">
           <h2 className="text-lg font-semibold text-red-700 dark:text-red-400">
@@ -126,7 +149,21 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
   );
 }
 
-function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Master; repeat?: ScenarioRow; locked: boolean }) {
+function Item({
+  row,
+  master,
+  repeat,
+  locked,
+  officeId,
+  missing,
+}: {
+  row: ScenarioRow;
+  master?: Master;
+  repeat?: ScenarioRow;
+  locked: boolean;
+  officeId: string;
+  missing: MissingRule[];
+}) {
   const editable = (r: ScenarioRow) =>
     !locked && (
       <ScenarioEditor
@@ -167,9 +204,21 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
         {row.edited_by_vfda && " · edited by VFDA"}
       </p>
       {row.missing_keys.length > 0 && (
-        <p className="text-sm text-amber-700 dark:text-amber-400">
-          Needs office rules: {row.missing_keys.join(", ")}
-        </p>
+        <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 p-2 dark:border-amber-400/50">
+          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+            Needs office rules: {row.missing_keys.map((k) => `{${k}}`).join(", ")}
+          </p>
+          {!locked && (
+            <>
+              {missing.map((m) => (
+                <RuleAnswerBox key={m.key} officeId={officeId} rule={m} />
+              ))}
+              <div>
+                <ActionButton action={removeScenario.bind(null, row.id)} label="Remove from this office" pendingLabel="Removing…" />
+              </div>
+            </>
+          )}
+        </div>
       )}
       <div className="grid gap-3 md:grid-cols-2">
         {row.source_card && (
@@ -188,7 +237,9 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
         )}
         <div className={`flex flex-col gap-1 text-sm ${master || row.source_card ? "" : "md:col-span-2"}`}>
           <p className="font-medium">This office</p>
-          <p className="whitespace-pre-line">{row.stem}</p>
+          <p className="whitespace-pre-line">
+            <Blanks text={row.stem} />
+          </p>
           {row.type === "mc" &&
             (row.options ? <Options options={row.options} answer={row.answer} /> : <p className="text-amber-700 dark:text-amber-300">No options yet</p>)}
         </div>
@@ -196,16 +247,20 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
       {row.type === "describe" && (
         <div className="text-sm">
           <p className="font-medium">Key points (graded 0–2 on the VA&rsquo;s own words; no repeat)</p>
-          <pre className="whitespace-pre-wrap font-sans">{correctResponseToText(row.correct_response)}</pre>
+          <pre className="whitespace-pre-wrap font-sans">
+            <Blanks text={correctResponseToText(row.correct_response)} />
+          </pre>
         </div>
       )}
       {row.type === "situational" && (
         <div className="text-sm">
           <p className="font-medium">Correct response</p>
-          <pre className="whitespace-pre-wrap font-sans">{correctResponseToText(row.correct_response)}</pre>
+          <pre className="whitespace-pre-wrap font-sans">
+            <Blanks text={correctResponseToText(row.correct_response)} />
+          </pre>
           {row.critical_fail && (
             <p>
-              <span className="font-medium">Critical fail:</span> {row.critical_fail}
+              <span className="font-medium">Critical fail:</span> <Blanks text={row.critical_fail} />
             </p>
           )}
         </div>
@@ -235,7 +290,7 @@ function Options({ options, answer }: { options: string[]; answer: string | null
     <ol className="flex flex-col gap-0.5">
       {options.map((o, i) => (
         <li key={i} className={LETTERS[i] === answer ? "font-medium text-green-700 dark:text-green-400" : ""}>
-          {LETTERS[i]}) {o}
+          {LETTERS[i]}) <Blanks text={o} />
           {LETTERS[i] === answer && " ✓"}
         </li>
       ))}

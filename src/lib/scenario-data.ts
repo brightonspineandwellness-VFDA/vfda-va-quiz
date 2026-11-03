@@ -19,6 +19,10 @@ export type OfficeDayRow = {
   live_version: number | null;
 };
 
+// A missing {KEY} and the rule that answers it (the key's own slot, or the
+// rule a derived placeholder comes from).
+export type MissingRule = { key: string; slot: string | null; question: string; answerType: string | null; items: string[] };
+
 // A VA's (not archived) attempt at a day, on the version they started.
 export type TakenBy = { name: string; version: number };
 
@@ -150,6 +154,7 @@ export async function loadScenarioDay(officeId: string, day: string) {
     .order("code");
   const rows = (data ?? []) as ScenarioRow[];
   const masterIds = [...new Set(rows.map((r) => r.scenario_id).filter((x): x is string => !!x))];
+  const missing = await missingRules(rows.filter((r) => !r.is_repeat_variant && r.version === "A"));
   const { data: masters } = masterIds.length
     ? await supabase.from("scenarios").select("id, stem, options, options_rule, answer, correct_response, critical_fail").in("id", masterIds)
     : { data: [] };
@@ -158,7 +163,30 @@ export async function loadScenarioDay(officeId: string, day: string) {
     summary,
     rows,
     masters: new Map((masters ?? []).map((m) => [m.id as string, m])),
+    missing,
   };
+}
+
+// Every key the day's scenarios still miss, in order, with the items using it.
+async function missingRules(rows: ScenarioRow[]): Promise<MissingRule[]> {
+  const keys = [...new Set(rows.flatMap((r) => r.missing_keys))].sort();
+  if (!keys.length) return [];
+  const db = createAdminClient();
+  const { data: setting } = await db.from("settings").select("value").eq("key", "derived_placeholders").maybeSingle();
+  const derived = new Map(((setting?.value ?? []) as { key: string; from_key: string }[]).map((d) => [d.key, d.from_key]));
+  const slotKeys = [...new Set(keys.flatMap((k) => [k, derived.get(k)].filter((x): x is string => !!x)))];
+  const { data: slots } = await db.from("rule_slots").select("key, question, answer_type").in("key", slotKeys);
+  const slotOf = new Map((slots ?? []).map((s) => [s.key as string, s as { key: string; question: string; answer_type: string }]));
+  return keys.map((key) => {
+    const slot = slotOf.get(key) ?? slotOf.get(derived.get(key) ?? "") ?? null;
+    return {
+      key,
+      slot: slot?.key ?? null,
+      question: slot ? (slot.key === key ? slot.question : `${slot.question} (${key} is picked from ${slot.key})`) : "",
+      answerType: slot?.answer_type ?? null,
+      items: rows.filter((r) => r.missing_keys.includes(key)).map((r) => r.code),
+    };
+  });
 }
 
 // "Melle VA already took version 1; this rebuild will be version 2 for new
