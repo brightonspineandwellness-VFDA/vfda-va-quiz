@@ -1,5 +1,5 @@
--- DEMO ONLY: gives the demo office live scenarios for W1D1 and W1D2 (versions
--- A and B, with a repeat variant for every situational item), so the demo VA
+-- DEMO ONLY: gives the demo office live scenarios for W1D1 and W1D2 (with a
+-- repeat variant for every situational item), so the demo VA
 -- can try the Today page and the scenario screen before the scenario builder
 -- (Phase 4) exists. {PLACEHOLDERS} are left as they are; repeat variants are
 -- the master scenario with "(Repeat)" in front.
@@ -11,9 +11,9 @@
 -- Fake data only: no real patients, logins or card numbers.
 --
 -- Then, as the demo VA: Today → "Mark today's cards done" → Go to today's
--- scenarios. Grading situational answers needs ANTHROPIC_API_KEY (and credit);
--- without it, those items are saved as ungraded and the day goes to VFDA review.
--- As VFDA: Admin → VA training to accept proof of work and decide reviews.
+-- scenarios. Grading situational answers needs ANTHROPIC_API_KEY (and credit),
+-- or AI_MODE=mock; otherwise those items are saved as ungraded for VFDA to
+-- score. As VFDA: Admin → VA progress for labels, reports and proof of work.
 
 do $$
 declare
@@ -47,19 +47,9 @@ begin
          'live', s.position
   from public.scenarios s
   where s.schedule_day in ('W1D1', 'W1D2')
+    and s.version = 'A'
     and s.condition = 'always'
     and (s.type = 'situational' or s.options is not null);
-
-  -- Version B for any day the bank has no version B for: a copy of version A.
-  insert into public.office_scenarios (office_id, scenario_id, schedule_day, version, workflow, part, part_title,
-    code, type, points, answer_format, stem, options, answer, correct_response, critical_fail, escalation_level,
-    test_status, position)
-  select office_id, scenario_id, schedule_day, 'B', workflow, part, part_title, code, type, points, answer_format,
-         stem, options, answer, correct_response, critical_fail, escalation_level, test_status, position
-  from public.office_scenarios a
-  where a.office_id = office and a.version = 'A' and a.schedule_day in ('W1D1', 'W1D2')
-    and not exists (select 1 from public.office_scenarios b
-                    where b.office_id = office and b.schedule_day = a.schedule_day and b.version = 'B');
 
   insert into public.office_scenarios (office_id, scenario_id, schedule_day, version, workflow, part, part_title,
     code, type, points, answer_format, stem, correct_response, critical_fail, escalation_level,
@@ -80,8 +70,8 @@ begin
   update public.profiles set va_start_date = current_date where office_id = office and role = 'va';
 end $$;
 
-select schedule_day, version, count(*) filter (where not is_repeat_variant) as scenarios,
+select schedule_day, count(*) filter (where not is_repeat_variant) as scenarios,
        count(*) filter (where is_repeat_variant) as repeat_variants
 from public.office_scenarios
-where office_id = '00000000-0000-4000-8000-000000000001'
-group by 1, 2 order by 1, 2;
+where office_id = '00000000-0000-4000-8000-000000000001' and version = 'A'
+group by 1 order by 1;

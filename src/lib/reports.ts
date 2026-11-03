@@ -2,11 +2,14 @@ import "server-only";
 
 // Sends the results report after every attempt: an email (Resend, from
 // REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL) and to the
-// office's doctor, and a Slack post to VFDA (SLACK_WEBHOOK_URL). One
-// notifications row per recipient is written before sending, so running this
-// again only sends what hasn't gone out yet. Each send is tried twice.
+// office's doctor, and a Slack post to VFDA (SLACK_WEBHOOK_URL). A critical
+// error is also sent at once, while the VA keeps going. One notifications row
+// per recipient is written before sending, so running this again only sends
+// what hasn't gone out yet. Each send is tried twice.
 
+import { passPercent } from "@/lib/certification";
 import {
+  criticalAlertText,
   escapeHtml,
   reportHtml,
   reportSections,
@@ -18,7 +21,7 @@ import {
   type ReportItem,
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
-import { withOverride } from "@/lib/va-flow";
+import { percentOf, RESULT_LABELS, trend, withOverride, type ResultLabel } from "@/lib/va-flow";
 
 type Db = ReturnType<typeof createAdminClient>;
 const TIMEOUT_MS = 15000;
@@ -51,22 +54,34 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       .eq("id", attemptId)
       .maybeSingle(),
   );
-  if (!attempt?.submitted_at || !attempt.result) return null;
+  // Older attempts labeled pass / review / retake are relabeled by the SQL.
+  if (!attempt?.submitted_at || !attempt.result || !(attempt.result in RESULT_LABELS)) return null;
 
   const [va, office, day, doctors, attempts, workflows, grayWorkflows, certifications] = await Promise.all([
     db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select("title").eq("code", attempt.schedule_day).maybeSingle(),
     db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
-    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).not("submitted_at", "is", null),
-    db.from("workflows").select("code, name"),
+    db
+      .from("attempts")
+      .select("id, kind, first_try_points, max_points, submitted_at")
+      .eq("va_id", attempt.va_id)
+      .eq("office_id", attempt.office_id)
+      .not("submitted_at", "is", null)
+      .order("submitted_at"),
+    db.from("workflows").select("code, name, pass_standard"),
     db.from("office_workflows").select("id, code, name, card_answers").eq("office_id", attempt.office_id),
     db.from("certifications").select("id, workflow, office_workflow_id, status, sop_status, sop_submitted_at").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id),
   ]);
 
   // Every graded item of this VA so far: this attempt's for the report, all of
   // them for the workflow statuses.
-  const attemptIds = (must(attempts) ?? []).map((a) => a.id);
+  const attemptRows = must(attempts) ?? [];
+  const attemptIds = attemptRows.map((a) => a.id);
+  // First-try % of each training day up to this one.
+  const dayPercents = attemptRows
+    .filter((a) => a.kind === "day" && a.submitted_at! <= attempt.submitted_at!)
+    .map((a) => percentOf(a.first_try_points, a.max_points));
   const allItems =
     must(
       await db
@@ -114,6 +129,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     .filter((i): i is ReportItem => !!i);
 
   const names = new Map<string, string>((must(workflows) ?? []).map((w) => [w.code, w.name]));
+  const standards = new Map<string, string | null>((must(workflows) ?? []).map((w) => [w.code, w.pass_standard]));
   const grayIds = new Map<string, string>();
   for (const g of must(grayWorkflows) ?? []) {
     names.set(g.code, g.name || String((g.card_answers as Record<string, unknown>)?.CARD_NAME ?? g.code));
@@ -124,6 +140,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     certs.find((c) => (grayIds.has(code) ? c.office_workflow_id === grayIds.get(code) : c.workflow === code)) ?? null;
   // A retrain or recheck is reported under its workflow.
   const drill = attempt.kind === "day" ? null : (attempt.kind as "retrain" | "recheck");
+  const percents = drill ? [percentOf(attempt.first_try_points, attempt.max_points)] : dayPercents;
   const drillWorkflow = drill ? (mine[0]?.workflow ?? "") : "";
   const dayWorkflows = [...new Set(mine.map((i) => i.workflow))].sort();
   const everything = allItems.map(toItem).filter((i): i is ReportItem => !!i);
@@ -133,10 +150,10 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     officeName: must(office)?.name ?? "Office",
     dayCode: drill ? `${drill === "retrain" ? "Retrain" : "Recheck"} ${drillWorkflow}` : attempt.schedule_day,
     dayTitle: drill ? (names.get(drillWorkflow) ?? drillWorkflow) : (must(day)?.title ?? ""),
-    version: drill ? "A" : attempt.version,
     points: Number(attempt.first_try_points ?? 0),
     maxPoints: attempt.max_points ?? 0,
-    result: attempt.result,
+    result: attempt.result as ResultLabel,
+    trend: { direction: trend(percents), percents },
     timeSpent: attempt.time_spent,
     fastFinish: attempt.fast_finish,
     pastes: Array.isArray(attempt.paste_log) ? attempt.paste_log.length : 0,
@@ -147,6 +164,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       ...workflowStatus(
         everything.filter((i) => i.workflow === code),
         certOf(code),
+        passPercent(standards.get(code)),
       ),
     })),
   };
@@ -253,10 +271,10 @@ type Target = { channel: "email" | "slack"; recipient: string; send: () => Promi
 // (an attempt, or a certification event).
 async function deliver(
   db: Db,
-  key: { attempt_id: string } | { certification_id: string; event: string },
+  key: { attempt_id: string; event: string } | { certification_id: string; event: string },
   targets: Target[],
 ): Promise<{ sent: number; failed: number }> {
-  const onConflict = "attempt_id" in key ? "attempt_id,channel,recipient" : "certification_id,event,channel,recipient";
+  const onConflict = "attempt_id" in key ? "attempt_id,event,channel,recipient" : "certification_id,event,channel,recipient";
   let sent = 0;
   let failed = 0;
   for (const t of targets) {
@@ -310,11 +328,126 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
       send: () => sendEmail(to, subject, reportHtml(report, link), reportText(report, link), `attempt-${attemptId}-${to}`),
     };
   };
-  return deliver(db, { attempt_id: attemptId }, [
+  return deliver(db, { attempt_id: attemptId, event: "" }, [
     ...vfda.map((to) => email(to, "admin")),
     ...doctors.map((to) => email(to, "doctor")),
     { channel: "slack", recipient: SLACK_RECIPIENT, send: () => postSlack(reportSlack(report, attemptLink(attemptId, "admin"))) },
   ]);
+}
+
+// ---------------------------------------------------------------------------
+// A critical error: sent at once to VFDA and the office's doctor, with the
+// VA's exact words. The VA keeps going.
+// ---------------------------------------------------------------------------
+
+export async function sendCriticalAlert(itemId: string, phase: "first" | "repeat"): Promise<{ sent: number; failed: number }> {
+  const db = createAdminClient();
+  const item = must(
+    await db
+      .from("attempt_items")
+      .select("id, attempt_id, office_scenario_id, repeat_scenario_id, critical_quote")
+      .eq("id", itemId)
+      .maybeSingle(),
+  );
+  if (!item?.critical_quote) return { sent: 0, failed: 0 };
+  const attempt = must(await db.from("attempts").select("id, va_id, office_id, schedule_day, kind").eq("id", item.attempt_id).single()) as {
+    id: string;
+    va_id: string;
+    office_id: string;
+    schedule_day: string;
+    kind: string;
+  };
+  const shownId = phase === "repeat" && item.repeat_scenario_id ? item.repeat_scenario_id : item.office_scenario_id;
+  const [va, office, scenario, doctors] = await Promise.all([
+    db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
+    db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
+    db.from("office_scenarios").select("code, workflow, stem").eq("id", shownId).maybeSingle(),
+    db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
+  ]);
+  const s = must(scenario);
+  const { subject, lines } = criticalAlertText({
+    vaName: (must(va)?.full_name || must(va)?.email || "VA") as string,
+    officeName: (must(office)?.name ?? "Office") as string,
+    dayCode: attempt.kind === "day" ? attempt.schedule_day : attempt.kind === "recheck" ? "Recheck" : "Retrain",
+    code: s?.code ?? "",
+    workflow: s?.workflow ?? "",
+    repeat: phase === "repeat",
+    stem: s?.stem ?? "",
+    quote: item.critical_quote,
+  });
+  const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
+  const doctorEmails = [...new Set(((must(doctors) ?? []) as { email: string | null }[]).map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter(
+    (e) => !vfda.includes(e),
+  );
+  const event = `critical-${phase}:${item.id}`;
+  const email = (to: string, area: "admin" | "doctor"): Target => {
+    const link = attemptLink(attempt.id, area);
+    return {
+      channel: "email",
+      recipient: to,
+      send: () =>
+        sendEmail(
+          to,
+          subject,
+          `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">${lines
+            .map((l) => `<p>${escapeHtml(l)}</p>`)
+            .join("")}<p><a href="${escapeHtml(link)}">Open the attempt</a> (login required)</p></div>`,
+          `${lines.join("\n\n")}\n\nOpen the attempt (login required): ${link}`,
+          `${event}-${to}`,
+        ),
+    };
+  };
+  return deliver(db, { attempt_id: attempt.id, event }, [
+    ...vfda.map((to) => email(to, "admin")),
+    ...doctorEmails.map((to) => email(to, "doctor")),
+    {
+      channel: "slack",
+      recipient: SLACK_RECIPIENT,
+      send: () =>
+        postSlack({
+          text: [`:rotating_light: *${slackEscape(subject)}*`, ...lines.map(slackEscape), `<${attemptLink(attempt.id, "admin")}|Open the attempt>`].join("\n"),
+        }),
+    },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// A VA marked a day's cards done, but VFDA hasn't approved that day for the
+// office yet. Sent once per VA and day (day_unlocks.prep_notified_at).
+// ---------------------------------------------------------------------------
+
+export async function sendPreparingNotice(vaId: string, day: string): Promise<{ failed: number }> {
+  const db = createAdminClient();
+  const va = must(await db.from("profiles").select("full_name, email, office_id").eq("id", vaId).maybeSingle());
+  if (!va?.office_id) return { failed: 0 };
+  const office = must(await db.from("offices").select("name").eq("id", va.office_id).maybeSingle());
+  const vaName = (va.full_name || va.email || "VA") as string;
+  const officeName = (office?.name ?? "Office") as string;
+  const link = `${appUrl()}/admin/offices/${va.office_id}/scenarios/${day}`;
+  const subject = `Quiz needed: ${day} for ${officeName} – ${vaName} is waiting`;
+  const line = `${vaName} (${officeName}) finished today's cards for ${day}, but ${day} isn't approved for the office yet. Approve its scenarios so the quiz opens.`;
+  let failed = 0;
+  for (const to of [...new Set(vfdaEmails().map((e) => e.toLowerCase()))]) {
+    const error = await tryTwice(() =>
+      sendEmail(
+        to,
+        subject,
+        `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111"><p>${escapeHtml(line)}</p><p><a href="${escapeHtml(link)}">Open ${day}</a> (login required)</p></div>`,
+        `${line}\n\nOpen ${day} (login required): ${link}`,
+        `preparing-${vaId}-${day}-${to}`,
+      ),
+    );
+    if (error) {
+      console.error("Not sent", subject, to, error);
+      failed++;
+    }
+  }
+  const slackError = await tryTwice(() => postSlack({ text: `*${slackEscape(subject)}*\n${slackEscape(line)}\n<${link}|Open ${day}>` }));
+  if (slackError) {
+    console.error("Not sent", subject, "slack", slackError);
+    failed++;
+  }
+  return { failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +462,7 @@ const SOP_EVENT_TEXT: Record<SopEvent, string> = {
   submitted: "Trello card updated",
   approved: "Doctor approved on Trello",
   needs_changes: "Needs changes",
-  rejected: "Rejected (retrain)",
+  rejected: "Rejected (coaching needed)",
 };
 
 export async function sendSopNotice(certificationId: string, event: SopEvent): Promise<{ sent: number; failed: number }> {

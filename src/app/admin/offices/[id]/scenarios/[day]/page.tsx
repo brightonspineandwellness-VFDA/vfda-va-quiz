@@ -78,15 +78,11 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
       </div>
       {approved && <p className="text-sm text-foreground/70">Approved days can&apos;t be edited. Reopen the day first.</p>}
 
-      {(["A", "B"] as const).map((version) => {
-        const items = rows.filter((r) => r.version === version && !r.is_repeat_variant);
+      {/* One attempt per day: older builds may still hold a version B, which is never used. */}
+      {[rows.filter((r) => r.version === "A" && !r.is_repeat_variant)].map((items) => {
         if (!items.length) return null;
         return (
-          <section key={version} className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold">
-              Version {version}
-              {version === "B" && <span className="font-normal text-foreground/60"> · used for retakes</span>}
-            </h2>
+          <section key="A" className="flex flex-col gap-3">
             {items.map((r) => (
               <Item
                 key={r.id}

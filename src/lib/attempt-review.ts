@@ -3,7 +3,7 @@ import "server-only";
 // The attempt review page (/admin/attempts/[id], and read-only for the
 // office's doctor at /doctor/attempts/[id]): every item's first and repeat
 // answer with scores and missed steps, and VFDA's score overrides, which
-// recalculate the day result. Reads with the signed-in user's session, so
+// change only the day's label. Reads with the signed-in user's session, so
 // row-level security decides who sees what.
 
 import type { createSessionClient } from "@/lib/supabase/server";
@@ -87,12 +87,10 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
   );
   if (!attempt) return null;
 
-  const [va, office, day, unlock, laterB, rows, notes] = await Promise.all([
+  const [va, office, day, rows, notes] = await Promise.all([
     db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select(DAY_COLUMNS).eq("code", attempt.schedule_day).maybeSingle(),
-    db.from("day_unlocks").select("version, status").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
-    db.from("attempts").select("id").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).eq("schedule_day", attempt.schedule_day).eq("version", "B").eq("kind", "day").maybeSingle(),
     db
       .from("attempt_items")
       .select(
@@ -100,7 +98,7 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
       )
       .eq("attempt_id", attemptId)
       .order("position"),
-    db.from("notifications").select("channel, recipient, status, sent_at, error").eq("attempt_id", attemptId).order("created_at"),
+    db.from("notifications").select("channel, recipient, status, sent_at, error, event").eq("attempt_id", attemptId).order("created_at"),
   ]);
   const items = must(rows) ?? [];
   const ids = [...new Set(items.flatMap((i) => [i.office_scenario_id, i.repeat_scenario_id]).filter(Boolean))] as string[];
@@ -159,8 +157,6 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
     vaName: (must(va)?.full_name || must(va)?.email || "VA") as string,
     officeName: (must(office)?.name ?? "Office") as string,
     day: dayRow,
-    unlock: must(unlock) as { version: "A" | "B"; status: string } | null,
-    hasVersionB: !!must(laterB),
     items: reviewItems,
     notifications: (must(notes) ?? []) as {
       channel: string;
@@ -168,18 +164,17 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
       status: "pending" | "sent" | "failed";
       sent_at: string | null;
       error: string | null;
+      event: string;
     }[],
   };
 }
 
 export type AttemptReviewData = NonNullable<Awaited<ReturnType<typeof loadAttemptReview>>>;
 
-// Works the day result out again with VFDA's overrides. Updates the attempt
-// only; moving the day on is "Approve unlock" or "Assign retake".
+// Works the label out again with VFDA's overrides. Nothing else changes:
+// quizzes never block.
 export async function recalculateAttempt(db: Db, attemptId: string) {
-  const attempt = must(await db.from("attempts").select("schedule_day").eq("id", attemptId).single()) as { schedule_day: string };
-  const [day, settings, rows] = await Promise.all([
-    db.from("schedule_days").select(DAY_COLUMNS).eq("code", attempt.schedule_day).single(),
+  const [settings, rows] = await Promise.all([
     db.from("settings").select("value").eq("key", "grading").maybeSingle(),
     db
       .from("attempt_items")
@@ -199,7 +194,6 @@ export async function recalculateAttempt(db: Db, attemptId: string) {
     ) ?? [];
   const scenarioOf = new Map(scenarios.map((s) => [s.id, s]));
   const outcome = dayResult(
-    must(day) as DayRow,
     items
       .filter((i) => scenarioOf.has(i.office_scenario_id))
       .map((i) => ({

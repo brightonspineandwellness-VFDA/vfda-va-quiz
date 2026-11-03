@@ -77,6 +77,12 @@ const PHASES = [
     title: "Card-first database changes (card mapping, scenario sources, must-ask questions only)",
     after: "invite-va.sql",
   },
+  {
+    name: "results-labels",
+    starts: "20261103120000",
+    title: "Results labels database changes (one attempt per day, Strong / Needs coaching / At risk, never blocking)",
+    after: "card-first.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

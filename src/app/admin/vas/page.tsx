@@ -2,14 +2,14 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { AttemptLink, ReportStatus } from "@/components/attempts/attempt-review";
 import { CertGrid } from "@/components/certs/cert-grid";
-import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ProofReview, StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
 import { daysBetween, SOP_WAIT_FLAG_DAYS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
+import { TREND_LABELS } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
-import { decideReviewDay } from "@/lib/va-admin-actions";
+import { percentOf, resultLabel, trend, unlockStatus } from "@/lib/va-flow";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
 // "Send again" sends a report while you wait.
@@ -32,10 +32,13 @@ export default function VasPage() {
 const STATUS_LABELS: Record<string, string> = {
   locked: "locked",
   open: "open",
-  submitted: "grading",
-  passed: "passed",
-  in_review: "in review",
-  retake: "retake",
+  done: "done",
+};
+
+const LABEL_TONE: Record<string, string> = {
+  strong: "text-green-700 dark:text-green-400",
+  needs_coaching: "text-amber-700 dark:text-amber-300",
+  at_risk: "text-red-700 dark:text-red-400",
 };
 
 // An attempt with this many pastes is flagged.
@@ -52,7 +55,7 @@ async function Vas() {
     supabase.from("profiles").select("id, full_name, email, office_id, va_start_date").eq("role", "va").is("deactivated_at", null).order("full_name"),
     supabase.from("offices").select("id, name"),
     supabase.from("settings").select("value").eq("key", "sequence").maybeSingle(),
-    supabase.from("day_unlocks").select("va_id, office_id, schedule_day, version, status, cards_done_at, opens_on"),
+    supabase.from("day_unlocks").select("va_id, office_id, schedule_day, status, cards_done_at, prep_notified_at"),
     supabase
       .from("attempts")
       .select("id, va_id, office_id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
@@ -67,7 +70,7 @@ async function Vas() {
   const { data: items } = attemptRows.length
     ? await supabase
         .from("attempt_items")
-        .select("attempt_id, fast, ai_confidence, first_score, repeat_score, repeat_scenario_id, vfda_override")
+        .select("attempt_id, position, fast, ai_confidence, first_score, repeat_score, repeat_scenario_id, vfda_override, office_scenario_id")
         .in(
           "attempt_id",
           attemptRows.map((a) => a.id),
@@ -77,6 +80,7 @@ async function Vas() {
     ? await supabase
         .from("notifications")
         .select("attempt_id, channel, recipient, status, error")
+        .eq("event", "")
         .in(
           "attempt_id",
           attemptRows.map((a) => a.id),
@@ -102,7 +106,7 @@ async function Vas() {
     const days = (unlocks.data ?? [])
       .filter((u) => u.va_id === va.id && u.office_id === va.office_id)
       .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
-    const current = days.find((d) => d.status !== "passed");
+    const current = days.find((d) => unlockStatus(d.status) !== "done");
     const mine = attemptRows.filter((a) => a.va_id === va.id && a.office_id === va.office_id);
     const its = (items ?? []).filter((i) => mine.some((a) => a.id === i.attempt_id));
     const repeats = its.filter((i) => i.repeat_scenario_id);
@@ -118,17 +122,21 @@ async function Vas() {
     const heavy = mine.filter((a) => Array.isArray(a.paste_log) && a.paste_log.length >= HEAVY_PASTING).length;
     const critical = mine.reduce((n, a) => n + a.critical_errors, 0);
     const waiting = its.filter((i) => i.first_score === null && !i.vfda_override).length;
+    const dayAttempts = mine.filter((a) => a.kind === "day");
+    const latest = dayAttempts.at(-1);
+    const direction = trend(dayAttempts.map((a) => percentOf(a.first_try_points, a.max_points)));
+    const waitingForVfda = current && unlockStatus(current.status) === "locked" && current.prep_notified_at;
     return {
       va,
       current: current
-        ? `${current.schedule_day}${current.version === "B" ? " (B)" : ""} ${STATUS_LABELS[current.status] ?? current.status}`
+        ? `${current.schedule_day} ${waitingForVfda ? "waiting for VFDA approval" : (STATUS_LABELS[unlockStatus(current.status)] ?? current.status)}`
         : days.length
-          ? "all days passed"
+          ? "all days done"
           : "not started",
-      scores: mine
-        .filter((a) => a.kind === "day")
-        .map((a) => `${a.schedule_day}${a.version === "B" ? "B" : ""} ${Number(a.first_try_points)}/${a.max_points}`),
-      repeats: repeats.length ? `${repeats.length} (${repeats.filter((i) => i.repeat_score !== 2).length} below 2/2)` : "–",
+      latest,
+      scores: dayAttempts.map((a) => `${a.schedule_day} ${percentOf(a.first_try_points, a.max_points)}%`),
+      trend: direction ? TREND_LABELS[direction] : "–",
+      repeats: repeats.length ? `${repeats.length} (${repeats.filter((i) => i.repeat_score !== 2).length} still below 2/2)` : "–",
       flags: [
         fast > 0 && `${fast} fast finish${fast > 1 ? "es" : ""}`,
         heavy > 0 && `heavy pasting (${heavy})`,
@@ -149,7 +157,9 @@ async function Vas() {
               <th className="py-1 pr-3 font-medium">VA</th>
               <th className="py-1 pr-3 font-medium">Office</th>
               <th className="py-1 pr-3 font-medium">Current day</th>
+              <th className="py-1 pr-3 font-medium">Latest label</th>
               <th className="py-1 pr-3 font-medium">First-try scores</th>
+              <th className="py-1 pr-3 font-medium">Trend</th>
               <th className="py-1 pr-3 font-medium">Repeats</th>
               <th className="py-1 pr-3 font-medium">Flags</th>
             </tr>
@@ -164,7 +174,11 @@ async function Vas() {
                 </td>
                 <td className="py-1 pr-3">{p.va.office_id ? (officeName.get(p.va.office_id) ?? "Unknown office") : "No office"}</td>
                 <td className="py-1 pr-3">{p.current}</td>
+                <td className={`py-1 pr-3 font-medium ${LABEL_TONE[p.latest?.result ?? ""] ?? ""}`}>
+                  {p.latest ? `${p.latest.schedule_day}: ${resultLabel(p.latest.result)}` : "–"}
+                </td>
                 <td className="py-1 pr-3">{p.scores.join(", ") || "–"}</td>
+                <td className="py-1 pr-3">{p.trend}</td>
                 <td className="py-1 pr-3">{p.repeats}</td>
                 <td className={`py-1 pr-3 ${p.flags.length ? "text-red-700 dark:text-red-400" : ""}`}>{p.flags.join(", ") || "–"}</td>
               </tr>
@@ -180,7 +194,7 @@ async function Vas() {
             SOPs to confirm
           </Link>
         </div>
-        <CertGrid columns={grid.columns} rows={grid.rows} admin certificatePath={(id) => `/admin/vas/${id}/certificate`} />
+        <CertGrid columns={grid.columns} rows={grid.rows} certificatePath={(id) => `/admin/vas/${id}/certificate`} />
       </section>
 
       {vas.data.map((va) => {
@@ -205,31 +219,17 @@ async function Vas() {
                 ? days
                     .map(
                       (d) =>
-                        `${d.schedule_day} ${STATUS_LABELS[d.status] ?? d.status}${d.version === "B" ? " (B)" : ""}${
-                          d.status === "locked" && d.cards_done_at ? ", cards done" : ""
+                        `${d.schedule_day} ${STATUS_LABELS[unlockStatus(d.status)]}${
+                          unlockStatus(d.status) === "locked" && d.cards_done_at
+                            ? d.prep_notified_at
+                              ? ", cards done, waiting for VFDA approval"
+                              : ", cards done"
+                            : ""
                         }`,
                     )
                     .join(" · ")
                 : "not started"}
             </p>
-
-            {days
-              .filter((d) => d.status === "in_review")
-              .map((d) => (
-                <div key={d.schedule_day} className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="font-medium">
-                    {d.schedule_day}
-                    {d.version === "B" ? " version B: failed the retake, call the VA" : " is waiting for your review"}
-                  </span>
-                  <ActionButton action={decideReviewDay.bind(null, va.id, d.schedule_day, "pass")} label="Approve" primary />
-                  {d.version === "A" && (
-                    <ActionButton
-                      action={decideReviewDay.bind(null, va.id, d.schedule_day, "retake")}
-                      label="Assign retake (version B)"
-                    />
-                  )}
-                </div>
-              ))}
 
             {mine.length > 0 && (
               <div className="overflow-x-auto">
@@ -238,7 +238,8 @@ async function Vas() {
                     <tr>
                       <th className="py-1 pr-3 font-medium">Day</th>
                       <th className="py-1 pr-3 font-medium">First try</th>
-                      <th className="py-1 pr-3 font-medium">Result</th>
+                      <th className="py-1 pr-3 font-medium">Label</th>
+                      <th className="py-1 pr-3 font-medium">Repeat scores</th>
                       <th className="py-1 pr-3 font-medium">Time</th>
                       <th className="py-1 pr-3 font-medium">Flags</th>
                       <th className="py-1 pr-3 font-medium">Report</th>
@@ -261,13 +262,19 @@ async function Vas() {
                       return (
                         <tr key={a.id} className="border-b border-foreground/10 align-top">
                           <td className="py-1 pr-3">
-                            {a.kind === "day" ? a.schedule_day : a.kind === "retrain" ? "Retrain" : "Recheck"}
-                            {a.kind === "day" && a.version === "B" && " (B)"} <AttemptLink id={a.id} area="admin" />
+                            {a.kind === "day" ? a.schedule_day : a.kind === "retrain" ? "Retrain" : "Recheck"}{" "}
+                            <AttemptLink id={a.id} area="admin" />
                           </td>
                           <td className="py-1 pr-3">
-                            {Number(a.first_try_points)}/{a.max_points}
+                            {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%)
                           </td>
-                          <td className="py-1 pr-3">{a.result}</td>
+                          <td className={`py-1 pr-3 font-medium ${LABEL_TONE[a.result ?? ""] ?? ""}`}>{resultLabel(a.result)}</td>
+                          <td className="py-1 pr-3">
+                            {repeats
+                              .sort((x, y) => x.position - y.position)
+                              .map((i) => `${i.first_score ?? "–"}→${i.repeat_score ?? "–"}`)
+                              .join(", ") || "–"}
+                          </td>
                           <td className="py-1 pr-3">{minutes(a.time_spent)}</td>
                           <td className="py-1 pr-3">{flags.join(", ") || "–"}</td>
                           <td className="py-1 pr-3">

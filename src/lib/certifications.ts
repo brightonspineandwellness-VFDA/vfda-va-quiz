@@ -1,11 +1,12 @@
 import "server-only";
 
 // Workflow certifications on the server (service role): worked out again after
-// every attempt, score override and SOP status change; retrains and rechecks
-// assigned here. Rules: src/lib/certification.ts.
+// every attempt, score override and SOP status change; rechecks opened here.
+// Nothing else is assigned automatically. Rules: src/lib/certification.ts.
 
 import {
   addDays,
+  certStatus,
   DEFAULT_RECHECK_DAYS,
   DEFAULT_SOP_OUTLINE,
   evaluateWorkflow,
@@ -13,7 +14,6 @@ import {
   RECHECK_ITEMS,
   type CertStatus,
   type EvidenceItem,
-  type LatestDrill,
   type SopStatus,
 } from "@/lib/certification";
 import { writeRecheckVariants } from "@/lib/scenario-ai";
@@ -45,7 +45,7 @@ type AttemptRow = {
   schedule_day: string;
   version: "A" | "B";
   submitted_at: string | null;
-  result: "pass" | "review" | "retake" | null;
+  result: string | null;
   certification_id: string | null;
   created_at: string;
 };
@@ -223,23 +223,18 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
       }
     }
 
-    // Evidence: the latest finished retrain, else the latest attempt of each day.
-    const drills = attempts.filter((a) => a.certification_id === cert!.id);
-    const latestDrill = latestBy(drills.filter((a) => a.kind !== "day"));
-    const evidence = latestDrill
-      ? evidenceOf([latestDrill.id], w.code)
-      : evidenceOf(
-          w.days.map((d) => latestBy(dayAttempts.filter((a) => a.schedule_day === d))?.id).filter((x): x is string => !!x),
-          w.code,
-        );
-    const drill: LatestDrill = latestDrill ? { kind: latestDrill.kind as "retrain" | "recheck", result: latestDrill.result } : null;
+    // Evidence: the latest finished recheck, else the day attempt of each of
+    // the workflow's days (the latest, where an older retake left two).
+    const current = certStatus(cert.status);
+    const recheck = latestBy(attempts.filter((a) => a.certification_id === cert!.id && a.kind === "recheck"));
+    const dayIds = w.days.map((d) => latestBy(dayAttempts.filter((a) => a.schedule_day === d))?.id);
+    const evidence = recheck ? evidenceOf([recheck.id], w.code) : evidenceOf(dayIds.filter((x): x is string => !!x), w.code);
     const { status } = evaluateWorkflow({
       items: evidence,
+      allDone: !!recheck || dayIds.every(Boolean),
       passStandard: w.passStandard,
       sopStatus: cert.sop_status,
       sopSubmitted: !!cert.sop_submitted_at,
-      latestDrill: drill,
-      current: cert.status,
     });
 
     const patch: Record<string, unknown> = {
@@ -248,57 +243,24 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
       errors: evidence.filter((i) => i.critical_error).length,
     };
     if (status === "certified") {
-      const certifiedAt = cert.status === "certified" && cert.certified_at ? cert.certified_at : now.toISOString();
+      const certifiedAt = current === "certified" && cert.certified_at ? cert.certified_at : now.toISOString();
       patch.certified_at = certifiedAt;
-      // A passed recheck starts a new period; otherwise it runs from certification.
-      patch.recheck_date =
-        drill?.kind === "recheck" && latestDrill?.submitted_at
-          ? addDays(latestDrill.submitted_at, recheckDays)
-          : (cert.status === "certified" && cert.recheck_date) || addDays(certifiedAt, recheckDays);
+      // A recheck starts a new period; otherwise it runs from certification.
+      patch.recheck_date = recheck?.submitted_at
+        ? addDays(recheck.submitted_at, recheckDays)
+        : (current === "certified" && cert.recheck_date) || addDays(certifiedAt, recheckDays);
     } else {
       patch.certified_at = null;
       patch.recheck_date = null;
     }
-    // Into Retrain: version B scenarios, and the card updated again.
-    const intoRetrain = status === "retrain" && cert.status !== "retrain";
-    if (intoRetrain && cert.sop_submitted_at && cert.sop_status !== "rejected") {
-      patch.sop_status = "needs_changes";
-      patch.sop_note = "Retrain: update the Trello card again after your retrain scenarios.";
-    }
     const changed = Object.entries(patch).some(([k, v]) => (cert as Record<string, unknown>)[k] !== v);
     if (changed) must(await db.from("certifications").update(patch).eq("id", cert.id));
-    if (intoRetrain && !drills.some((a) => a.kind === "retrain" && !a.submitted_at)) {
-      await assignRetrain(db, { vaId, officeId, certificationId: cert.id, workflow: w.code, day: lastDay });
-    }
   }
-}
-
-// The workflow's version B scenarios, as a retrain attempt. False when the
-// office has none approved.
-export async function assignRetrain(
-  db: Db,
-  r: { vaId: string; officeId: string; certificationId: string; workflow: string; day: string },
-): Promise<boolean> {
-  const scenarios =
-    must(
-      await db
-        .from("office_scenarios")
-        .select("id, schedule_day, position")
-        .eq("office_id", r.officeId)
-        .eq("workflow", r.workflow)
-        .eq("version", "B")
-        .eq("is_repeat_variant", false)
-        .eq("test_status", "live")
-        .order("schedule_day")
-        .order("position"),
-    ) ?? [];
-  if (!scenarios.length) return false;
-  return createDrill(db, { ...r, kind: "retrain", version: "B", scenarioIds: scenarios.map((s) => s.id) });
 }
 
 async function createDrill(
   db: Db,
-  r: { vaId: string; officeId: string; certificationId: string; day: string; kind: "retrain" | "recheck"; version: "A" | "B"; scenarioIds: string[] },
+  r: { vaId: string; officeId: string; certificationId: string; day: string; scenarioIds: string[] },
 ) {
   const attempt = must(
     await db
@@ -307,8 +269,8 @@ async function createDrill(
         va_id: r.vaId,
         office_id: r.officeId,
         schedule_day: r.day,
-        version: r.version,
-        kind: r.kind,
+        version: "A",
+        kind: "recheck",
         certification_id: r.certificationId,
       })
       .select("id")
@@ -409,8 +371,6 @@ async function openRecheck(db: Db, cert: CertRow) {
     officeId,
     certificationId: cert.id,
     day: lastDay,
-    kind: "recheck",
-    version: "A",
     scenarioIds: rows.map((r) => r.id),
   });
 }
@@ -437,29 +397,6 @@ export async function submitSopLinks(vaId: string, certificationId: string, raw:
   return null;
 }
 
-// VFDA's "Assign retrain": another round of the workflow's version B scenarios.
-export async function assignRetrainFor(certificationId: string): Promise<string | null> {
-  const db = createAdminClient();
-  const cert = must(await db.from("certifications").select(CERT_COLUMNS).eq("id", certificationId).maybeSingle()) as CertRow | null;
-  if (!cert) return "Certification not found.";
-  const profile = must(await db.from("profiles").select("office_id").eq("id", cert.va_id).maybeSingle());
-  if (!profile?.office_id) return "This VA has no office.";
-  if (profile.office_id !== cert.office_id) return "This VA has moved to another office.";
-  const { data: open } = await db.from("attempts").select("id").eq("certification_id", cert.id).is("submitted_at", null).limit(1);
-  if (open?.length) return "A retrain or recheck is already open for this workflow.";
-  const { workflows } = await officeWorkflows(db, profile.office_id);
-  const w = workflows.find((x) => (cert.office_workflow_id ? x.grayId === cert.office_workflow_id : x.code === cert.workflow));
-  if (!w?.days.length) return "This workflow has no scenarios for the office.";
-  const ok = await assignRetrain(db, {
-    vaId: cert.va_id,
-    officeId: profile.office_id,
-    certificationId: cert.id,
-    workflow: w.code,
-    day: w.days[w.days.length - 1],
-  });
-  return ok ? null : "The office has no approved version B scenarios for this workflow.";
-}
-
 // ---------------------------------------------------------------------------
 // What the VA has to do besides the training day (Today page)
 // ---------------------------------------------------------------------------
@@ -469,7 +406,7 @@ export async function loadVaTasks(vaId: string, officeId: string) {
   const [{ workflows }, certsRes, drillsRes] = await Promise.all([
     officeWorkflows(db, officeId),
     db.from("certifications").select(CERT_COLUMNS).eq("va_id", vaId).eq("office_id", officeId),
-    db.from("attempts").select("id, kind, certification_id").eq("va_id", vaId).eq("office_id", officeId).neq("kind", "day").is("submitted_at", null).order("created_at"),
+    db.from("attempts").select("id, kind, certification_id").eq("va_id", vaId).eq("office_id", officeId).eq("kind", "recheck").is("submitted_at", null).order("created_at"),
   ]);
   const certs = (must(certsRes) ?? []) as CertRow[];
   const workflowOf = (c: CertRow) => workflows.find((w) => (c.office_workflow_id ? w.grayId === c.office_workflow_id : w.code === c.workflow));
@@ -491,7 +428,7 @@ export async function loadVaTasks(vaId: string, officeId: string) {
       };
     })
     .sort((a, b) => a.code.localeCompare(b.code));
-  const drills = ((must(drillsRes) ?? []) as { id: string; kind: "retrain" | "recheck"; certification_id: string }[]).map((d) => {
+  const drills = ((must(drillsRes) ?? []) as { id: string; kind: "recheck"; certification_id: string }[]).map((d) => {
     const c = certs.find((x) => x.id === d.certification_id);
     const w = c ? workflowOf(c) : undefined;
     return { id: d.id, kind: d.kind, code: w?.code ?? "", name: w?.name ?? "" };
@@ -515,7 +452,7 @@ export type GridCell = {
   submittedAt: string | null;
   certifiedAt: string | null;
   recheckDate: string | null;
-  openDrill: "retrain" | "recheck" | null;
+  openDrill: "recheck" | null;
 };
 
 export type GridRow = {
@@ -546,12 +483,12 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
     Promise.all(officeIds.map(async (id) => [id, (await officeWorkflows(db, id)).workflows] as const)),
     vaIds.length ? db.from("certifications").select(CERT_COLUMNS).in("va_id", vaIds) : Promise.resolve({ data: [], error: null }),
     vaIds.length
-      ? db.from("attempts").select("va_id, kind, certification_id").in("va_id", vaIds).neq("kind", "day").is("submitted_at", null)
+      ? db.from("attempts").select("va_id, kind, certification_id").in("va_id", vaIds).eq("kind", "recheck").is("submitted_at", null)
       : Promise.resolve({ data: [], error: null }),
   ]);
   const workflowsOf = new Map(perOffice);
   const certs = (must(certsRes) ?? []) as CertRow[];
-  const drills = (must(drillsRes) ?? []) as { va_id: string; kind: "retrain" | "recheck"; certification_id: string }[];
+  const drills = (must(drillsRes) ?? []) as { va_id: string; kind: "recheck"; certification_id: string }[];
   const officeName = new Map(((must(offices) ?? []) as { id: string; name: string }[]).map((o) => [o.id, o.name]));
   const columns = ((must(standard) ?? []) as { code: string; name: string }[]).map((w) => ({ code: w.code, name: w.name }));
 
@@ -564,7 +501,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
         name: w.name,
         applies: !!ow?.days.length,
         certificationId: c?.id ?? null,
-        status: c?.status ?? null,
+        status: c ? certStatus(c.status) : null,
         sopStatus: c?.sop_status ?? null,
         sopNote: c?.sop_note ?? null,
         links: c?.sop_links?.length ? c.sop_links : c?.sop_link ? [c.sop_link] : [],

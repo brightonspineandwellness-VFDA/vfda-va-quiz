@@ -126,10 +126,10 @@ type Row = Omit<DraftScenario, "options_rule" | "wants_repeat"> & {
   test_status: "draft";
 };
 
-// Version A drafts become rows, with their version B and repeat variants.
+// Drafts become rows, with the repeat variants of situational items.
 function toRows(officeId: string, day: string, drafts: DraftScenario[], variants: Map<string, Variant>): Row[] {
   const rows: Row[] = [];
-  const base = (d: DraftScenario, version: "A" | "B"): Row => {
+  const base = (d: DraftScenario): Row => {
     const { options_rule: _rule, wants_repeat: _repeat, ...rest } = d;
     void _rule;
     void _repeat;
@@ -138,7 +138,7 @@ function toRows(officeId: string, day: string, drafts: DraftScenario[], variants
       id: crypto.randomUUID(),
       office_id: officeId,
       schedule_day: day,
-      version,
+      version: "A",
       is_repeat_variant: false,
       parent_scenario_id: null,
       test_status: "draft",
@@ -154,19 +154,10 @@ function toRows(officeId: string, day: string, drafts: DraftScenario[], variants
     parent_scenario_id: parent.id,
   });
   for (const d of drafts) {
-    const a = base(d, "A");
+    const a = base(d);
     rows.push(a);
-    const v = variants.get(d.code);
-    if (!v?.b_stem) continue;
-    if (v.repeat_stem) rows.push(repeatOf(a, v.repeat_stem));
-    const b: Row = {
-      ...base(d, "B"),
-      stem: v.b_stem,
-      options: d.type === "mc" ? v.b_options : null,
-      answer: d.type === "mc" ? v.b_answer : null,
-    };
-    rows.push(b);
-    if (v.b_repeat_stem) rows.push(repeatOf(b, v.b_repeat_stem));
+    const stem = variants.get(d.code)?.repeat_stem;
+    if (d.type === "situational" && stem) rows.push(repeatOf(a, stem));
   }
   return rows;
 }
@@ -354,31 +345,8 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
         fillRule: String(settingOf(ctx.settings, "gray_fill_rule") ?? ""),
         rules: ruleList,
       });
-      // Gray items arrive with their version B written alongside.
       const byCard = new Map(cards.map((c) => [c.code, c]));
-      const rowsA = items.filter((i) => i.version === "A");
-      const rowsB = items.filter((i) => i.version === "B");
-      const draftsA = rowsA.map((i, n) => grayDraft(i, byCard.get(i.card)!, `G${n + 1}`, n));
-      const draftsB = rowsB.map((i, n) => grayDraft(i, byCard.get(i.card)!, `GB${n + 1}`, n));
-      // Repeats only: each version's situational items get their own.
-      const repeats = await writeVariants([...draftsA, ...draftsB], ruleList, false);
-      const rows: Row[] = [];
-      for (const [version, list] of [["A", draftsA], ["B", draftsB]] as const) {
-        for (const d of list) {
-          const { options_rule: _r, wants_repeat: _w, ...rest } = d;
-          void _r;
-          void _w;
-          const row: Row = { ...rest, id: crypto.randomUUID(), office_id: officeId, schedule_day: dayCode, version, is_repeat_variant: false, parent_scenario_id: null, test_status: "draft" };
-          rows.push(row);
-          const stem = repeats.get(d.code)?.repeat_stem;
-          if (d.type === "situational" && stem) {
-            rows.push({ ...row, id: crypto.randomUUID(), stem, is_repeat_variant: true, parent_scenario_id: row.id });
-          }
-        }
-      }
-      await replaceDay(db, officeId, dayCode, rows);
-      await finishBuild(db, officeId, dayCode);
-      return;
+      drafts = items.map((i, n) => grayDraft(i, byCard.get(i.card)!, `G${n + 1}`, n));
     } else {
       const day = entry.day;
       const drills = await writePhoneDrills({
@@ -390,7 +358,7 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
       drafts = drills.map(drillDraft);
     }
 
-    // Version B and repeat variants, for items that are complete.
+    // Repeat variants, for items that are complete.
     const complete = drafts.filter((d) => d.missing_keys.length === 0 && (d.type !== "mc" || d.options));
     const variants = await writeVariants(complete, ruleList);
     await replaceDay(db, officeId, dayCode, toRows(officeId, dayCode, drafts, variants));

@@ -4,7 +4,7 @@ import "server-only";
 // items are written from the office's own cards mapped to it, with the master
 // day as the pattern; gray card items from the gray cards. Also multiple
 // choice options from an options rule (days with no card), a skipped day's
-// phone drills, and for every item its version B and repeat variant. Each
+// phone drills, and a repeat variant for each situational item. Each
 // answer is checked (src/lib/scenario-build.ts) and retried once; VFDA reviews
 // all of it. AI_MODE=mock writes stand-ins without calling Claude.
 
@@ -328,7 +328,6 @@ ${items.map((i) => `## ${i.code}\nQuestion: ${i.stem}\nOptions rule: ${i.options
 export type GrayCard = { id: string; code: string; risk_tag: string | null; answers: Record<string, unknown> };
 
 const GrayItem = z.object({
-  version: z.enum(["A", "B"]),
   card: z.string().describe("The card's code, e.g. WF-G1"),
   formula: z.string().describe("The formula code, e.g. S-1 or MC-2"),
   type: z.enum(["mc", "situational"]),
@@ -348,19 +347,16 @@ export async function writeGrayItems(input: {
   rules: { key: string; value: string }[];
 }) {
   if (mock()) {
-    return input.cards.flatMap((c) =>
-      (["A", "B"] as const).map((version) => ({
-        version,
-        card: c.code,
-        formula: "S-1",
-        type: "situational" as const,
-        stem: `(mock${version === "B" ? ", version B" : ""}) A task from ${String(c.answers.CARD_NAME ?? c.code)} comes in.`,
-        options: null,
-        answer: null,
-        correct_response: ["follows the card's steps", "documents what was done"],
-        critical_fail: null,
-      })),
-    );
+    return input.cards.map((c) => ({
+      card: c.code,
+      formula: "S-1",
+      type: "situational" as const,
+      stem: `(mock) A task from ${String(c.answers.CARD_NAME ?? c.code)} comes in.`,
+      options: null,
+      answer: null,
+      correct_response: ["follows the card's steps", "documents what was done"],
+      critical_fail: null,
+    }));
   }
   const schema = z.object({ items: z.array(GrayItem) });
   const codes = new Set(input.cards.map((c) => c.code));
@@ -372,9 +368,9 @@ critical_fail is set only where the formula has critical_from. Multiple choice i
 the right one at a random position and its letter as answer; decoys follow the formula's decoys if given.
 
 How many items per card, and which formulas are required, follow the split by risk tag ("items" is
-[version A, version B] situational counts; "mc" is multiple choice items per card per version).
+[version A, version B] situational counts: write only the version A count; "mc" is multiple choice
+items per card).
 Fill rule: ${input.fillRule}
-Write version A and version B (different details, same skills).
 
 <formulas>
 ${JSON.stringify(input.formulas, null, 1)}
@@ -392,7 +388,7 @@ ${input.cards.map((c) => `## ${c.code} (${c.risk_tag ?? "occasional"})\n${JSON.s
 ${rulesBlock(input.rules)}
 </office_rules>`;
   const out = await ask(schema, text, (o) => {
-    if (!o.items.some((i) => i.version === "A") || !o.items.some((i) => i.version === "B")) return "need version A and B items";
+    if (!o.items.length) return "no items";
     for (const [n, i] of o.items.entries()) {
       if (!codes.has(i.card)) return `item ${n + 1}: unknown card ${i.card}`;
       if (!i.stem.trim()) return `item ${n + 1}: empty stem`;
@@ -458,52 +454,22 @@ ${rulesBlock(input.rules)}
 }
 
 // ---------------------------------------------------------------------------
-// Version B and repeat variants for a day's items.
+// Repeat variants: shown right after a situational answer below 2/2.
 // ---------------------------------------------------------------------------
 
 const Variant = z.object({
   code: z.string(),
-  b_stem: z.string().nullable(),
-  b_options: z.array(z.string()).nullable(),
-  b_answer: z.string().nullable(),
   repeat_stem: z.string().nullable(),
-  b_repeat_stem: z.string().nullable(),
 });
 export type Variant = z.infer<typeof Variant>;
 
-// With versionB false (gray items, which come with their own version B),
-// only the repeat variants are written.
-export async function writeVariants(items: DraftScenario[], rules: { key: string; value: string }[], versionB = true) {
-  const wanted = versionB ? items : items.filter((i) => i.wants_repeat);
+export async function writeVariants(items: DraftScenario[], rules: { key: string; value: string }[]) {
+  const wanted = items.filter((i) => i.wants_repeat);
   if (!wanted.length) return new Map<string, Variant>();
-  if (mock()) {
-    return new Map(
-      wanted.map((i) => [
-        i.code,
-        {
-          code: i.code,
-          b_stem: versionB ? `(Version B) ${i.stem}` : null,
-          b_options: versionB && i.type === "mc" ? i.options : null,
-          b_answer: versionB && i.type === "mc" ? i.answer : null,
-          repeat_stem: i.wants_repeat ? `(Repeat) ${i.stem}` : null,
-          b_repeat_stem: versionB && i.wants_repeat ? `(Repeat, version B) ${i.stem}` : null,
-        },
-      ]),
-    );
-  }
+  if (mock()) return new Map(wanted.map((i) => [i.code, { code: i.code, repeat_stem: `(Repeat) ${i.stem}` }]));
   const schema = z.object({ items: z.array(Variant) });
-  const asks = versionB
-    ? `- b_stem: version B, used when a VA retakes the day. Same skill, same right answer and correct response,
-  new details (different fake patient, time, situation). For multiple choice also b_options (4) and
-  b_answer (letter of the right one, at a random position).
-- repeat_stem (situational items marked "repeat"): a repeat variant shown right after a missed answer.
-  Same correct response, new details, different from version A and B.
-- b_repeat_stem (same items): a repeat variant of version B.
-Leave b_options/b_answer null for situational items, and the repeat stems null where not asked.`
-    : `- repeat_stem: a repeat variant shown right after a missed answer. Same correct response, new details.
-Leave b_stem, b_options, b_answer and b_repeat_stem null.`;
-  const text = `For each test item below, write:
-${asks}
+  const text = `For each test item below, write repeat_stem: a repeat variant shown right after a missed answer.
+Same skill and correct response, new details (different fake patient, time, situation).
 
 <office_rules>
 ${rulesBlock(rules)}
@@ -513,10 +479,7 @@ ${rulesBlock(rules)}
 ${wanted
   .map(
     (i) =>
-      `## ${i.code} (${i.type}${i.wants_repeat ? ", repeat" : ""})\nStem: ${i.stem}\n` +
-      (i.type === "mc"
-        ? `Options: ${(i.options ?? []).map((o, k) => `${LETTERS[k]}) ${o}`).join(" | ")}\nAnswer: ${i.answer}`
-        : `Correct response: ${JSON.stringify(i.correct_response)}${i.critical_fail ? `\nCritical fail: ${i.critical_fail}` : ""}`),
+      `## ${i.code}\nStem: ${i.stem}\nCorrect response: ${JSON.stringify(i.correct_response)}${i.critical_fail ? `\nCritical fail: ${i.critical_fail}` : ""}`,
   )
   .join("\n\n")}
 </items>`;
@@ -524,14 +487,7 @@ ${wanted
     for (const i of wanted) {
       const v = o.items.find((x) => x.code === i.code);
       if (!v) return `missing ${i.code}`;
-      if (i.wants_repeat && !v.repeat_stem?.trim()) return `${i.code}: needs repeat_stem`;
-      if (!versionB) continue;
-      if (!v.b_stem?.trim()) return `${i.code}: empty b_stem`;
-      if (i.type === "mc") {
-        const bad = checkMc(v.b_options, v.b_answer);
-        if (bad) return `${i.code}: ${bad}`;
-      }
-      if (i.wants_repeat && !v.b_repeat_stem?.trim()) return `${i.code}: needs b_repeat_stem`;
+      if (!v.repeat_stem?.trim()) return `${i.code}: needs repeat_stem`;
       if (hasPlaceholder(v)) return `${i.code}: placeholder left`;
     }
     return null;

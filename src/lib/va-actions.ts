@@ -8,9 +8,16 @@ import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { submitSopLinks } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
-import { sendSopNotice } from "@/lib/reports";
+import { sendCriticalAlert, sendPreparingNotice, sendSopNotice } from "@/lib/reports";
 import { createSessionClient } from "@/lib/supabase/server";
-import { loadToday, markCardsDone, submitAnswer, type SubmitOutcome, type SubmittedAnswer } from "@/lib/va-training";
+import {
+  claimPreparingNotice,
+  loadToday,
+  markCardsDone,
+  submitAnswer,
+  type SubmitOutcome,
+  type SubmittedAnswer,
+} from "@/lib/va-training";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY_CODE = /^W\dD\d$/;
@@ -24,8 +31,13 @@ async function va() {
 export async function markTodaysCardsDone(): Promise<ActionResult> {
   const user = await va();
   if (!user) return fail("VAs only.");
-  const error = await markCardsDone(user);
-  return error ? fail(error) : { ok: true, data: null };
+  const { error, preparing } = await markCardsDone(user);
+  if (error) return fail(error);
+  // VFDA hasn't approved the day yet: tell VFDA once.
+  if (preparing && (await claimPreparingNotice(user, preparing))) {
+    after(() => sendPreparingNotice(user.id, preparing).then(() => undefined));
+  }
+  return { ok: true, data: null };
 }
 
 export async function answerItem(
@@ -38,7 +50,11 @@ export async function answerItem(
   if (!user) return fail("VAs only.");
   if (!UUID.test(scenarioId) || (phase !== "first" && phase !== "repeat")) return fail("Invalid item.");
   if (drillId !== null && !UUID.test(drillId)) return fail("Invalid item.");
-  return submitAnswer(user, scenarioId, phase, answer ?? {}, drillId);
+  const result = await submitAnswer(user, scenarioId, phase, answer ?? {}, drillId);
+  if (!result.ok) return result;
+  const critical = result.critical;
+  if (critical) after(() => sendCriticalAlert(critical.itemId, critical.phase).then(() => undefined));
+  return { ok: true, data: result.data };
 }
 
 // Proof of work: a file already uploaded to the VA's own folder, or a link.

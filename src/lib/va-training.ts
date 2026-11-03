@@ -1,8 +1,9 @@
 import "server-only";
 
-// VA training on the server: loads the VA's days, opens the next one when
-// every unlock rule holds, serves scenarios one at a time, grades answers and
-// works out the day result. Uses the service role, so every function here
+// VA training on the server: loads the VA's days, opens the next one once the
+// day before it was submitted, its cards are marked done and VFDA approved it
+// for the office, serves scenarios one at a time, grades answers and labels
+// the day. Quizzes never block. Uses the service role, so every function here
 // checks the VA itself and returns only what the VA may see: never answer,
 // correct_response, critical_fail or options_rule.
 
@@ -32,6 +33,7 @@ import {
   type Feedback,
   type ItemProgress,
   type ProofRow,
+  type ResultLabel,
   type ServedItem,
   type UnlockRow,
 } from "@/lib/va-flow";
@@ -44,7 +46,7 @@ type Db = ReturnType<typeof createAdminClient>;
 
 const DAY_COLUMNS =
   "code, week, day, title, cards, condition, max_points, pass_points, review_min_points, answer_format, proof_of_work";
-const UNLOCK_COLUMNS = "schedule_day, version, status, cards_done_at, unlocked_at, opens_on";
+const UNLOCK_COLUMNS = "schedule_day, version, status, cards_done_at, unlocked_at";
 const PROOF_COLUMNS = "id, schedule_day, file_path, file_name, link_url, status, review_note, created_at";
 // What the VA's browser may see of a scenario.
 const DISPLAY_COLUMNS = "id, type, points, answer_format, stem, options, workflow, part_title, code";
@@ -77,8 +79,7 @@ export async function loadToday(user: CurrentUser) {
   if (!user.officeId) return { kind: "no_office" as const };
   const officeId = user.officeId;
 
-  const [profile, office, days, settings, unlocks, proofs, scenarios] = await Promise.all([
-    db.from("profiles").select("va_start_date").eq("id", user.id).maybeSingle(),
+  const [office, days, settings, unlocks, proofs, scenarios] = await Promise.all([
     db
       .from("offices")
       .select("name, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
@@ -90,8 +91,9 @@ export async function loadToday(user: CurrentUser) {
     db.from("proof_uploads").select(PROOF_COLUMNS).eq("va_id", user.id).eq("office_id", officeId).order("created_at"),
     db
       .from("office_scenarios")
-      .select("schedule_day, version, test_status")
+      .select("schedule_day, test_status")
       .eq("office_id", officeId)
+      .eq("version", "A")
       .eq("is_repeat_variant", false),
   ]);
   const officeRow = must(office);
@@ -99,13 +101,10 @@ export async function loadToday(user: CurrentUser) {
   const settingRows = must(settings) ?? [];
   const scenarioRows = must(scenarios) ?? [];
 
-  // A day (in one version) is approved once VFDA has set all its scenarios live.
-  const byDayVersion = new Map<string, string[]>();
-  for (const s of scenarioRows) {
-    const k = `${s.schedule_day}:${s.version}`;
-    byDayVersion.set(k, [...(byDayVersion.get(k) ?? []), s.test_status]);
-  }
-  const approved = new Set([...byDayVersion].filter(([, st]) => st.every((x) => x === "live")).map(([k]) => k));
+  // A day is approved once VFDA has set all its scenarios live.
+  const byDay = new Map<string, string[]>();
+  for (const s of scenarioRows) byDay.set(s.schedule_day, [...(byDay.get(s.schedule_day) ?? []), s.test_status]);
+  const approved = new Set([...byDay].filter(([, st]) => st.every((x) => x === "live")).map(([k]) => k));
 
   const path = trainingPath({
     sequence: (settingValue(settingRows, "sequence") as string[] | undefined) ?? [],
@@ -115,17 +114,9 @@ export async function loadToday(user: CurrentUser) {
     officeScenarioDays: new Set(scenarioRows.map((s) => s.schedule_day)),
   });
   const proofRows = (must(proofs) ?? []) as ProofRow[];
-  const date = todayIn(TIME_ZONE);
-  const today = buildToday({
-    path,
-    unlocks: (must(unlocks) ?? []) as UnlockRow[],
-    proofs: proofRows,
-    approved,
-    startDate: must(profile)?.va_start_date ?? null,
-    today: date,
-  });
+  const today = buildToday({ path, unlocks: (must(unlocks) ?? []) as UnlockRow[], approved });
 
-  // Every rule holds: open the day (once).
+  // Open the day (once).
   if (today.kind === "open" && today.current.status !== "open") {
     const { data: opened, error } = await db
       .from("day_unlocks")
@@ -133,23 +124,25 @@ export async function loadToday(user: CurrentUser) {
       .eq("va_id", user.id)
       .eq("office_id", officeId)
       .eq("schedule_day", today.current.day.code)
-      .in("status", ["locked", "retake"])
+      .eq("status", "locked")
       .select("status");
     if (error) throw new Error(error.message);
     if (opened?.length) today.current.status = "open";
   }
 
-  return { kind: "ok" as const, officeName: officeRow.name as string, today, proofs: proofRows, date };
+  return { kind: "ok" as const, officeName: officeRow.name as string, today, proofs: proofRows };
 }
 
-// "Mark today's cards done" for the day the VA is waiting on.
-export async function markCardsDone(user: CurrentUser): Promise<string | null> {
+// "Mark today's cards done" for the next day. Opens it at once when VFDA has
+// approved it; otherwise VFDA is told (once) that the VA is waiting.
+export async function markCardsDone(user: CurrentUser): Promise<{ error: string | null; preparing: string | null }> {
   const loaded = await loadToday(user);
-  if (loaded.kind !== "ok") return "Your account isn't linked to an office yet.";
+  if (loaded.kind !== "ok") return { error: "Your account isn't linked to an office yet.", preparing: null };
   const { today } = loaded;
-  if (today.kind !== "blocked") return today.kind === "open" ? null : "There's no day waiting for its cards.";
+  if (today.kind === "open") return { error: null, preparing: null };
+  if (today.kind === "preparing") return { error: null, preparing: today.current.day.code };
+  if (today.kind !== "cards") return { error: "There's no day waiting for its cards.", preparing: null };
   const day = today.current;
-  if (day.unlock?.cards_done_at) return null;
 
   const db = createAdminClient();
   const now = new Date().toISOString();
@@ -167,10 +160,27 @@ export async function markCardsDone(user: CurrentUser): Promise<string | null> {
           { va_id: user.id, office_id: user.officeId, schedule_day: day.day.code, version: "A", status: "locked", cards_done_at: now },
           { onConflict: "va_id,office_id,schedule_day", ignoreDuplicates: true },
         );
-  if (error) return "Couldn't save. Try again.";
-  // Opens the day now if nothing else is in the way.
-  await loadToday(user);
-  return null;
+  if (error) return { error: "Couldn't save. Try again.", preparing: null };
+  // Opens the day now if VFDA approved it.
+  const after = await loadToday(user);
+  const preparing = after.kind === "ok" && after.today.kind === "preparing" ? after.today.current.day.code : null;
+  return { error: null, preparing };
+}
+
+// Claims the "VFDA has been notified" for a day the VA is waiting on.
+// True only for the one request that should send it.
+export async function claimPreparingNotice(user: CurrentUser, day: string): Promise<boolean> {
+  if (!user.officeId) return false;
+  const { data } = await createAdminClient()
+    .from("day_unlocks")
+    .update({ prep_notified_at: new Date().toISOString() })
+    .eq("va_id", user.id)
+    .eq("office_id", user.officeId)
+    .eq("schedule_day", day)
+    .eq("status", "locked")
+    .is("prep_notified_at", null)
+    .select("id");
+  return !!data?.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +191,7 @@ type DayContext = {
   db: Db;
   user: CurrentUser & { officeId: string };
   current: DayView;
-  // A workflow retrain or recheck instead of a training day.
+  // A workflow recheck instead of a training day.
   drill: { id: string; kind: "retrain" | "recheck"; workflow: string } | null;
   attempt: { id: string; started_at: string; submitted_at: string | null };
   scenarios: DisplayScenario[];
@@ -204,7 +214,8 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
   const current = loaded.today.current;
   const db = createAdminClient();
   const officeId = user.officeId;
-  const key = { va_id: user.id, office_id: officeId, schedule_day: current.day.code, version: current.version, kind: "day" };
+  // One attempt per day.
+  const key = { va_id: user.id, office_id: officeId, schedule_day: current.day.code, version: "A", kind: "day" };
 
   // Created on the first visit (a second request at the same time hits the unique index).
   const { error: insertError } = await db.from("attempts").insert(key);
@@ -216,7 +227,7 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
       .select(DISPLAY_COLUMNS)
       .eq("office_id", officeId)
       .eq("schedule_day", current.day.code)
-      .eq("version", current.version)
+      .eq("version", "A")
       .eq("is_repeat_variant", false)
       .eq("test_status", "live")
       .order("position")
@@ -452,7 +463,7 @@ export async function submitAnswer(
   phase: "first" | "repeat",
   answer: SubmittedAnswer,
   drillId: string | null = null,
-): Promise<{ ok: true; data: SubmitOutcome } | { ok: false; error: string }> {
+): Promise<{ ok: true; data: SubmitOutcome; critical?: { itemId: string; phase: "first" | "repeat" } } | { ok: false; error: string }> {
   const ctx = drillId ? await openDrill(user, drillId) : await openDay(user);
   if (!ctx || ctx.attempt.submitted_at) return { ok: false, error: "Nothing is open for you here right now." };
   const next = nextItem(ctx.scenarios, ctx.items);
@@ -580,10 +591,12 @@ export async function submitAnswer(
     .update({ ...update, paste_log: [...((claimed.paste_log as unknown[]) ?? []), ...pastes] })
     .eq("id", item.id);
   if (error) return { ok: false, error: "Couldn't save your grade. Reload the page." };
+  // A critical error alerts VFDA and the doctor at once (the VA keeps going).
+  const critical = grade?.critical_error ? { itemId: item.id, phase } : undefined;
 
-  if (!repeat) return { ok: true, data: { feedback, repeat: null } };
+  if (!repeat) return { ok: true, data: { feedback, repeat: null }, critical };
   const parent = ctx.scenarios.find((s) => s.id === scenarioId)!;
-  return { ok: true, data: { feedback, repeat: toServed(ctx, parent, repeat, "repeat", feedback) } };
+  return { ok: true, data: { feedback, repeat: toServed(ctx, parent, repeat, "repeat", feedback) }, critical };
 }
 
 // ---------------------------------------------------------------------------
@@ -596,9 +609,9 @@ export type FinishedDay = {
   // True only for the request that worked the result out (it sends the report).
   fresh: boolean;
   dayCode: string;
-  result: "pass" | "review" | "retake";
-  version: "A" | "B";
-  retakeOn: string | null;
+  result: ResultLabel | null;
+  points: number;
+  max: number;
 };
 
 async function finishDay(ctx: DayContext): Promise<FinishedDay> {
@@ -608,7 +621,6 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     attemptId: attempt.id,
     drill: ctx.drill?.kind ?? null,
     dayCode: ctx.drill ? current.day.title : current.day.code,
-    version: current.version,
   };
 
   // Claim the finish, so it is worked out once.
@@ -619,8 +631,14 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
     .is("submitted_at", null)
     .select("id");
   if (!claimed?.length) {
-    const { data } = await db.from("attempts").select("result").eq("id", attempt.id).single();
-    return { ...base, fresh: false, result: data?.result ?? "review", retakeOn: null };
+    const { data } = await db.from("attempts").select("result, first_try_points, max_points").eq("id", attempt.id).single();
+    return {
+      ...base,
+      fresh: false,
+      result: (data?.result as ResultLabel | null) ?? null,
+      points: Number(data?.first_try_points ?? 0),
+      max: data?.max_points ?? 0,
+    };
   }
 
   const settings = await gradingSettings(db);
@@ -680,9 +698,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
   }
   if (fastIds.length) await db.from("attempt_items").update({ fast: true }).in("id", fastIds);
 
-  // A drill has no thresholds of its own: the pass and review ratios apply.
   const outcome = dayResult(
-    ctx.drill ? { ...current.day, max_points: null, pass_points: null, review_min_points: null } : current.day,
     full
       .filter((i) => typeOf.has(i.office_scenario_id))
       .map((i) => ({
@@ -708,37 +724,28 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
       time_spent: secondsBetween(attempt.started_at, now),
       paste_log: pastes,
       fast_finish: normalTotal > 0 && isFast(spentTotal, normalTotal),
+      // The VA sees their score and feedback right away.
+      feedback_released_at: now.toISOString(),
     })
     .eq("id", attempt.id);
 
-  if (ctx.drill) {
-    await recalculateCertifications(ctx.user.id);
-    return { ...base, fresh: true, result: outcome.result, retakeOn: null };
+  // The day is done whatever the score; the next one can open.
+  if (!ctx.drill) {
+    await db
+      .from("day_unlocks")
+      .update({ status: "done" })
+      .eq("va_id", ctx.user.id)
+      .eq("office_id", ctx.user.officeId)
+      .eq("schedule_day", current.day.code)
+      .eq("status", "open");
   }
 
-  // Move the day on. A first retake opens version B the next training day;
-  // failing version B goes to VFDA for a call.
-  let retakeOn: string | null = null;
-  let unlock: Record<string, unknown>;
-  if (outcome.result === "pass") unlock = { status: "passed" };
-  else if (outcome.result === "retake" && current.version === "A") {
-    retakeOn = addTrainingDays(todayIn(TIME_ZONE), 1);
-    unlock = { status: "retake", version: "B", opens_on: retakeOn, unlocked_at: null };
-  } else unlock = { status: "in_review" };
-  await db
-    .from("day_unlocks")
-    .update(unlock)
-    .eq("va_id", ctx.user.id)
-    .eq("office_id", ctx.user.officeId!)
-    .eq("schedule_day", current.day.code)
-    .eq("status", "open");
-
   await recalculateCertifications(ctx.user.id);
-  return { ...base, fresh: true, result: outcome.result, retakeOn };
+  return { ...base, fresh: true, result: outcome.result, points: outcome.points, max: outcome.max };
 }
 
 // ---------------------------------------------------------------------------
-// VFDA decisions on a day in review (admin pages).
+// A new VA's suggested start date (Invite VA).
 // ---------------------------------------------------------------------------
 
 export function nextTrainingDay() {

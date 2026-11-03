@@ -3,36 +3,30 @@ import type { ReactNode } from "react";
 import { OverrideForm } from "@/components/attempts/override-form";
 import { ActionButton } from "@/components/setup/action-button";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
-import { minutesText, RESULT_LABELS } from "@/lib/report";
-import { decideAttempt, releaseFeedback, resendAttemptReport } from "@/lib/va-admin-actions";
-import { showDate } from "@/lib/va-flow";
+import { minutesText } from "@/lib/report";
+import { resendAttemptReport } from "@/lib/va-admin-actions";
+import { percentOf, resultLabel } from "@/lib/va-flow";
 
-const UNLOCK_LABELS: Record<string, string> = {
-  open: "open",
-  passed: "passed (next day can open)",
-  in_review: "waiting for VFDA's decision",
-  retake: "retake assigned (version B)",
-  locked: "locked",
+const LABEL_TONE: Record<string, string> = {
+  strong: "text-green-700 dark:text-green-400",
+  needs_coaching: "text-amber-700 dark:text-amber-300",
+  at_risk: "text-red-700 dark:text-red-400",
 };
 
-// One attempt, item by item. `admin` adds overrides, the day decision and the
-// report status; the doctor's view is read-only.
+// One attempt, item by item. `admin` adds score overrides (they change only
+// the label) and the report status; the doctor's view is read-only.
 export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
-  const { attempt, items, unlock } = data;
-  const resultText = attempt.result ? RESULT_LABELS[attempt.result as keyof typeof RESULT_LABELS] : "not finished";
-  // A retrain or recheck of one workflow: VFDA decides its result when it's in review.
+  const { attempt, items } = data;
   const drill = attempt.kind === "day" ? null : attempt.kind === "retrain" ? "Retrain" : "Recheck";
   const workflow = items[0]?.workflow ?? "";
-  const latest = !(attempt.version === "A" && data.hasVersionB);
-  const canApprove = drill ? attempt.result === "review" : latest && (unlock?.status === "in_review" || unlock?.status === "retake");
-  const canRetake = drill ? attempt.result === "review" : latest && attempt.version === "A" && unlock?.status === "in_review";
+  const repeats = items.filter((i) => i.repeat);
+  const alerts = data.notifications.filter((n) => n.event.startsWith("critical") && n.status === "sent");
 
   return (
     <>
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">
           {data.vaName}: {drill ? `${drill} ${workflow}` : attempt.schedule_day}
-          {!drill && attempt.version === "B" && " (version B)"}
         </h1>
         <p className="text-sm text-foreground/60">
           {data.officeName}
@@ -41,20 +35,22 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        <dt className="text-foreground/60">Label</dt>
+        <dd className={`font-medium ${LABEL_TONE[attempt.result ?? ""] ?? ""}`}>
+          {attempt.submitted_at ? resultLabel(attempt.result) : "not finished"}
+        </dd>
         <dt className="text-foreground/60">First try</dt>
         <dd className="font-medium">
-          {attempt.first_try_points === null ? "–" : `${Number(attempt.first_try_points)}/${attempt.max_points}`}
+          {attempt.first_try_points === null
+            ? "–"
+            : `${Number(attempt.first_try_points)}/${attempt.max_points} (${percentOf(attempt.first_try_points, attempt.max_points)}%)`}
         </dd>
-        <dt className="text-foreground/60">Result</dt>
-        <dd className="font-medium">{resultText}</dd>
-        {!drill && (
-          <>
-            <dt className="text-foreground/60">Day</dt>
-            <dd>{unlock ? (UNLOCK_LABELS[unlock.status] ?? unlock.status) : "–"}</dd>
-          </>
-        )}
-        <dt className="text-foreground/60">VA feedback</dt>
-        <dd>{attempt.feedback_released_at ? `released ${showDate(attempt.feedback_released_at.slice(0, 10))}` : "not released yet"}</dd>
+        <dt className="text-foreground/60">Repeat scores</dt>
+        <dd>
+          {repeats.length
+            ? repeats.map((i) => `${i.code} ${i.first.score ?? "–"}→${i.repeat?.score ?? "–"}`).join(", ")
+            : "none"}
+        </dd>
         <dt className="text-foreground/60">Time spent</dt>
         <dd>{minutesText(attempt.time_spent)}</dd>
         <dt className="text-foreground/60">Flags</dt>
@@ -68,28 +64,15 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
             .join(", ") || "–"}
         </dd>
       </dl>
+      <p className="text-sm text-foreground/60">
+        Labels never block: the VA saw their score and feedback and moved on. Changing a score changes only the label.
+      </p>
 
       {admin && (
-        <div className="flex flex-col gap-3">
-          <ReportStatus attemptId={attempt.id} rows={data.notifications} />
-          {(canApprove || canRetake) && (
-            <div className="flex flex-wrap items-center gap-2">
-              {canApprove && (
-                <ActionButton action={decideAttempt.bind(null, attempt.id, "pass")} label={drill ? "Passed" : "Approve unlock"} primary />
-              )}
-              {canRetake && (
-                <ActionButton
-                  action={decideAttempt.bind(null, attempt.id, "retake")}
-                  label={drill ? "Failed (retrain)" : "Assign retake"}
-                />
-              )}
-            </div>
-          )}
-          {attempt.submitted_at && !attempt.feedback_released_at && (
-            <ActionButton action={releaseFeedback.bind(null, attempt.id)} label="Release feedback to VA" />
-          )}
-          {!drill && attempt.version === "B" && unlock?.status === "in_review" && (
-            <p className="text-sm">Version B was the retake: approve it, or set up a call with the VA.</p>
+        <div className="flex flex-col gap-1">
+          <ReportStatus attemptId={attempt.id} rows={data.notifications.filter((n) => n.event === "")} />
+          {alerts.length > 0 && (
+            <p className="text-sm">Critical error alert sent to {[...new Set(alerts.map((n) => n.recipient))].join(", ")}</p>
           )}
         </div>
       )}

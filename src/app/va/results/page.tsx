@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { FeedbackList, loadFeedback } from "@/components/va/attempt-feedback";
 import { requireRole } from "@/lib/auth";
 import { CERT_LABELS, SOP_LABELS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
-import { RESULT_LABELS } from "@/lib/report";
+import { TREND_LABELS } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
-import { showDate, withOverride } from "@/lib/va-flow";
+import { percentOf, showDate, trend } from "@/lib/va-flow";
 
 export default function ResultsPage() {
   return (
@@ -22,43 +23,28 @@ export default function ResultsPage() {
   );
 }
 
-type Feedback = { reason?: string; missed_steps?: string[] } | null;
-
-// Scores and feedback once VFDA releases them, and where each workflow stands.
-// Read on the server for this VA only; never answer keys.
+// Scores and feedback for every finished day (shown right away), the trend
+// across days, and where each workflow stands. Read on the server for this VA
+// only; never answer keys.
 async function Results() {
   const user = await requireRole("va");
   const db = createAdminClient();
   const [{ data: attempts }, grid] = await Promise.all([
     db
       .from("attempts")
-      .select("id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, feedback_released_at")
+      .select("id, schedule_day, kind, submitted_at, first_try_points, max_points")
       .eq("va_id", user.id)
       .eq("office_id", user.officeId ?? "")
       .not("submitted_at", "is", null)
       .order("submitted_at"),
     loadCertGrid(db, { vaIds: [user.id] }),
   ]);
-  const released = (attempts ?? []).filter((a) => a.feedback_released_at);
-  const waiting = (attempts ?? []).filter((a) => !a.feedback_released_at);
-  const { data: items } = released.length
-    ? await db
-        .from("attempt_items")
-        .select("attempt_id, office_scenario_id, position, first_score, first_feedback, repeat_scenario_id, repeat_score, repeat_feedback, critical_error, ai_confidence, vfda_override")
-        .in(
-          "attempt_id",
-          released.map((a) => a.id),
-        )
-        .order("position")
-    : { data: [] };
-  const ids = [...new Set((items ?? []).map((i) => i.office_scenario_id))];
-  const { data: scenarios } = ids.length
-    ? await db.from("office_scenarios").select("id, code, workflow, type, points").in("id", ids)
-    : { data: [] };
-  const scenarioOf = new Map((scenarios ?? []).map((s) => [s.id, s]));
+  const done = attempts ?? [];
+  const feedback = await loadFeedback(done.map((a) => a.id));
+  const direction = trend(done.filter((a) => a.kind === "day").map((a) => percentOf(a.first_try_points, a.max_points)));
   const row = grid.rows[0];
-  const label = (a: { kind: string; schedule_day: string; version: string }) =>
-    a.kind === "day" ? `${a.schedule_day}${a.version === "B" ? " (version B)" : ""}` : a.kind === "retrain" ? "Retrain" : "Recheck";
+  const label = (a: { kind: string; schedule_day: string }) =>
+    a.kind === "day" ? a.schedule_day : a.kind === "retrain" ? "Retrain" : "Recheck";
 
   return (
     <>
@@ -90,42 +76,14 @@ async function Results() {
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Scores and feedback</h2>
-        {waiting.length > 0 && (
-          <p className="text-sm text-foreground/70">
-            Waiting for VFDA to release: {waiting.map(label).join(", ")}.
-          </p>
-        )}
-        {!released.length && <p className="text-sm">Nothing released yet.</p>}
-        {released.map((a) => (
+        {direction && <p className="text-sm">Your first-try scores across days: {TREND_LABELS[direction].toLowerCase()}.</p>}
+        {!done.length && <p className="text-sm">No finished days yet.</p>}
+        {done.map((a) => (
           <div key={a.id} className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-4 py-3 text-sm">
             <p className="font-medium">
-              {label(a)}: {Number(a.first_try_points)}/{a.max_points} first try · {RESULT_LABELS[a.result as keyof typeof RESULT_LABELS]?.split(" (")[0]}
+              {label(a)}: {Number(a.first_try_points)}/{a.max_points} first try ({percentOf(a.first_try_points, a.max_points)}%)
             </p>
-            <ul className="flex flex-col gap-2">
-              {(items ?? [])
-                .filter((i) => i.attempt_id === a.id)
-                .map((raw) => {
-                  const s = scenarioOf.get(raw.office_scenario_id);
-                  const i = withOverride({ ...raw, ai_confidence: null }, raw.vfda_override);
-                  const max = s?.type === "mc" ? s.points : 2;
-                  const first = raw.first_feedback as Feedback;
-                  const again = raw.repeat_feedback as Feedback;
-                  return (
-                    <li key={raw.office_scenario_id}>
-                      <span className="font-medium">{s?.code}</span>: {i.first_score ?? "–"}/{max} first try
-                      {raw.repeat_scenario_id && `, ${i.repeat_score ?? "–"}/${max} on repeat`}
-                      {i.critical_error && " · critical error"}
-                      {first?.reason && <span className="block text-foreground/70">{first.reason}</span>}
-                      {(first?.missed_steps ?? []).map((m) => (
-                        <span key={m} className="block text-foreground/70">
-                          Missed: {m}
-                        </span>
-                      ))}
-                      {again?.reason && <span className="block text-foreground/70">Repeat: {again.reason}</span>}
-                    </li>
-                  );
-                })}
-            </ul>
+            <FeedbackList items={feedback.get(a.id) ?? []} />
           </div>
         ))}
       </section>

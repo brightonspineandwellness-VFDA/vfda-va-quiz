@@ -1,20 +1,19 @@
 "use server";
 
 // VFDA's side of VA training (/admin/vas): accept proof of work or ask for a
-// redo, decide a day that went to review, and set a VA's training start date.
+// redo, set a VA's training start date, and override a score (which changes
+// only the label). Nothing here blocks or unlocks a day.
 // VFDA admins only; writes as the admin (row-level security applies).
 
 import { after } from "next/server";
 import { recalculateAttempt } from "@/lib/attempt-review";
 import { getCurrentUser } from "@/lib/auth";
-import { assignRetrainFor, recalculateCertifications } from "@/lib/certifications";
+import { recalculateCertifications } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
 import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestSlack } from "@/lib/reports";
 import { createSessionClient } from "@/lib/supabase/server";
-import { nextTrainingDay } from "@/lib/va-training";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DAY_CODE = /^W\dD\d$/;
 const fail = (error: string) => ({ ok: false, error }) as const;
 
 async function admin() {
@@ -41,39 +40,6 @@ export async function reviewProof(proofId: string, decision: "accept" | "redo", 
     .select("id");
   if (error || !data?.length) return fail("Couldn't save. Try again.");
   return { ok: true, data: null };
-}
-
-// A day in review: approve it (counts as passed) or assign the retake
-// (version B, from the next training day). A version B in review can only be
-// approved; anything else is settled on a call.
-export async function decideReviewDay(vaId: string, day: string, decision: "pass" | "retake"): Promise<ActionResult> {
-  const user = await admin();
-  if (!user) return fail("VFDA admins only.");
-  if (!UUID.test(vaId) || !DAY_CODE.test(day)) return fail("Invalid request.");
-  const supabase = await createSessionClient();
-  const { data: va } = await supabase.from("profiles").select("office_id").eq("id", vaId).maybeSingle();
-  if (!va?.office_id) return fail("This VA has no office.");
-  const { data: unlock } = await supabase
-    .from("day_unlocks")
-    .select("version, status")
-    .eq("va_id", vaId)
-    .eq("office_id", va.office_id)
-    .eq("schedule_day", day)
-    .maybeSingle();
-  if (unlock?.status !== "in_review") return fail("This day isn't waiting for review.");
-  if (decision === "retake" && unlock.version === "B") return fail("Version B was already the retake. Approve it or talk it over with the VA.");
-  const { error } = await supabase
-    .from("day_unlocks")
-    .update(
-      decision === "pass"
-        ? { status: "passed" }
-        : { status: "retake", version: "B", opens_on: nextTrainingDay(), unlocked_at: null },
-    )
-    .eq("va_id", vaId)
-    .eq("office_id", va.office_id)
-    .eq("schedule_day", day)
-    .eq("status", "in_review");
-  return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }
 
 export async function setStartDate(vaId: string, date: string): Promise<ActionResult> {
@@ -106,7 +72,7 @@ export async function resendAttemptReport(attemptId: string): Promise<ActionResu
 
 export type OverrideInput = { firstScore: number; repeatScore: number | null; criticalError: boolean; note: string };
 
-// VFDA changes an item's score (with a note); the day result is worked out again.
+// VFDA changes an item's score (with a note); the day's label is worked out again.
 export async function overrideScore(itemId: string, input: OverrideInput): Promise<ActionResult> {
   const user = await admin();
   if (!user) return fail("VFDA admins only.");
@@ -141,77 +107,9 @@ export async function overrideScore(itemId: string, input: OverrideInput): Promi
     const { data: owner } = await supabase.from("attempts").select("va_id").eq("id", item.attempt_id).single();
     if (owner) await recalculateCertifications(owner.va_id);
   } catch {
-    return fail("Saved, but the day result couldn't be worked out again. Reload the page.");
+    return fail("Saved, but the label couldn't be worked out again. Reload the page.");
   }
   return { ok: true, data: null };
-}
-
-// "Approve unlock": the day counts as passed and the next one can open (also
-// cancels a retake that hasn't started). "Assign retake": version B opens the
-// next training day.
-export async function decideAttempt(attemptId: string, decision: "pass" | "retake"): Promise<ActionResult> {
-  const user = await admin();
-  if (!user) return fail("VFDA admins only.");
-  if (!UUID.test(attemptId) || (decision !== "pass" && decision !== "retake")) return fail("Invalid request.");
-  const supabase = await createSessionClient();
-  const { data: attempt } = await supabase
-    .from("attempts")
-    .select("va_id, office_id, schedule_day, version, submitted_at, kind, result")
-    .eq("id", attemptId)
-    .maybeSingle();
-  if (!attempt?.submitted_at) return fail("This attempt isn't finished.");
-
-  // A retrain or recheck in review: VFDA's call is its result.
-  if (attempt.kind !== "day") {
-    if (attempt.result !== "review") return fail("This attempt isn't waiting for a decision.");
-    const { error } = await supabase
-      .from("attempts")
-      .update({ result: decision === "pass" ? "pass" : "retake" })
-      .eq("id", attemptId)
-      .eq("result", "review");
-    if (error) return fail("Couldn't save. Try again.");
-    await recalculateCertifications(attempt.va_id);
-    return { ok: true, data: null };
-  }
-
-  const [{ data: unlock }, { data: versionB }] = await Promise.all([
-    supabase.from("day_unlocks").select("status").eq("va_id", attempt.va_id).eq("office_id", attempt.office_id).eq("schedule_day", attempt.schedule_day).maybeSingle(),
-    supabase
-      .from("attempts")
-      .select("id")
-      .eq("va_id", attempt.va_id)
-      .eq("office_id", attempt.office_id)
-      .eq("schedule_day", attempt.schedule_day)
-      .eq("version", "B")
-      .eq("kind", "day")
-      .maybeSingle(),
-  ]);
-  if (attempt.version === "A" && versionB) return fail("Version B was already started; decide that attempt instead.");
-  const status = unlock?.status;
-
-  if (decision === "pass") {
-    if (status !== "in_review" && status !== "retake") return fail("This day isn't waiting for a decision.");
-    const { data, error } = await supabase
-      .from("day_unlocks")
-      .update({ status: "passed", version: attempt.version, opens_on: null })
-      .eq("va_id", attempt.va_id)
-      .eq("office_id", attempt.office_id)
-      .eq("schedule_day", attempt.schedule_day)
-      .eq("status", status)
-      .select("status");
-    return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
-  }
-  if (attempt.version === "B") return fail("Version B was already the retake. Approve it or talk it over with the VA.");
-  if (status !== "in_review") return fail("This day isn't waiting for a decision.");
-  const { data, error } = await supabase
-    .from("day_unlocks")
-    .update({ status: "retake", version: "B", opens_on: nextTrainingDay(), unlocked_at: null })
-    .eq("va_id", attempt.va_id)
-    .eq("office_id", attempt.office_id)
-    .eq("schedule_day", attempt.schedule_day)
-    .eq("status", status)
-    .select("status");
-  return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -261,27 +159,4 @@ export async function confirmSop(
   await recalculateCertifications(data[0].va_id);
   after(() => sendSopNotice(certificationId, decision).then(() => undefined));
   return { ok: true, data: null };
-}
-
-// Another round of the workflow's version B scenarios (after a failed retrain).
-export async function assignRetrainAgain(certificationId: string): Promise<ActionResult> {
-  if (!(await admin())) return fail("VFDA admins only.");
-  if (!UUID.test(certificationId)) return fail("Invalid request.");
-  const error = await assignRetrainFor(certificationId);
-  return error ? fail(error) : { ok: true, data: null };
-}
-
-// Lets the VA see this attempt's scores and feedback on My results.
-export async function releaseFeedback(attemptId: string): Promise<ActionResult> {
-  if (!(await admin())) return fail("VFDA admins only.");
-  if (!UUID.test(attemptId)) return fail("Invalid request.");
-  const supabase = await createSessionClient();
-  const { data, error } = await supabase
-    .from("attempts")
-    .update({ feedback_released_at: new Date().toISOString() })
-    .eq("id", attemptId)
-    .not("submitted_at", "is", null)
-    .is("feedback_released_at", null)
-    .select("id");
-  return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }

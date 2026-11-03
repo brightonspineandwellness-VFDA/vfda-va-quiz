@@ -3,10 +3,11 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { FeedbackList, loadFeedback } from "@/components/va/attempt-feedback";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
 import { sendAttemptReport } from "@/lib/reports";
-import { showDate } from "@/lib/va-flow";
+import { percentOf } from "@/lib/va-flow";
 import { loadDayScreen, type FinishedDay } from "@/lib/va-training";
 
 // Grading a situational answer (and its retry) runs in the answer action;
@@ -39,25 +40,26 @@ async function DayScreen() {
   return <ScenarioRunner key={`${item.scenarioId}:${item.phase}`} initial={item} />;
 }
 
-function Finished({ result }: { result: FinishedDay }) {
-  const text = {
-    pass: `You passed ${result.dayCode}. Upload your proof of work so the next day can open.`,
-    review: `${result.dayCode} is done. VFDA will review your answers before the next day opens.`,
-    retake:
-      result.version === "A" && result.retakeOn
-        ? `${result.dayCode} needs a retake. Version B opens on ${showDate(result.retakeOn)}.`
-        : `${result.dayCode} is done. VFDA will set up a call with you about it.`,
-  }[result.result];
+// Score and feedback right away; the next day opens once its cards are done.
+async function Finished({ result }: { result: FinishedDay }) {
+  const items = (await loadFeedback([result.attemptId])).get(result.attemptId) ?? [];
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
-      <p className="text-lg font-semibold">Day complete</p>
-      <p>{text}</p>
+      <p className="text-lg font-semibold">{result.dayCode} complete</p>
+      <p>
+        First try: <span className="font-medium">{result.points}/{result.max}</span>
+        {result.max > 0 && ` (${percentOf(result.points, result.max)}%)`}
+      </p>
+      <div className="text-sm">
+        <FeedbackList items={items} />
+      </div>
+      <p className="text-sm text-foreground/70">Read the feedback, then go on to your next day.</p>
       <div className="flex flex-wrap gap-3">
-        <Link href="/va/proof" className="rounded-lg bg-foreground px-4 py-2 font-medium text-background">
-          Proof of work
-        </Link>
-        <Link href="/va" className="rounded-lg border border-foreground/25 px-4 py-2 font-medium">
+        <Link href="/va" className="rounded-lg bg-foreground px-4 py-2 font-medium text-background">
           Back to Today
+        </Link>
+        <Link href="/va/proof" className="rounded-lg border border-foreground/25 px-4 py-2 font-medium">
+          Proof of work
         </Link>
       </div>
     </div>

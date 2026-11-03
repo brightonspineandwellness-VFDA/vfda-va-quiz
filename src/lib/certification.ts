@@ -1,13 +1,16 @@
 // Workflow certification (SPEC section 6, settings.certification), as pure
 // functions. The office's Trello board is the SOP: VFDA confirms on Trello
 // that the doctor approved the card, and sets sop_status here.
-// src/lib/certifications.ts loads the data, saves the result and assigns
-// retrains.
+// src/lib/certifications.ts loads the data and saves the result. Nothing is
+// assigned automatically: VFDA decides the follow-up for Coaching needed.
 
-export type CertStatus = "pending" | "retrain" | "certified";
+export type CertStatus = "pending" | "coaching" | "certified";
 export type SopStatus = "pending" | "approved" | "needs_changes" | "rejected";
 
-export const CERT_LABELS: Record<CertStatus, string> = { pending: "Pending", retrain: "Retrain", certified: "Certified" };
+export const CERT_LABELS: Record<CertStatus, string> = { pending: "Pending", coaching: "Coaching needed", certified: "Certified" };
+
+// Older rows may still say "retrain" until the SQL renames it.
+export const certStatus = (s: string): CertStatus => (s === "certified" ? "certified" : s === "pending" ? "pending" : "coaching");
 
 export const SOP_LABELS: Record<SopStatus, string> = {
   pending: "waiting for VFDA to confirm",
@@ -43,8 +46,6 @@ export type EvidenceItem = {
   critical_error: boolean;
 };
 
-export type LatestDrill = { kind: "retrain" | "recheck"; result: "pass" | "review" | "retake" | null } | null;
-
 // The share of first-try points the workflow's pass_standard asks for
 // ("80% with zero critical errors ..."); 80% when it names none.
 export function passPercent(passStandard: string | null | undefined): number {
@@ -53,47 +54,34 @@ export function passPercent(passStandard: string | null | undefined): number {
   return n > 0 && n <= 100 ? n : 80;
 }
 
+// Certified: every scenario done, no critical error in the workflow, first-try
+// average at the pass standard (80%), SOP approved on Trello.
+// Coaching needed: all its scenarios done but below that (or the SOP rejected).
+// Pending: not finished yet (scenarios, a grade VFDA still owes, or the SOP).
 export function evaluateWorkflow(input: {
   items: EvidenceItem[];
+  // Every scenario of the workflow answered (all its days, or the recheck, submitted).
+  allDone: boolean;
   passStandard: string | null;
   sopStatus: SopStatus;
   sopSubmitted: boolean;
-  latestDrill: LatestDrill;
-  current: CertStatus;
-}): { status: CertStatus; reason: string } {
-  const { items, sopStatus, latestDrill } = input;
+}): { status: CertStatus; reason: string; percent: number | null } {
+  const { items, sopStatus } = input;
+  const graded = items.filter((i) => i.first_score !== null);
+  const max = graded.reduce((n, i) => n + i.points, 0);
+  const points = graded.reduce((n, i) => n + (i.first_score ?? 0), 0);
+  const percent = max > 0 ? Math.round((points * 100) / max) : null;
 
-  // A recheck VFDA hasn't decided yet changes nothing.
-  if (latestDrill?.kind === "recheck" && latestDrill.result === "review") return { status: input.current, reason: "recheck waiting for VFDA" };
-
-  // Retrain: a critical error, a repeat still below 2/2, a failed recheck or a rejected SOP.
-  const recheck = latestDrill?.kind === "recheck";
-  if (sopStatus === "rejected") return { status: "retrain", reason: "SOP rejected" };
-  if (recheck && latestDrill.result === "retake") return { status: "retrain", reason: "failed the recheck" };
-  if (!recheck) {
-    if (items.some((i) => i.critical_error)) return { status: "retrain", reason: "critical error" };
-    if (items.some((i) => i.repeated && i.repeat_score !== null && i.repeat_score < 2)) {
-      return { status: "retrain", reason: "a repeat still below 2/2" };
-    }
+  if (!input.allDone || !items.length) return { status: "pending", reason: "scenarios not finished yet", percent };
+  if (items.some((i) => i.type === "situational" && i.first_score === null)) {
+    return { status: "pending", reason: "an answer needs VFDA to score it", percent };
   }
-
-  // Certified: every scenario passed or corrected, pass_standard met, SOP approved.
-  let missing: string | null = null;
-  if (recheck) {
-    if (latestDrill.result !== "pass") missing = "recheck not finished";
-  } else if (!items.length) missing = "no scenarios done yet";
-  else if (items.some((i) => i.type === "situational" && i.first_score === null && i.repeat_score === null)) {
-    missing = "an answer needs VFDA review";
-  } else if (items.some((i) => i.type === "situational" && i.first_score !== 2 && i.repeat_score !== 2)) {
-    missing = "a missed item wasn't corrected";
-  } else {
-    // A miss corrected on repeat counts as passed, as above.
-    const max = items.reduce((n, i) => n + i.points, 0);
-    const got = items.reduce((n, i) => n + Math.max(i.first_score ?? 0, i.repeat_score ?? 0), 0);
-    const need = passPercent(input.passStandard);
-    if (max > 0 && (got * 100) / max < need) missing = `below the ${need}% pass standard`;
+  if (items.some((i) => i.critical_error)) return { status: "coaching", reason: "critical error", percent };
+  const need = passPercent(input.passStandard);
+  if (max > 0 && points * 100 < need * max) {
+    return { status: "coaching", reason: `first-try average ${percent}% (needs ${need}%)`, percent };
   }
-  if (missing) return { status: "pending", reason: missing };
+  if (sopStatus === "rejected") return { status: "coaching", reason: "SOP rejected", percent };
   if (sopStatus !== "approved") {
     return {
       status: "pending",
@@ -102,9 +90,10 @@ export function evaluateWorkflow(input: {
         : sopStatus === "needs_changes"
           ? "Trello card needs changes"
           : "waiting for VFDA to confirm the Trello card",
+      percent,
     };
   }
-  return { status: "certified", reason: "" };
+  return { status: "certified", reason: "", percent };
 }
 
 // "https://trello.com/c/…" links, one per line (or separated by spaces).

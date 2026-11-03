@@ -1,13 +1,15 @@
 import Link from "next/link";
+import { after } from "next/server";
 import { Suspense } from "react";
 import { SopForm } from "@/components/certs/sop-form";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
 import { loadVaTasks } from "@/lib/certifications";
+import { sendPreparingNotice } from "@/lib/reports";
 import { markTodaysCardsDone } from "@/lib/va-actions";
 import { dayName, proofState, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
-import { loadToday } from "@/lib/va-training";
+import { claimPreparingNotice, loadToday } from "@/lib/va-training";
 
 export default function VaPage() {
   return (
@@ -22,10 +24,7 @@ export default function VaPage() {
 const STATUS_LABELS: Record<UnlockStatus, string> = {
   locked: "Locked",
   open: "Open",
-  submitted: "Grading",
-  passed: "Passed",
-  in_review: "With VFDA",
-  retake: "Retake",
+  done: "Done",
 };
 
 const card = "flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4";
@@ -43,6 +42,11 @@ async function Today() {
     );
   }
   const { today, officeName, proofs } = loaded;
+  // Cards marked done before VFDA approved the day: make sure VFDA was told (once).
+  if (today.kind === "preparing" && (await claimPreparingNotice(user, today.current.day.code))) {
+    const day = today.current.day.code;
+    after(() => sendPreparingNotice(user.id, day).then(() => undefined));
+  }
 
   return (
     <>
@@ -56,54 +60,33 @@ async function Today() {
       {today.kind === "no_days" && <p>No training days are set up for your office yet.</p>}
       {today.kind === "finished" && (
         <div className={card}>
-          <p className="font-medium">You&apos;ve passed every training day.</p>
+          <p className="font-medium">You&apos;ve finished every training day.</p>
         </div>
       )}
       {today.kind === "open" && (
         <div className={card}>
           <p className="text-sm font-medium text-green-700 dark:text-green-400">Open now</p>
           <p className="text-lg font-semibold">{dayName(today.current)}</p>
-          {today.current.version === "B" && <p className="text-sm">This is your retake (version B).</p>}
           <CardList view={today.current} />
           <Link href="/va/day" className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
             Go to today&apos;s scenarios →
           </Link>
         </div>
       )}
-      {today.kind === "waiting" && (
-        <div className={card}>
-          <p className="text-lg font-semibold">{dayName(today.current)}</p>
-          <p>{today.message}</p>
-        </div>
-      )}
-      {today.kind === "blocked" && (
+      {today.kind === "cards" && (
         <div className={card}>
           <p className="text-sm font-medium text-foreground/60">Up next</p>
           <p className="text-lg font-semibold">{dayName(today.current)}</p>
-          {today.current.status === "retake" && <p className="text-sm">This is your retake (version B).</p>}
           <CardList view={today.current} />
-          <p className="font-medium">It opens when all of these are done:</p>
-          <ul className="flex flex-col gap-1.5">
-            {today.checks.map((c) => (
-              <li key={c.key} className="flex gap-2">
-                <span
-                  aria-label={c.ok ? "Done" : "Not yet"}
-                  className={c.ok ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}
-                >
-                  {c.ok ? "✓" : "✗"}
-                </span>
-                <span>{c.text}</span>
-              </li>
-            ))}
-          </ul>
-          {today.checks.some((c) => c.key === "cards" && !c.ok) && (
-            <ActionButton action={markTodaysCardsDone} label="Mark today's cards done" primary />
-          )}
-          {today.checks.some((c) => c.key === "proof" && !c.ok) && (
-            <Link href="/va/proof" className="self-start text-sm underline">
-              Proof of work →
-            </Link>
-          )}
+          <p>Read today&apos;s cards, then mark them done to open the quiz.</p>
+          <ActionButton action={markTodaysCardsDone} label="Mark today's cards done" primary />
+        </div>
+      )}
+      {today.kind === "preparing" && (
+        <div className={card}>
+          <p className="text-lg font-semibold">{dayName(today.current)}</p>
+          <p>Your quiz is being prepared, VFDA has been notified.</p>
+          <p className="text-sm text-foreground/60">Come back to this page later; the quiz opens here as soon as it&apos;s ready.</p>
         </div>
       )}
 
@@ -130,7 +113,6 @@ async function Today() {
                   <span>{dayName(d)}</span>
                   <span className="text-foreground/70">
                     {STATUS_LABELS[d.status]}
-                    {d.version === "B" && " (version B)"}
                     {proof === "pending" && " · proof waiting for VFDA"}
                     {proof === "redo" && " · redo proof"}
                     {proof === "missing" && " · proof needed"}
@@ -146,7 +128,7 @@ async function Today() {
   );
 }
 
-// Retrains and rechecks to do, and Trello cards to update. Neither blocks the next day.
+// Rechecks to do, and Trello cards to update. Neither blocks the next day.
 async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
   const { sop, drills } = await loadVaTasks(vaId, officeId);
   if (!sop.length && !drills.length) return null;
@@ -154,15 +136,11 @@ async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
     <>
       {drills.map((d) => (
         <div key={d.id} className={card}>
-          <p className="text-sm font-medium text-red-700 dark:text-red-400">{d.kind === "retrain" ? "Retrain" : "Recheck"}</p>
+          <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Recheck</p>
           <p className="text-lg font-semibold">
             {d.code} {d.name}
           </p>
-          <p className="text-sm">
-            {d.kind === "retrain"
-              ? "Practice this workflow again with new scenarios (version B)."
-              : "A short recheck to keep your certification: 5 scenarios."}
-          </p>
+          <p className="text-sm">A short recheck to keep your certification: 5 scenarios.</p>
           <Link href={`/va/drill/${d.id}`} className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
             Start →
           </Link>

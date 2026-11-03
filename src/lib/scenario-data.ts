@@ -52,7 +52,6 @@ export type DaySummary = {
   kind: DayKind;
   status: OfficeDayRow | null;
   countA: number;
-  countB: number;
   repeats: number;
   missing: number;
   started: boolean;
@@ -92,8 +91,7 @@ export async function loadScenarioOverview(officeId: string) {
       kind,
       status: ((days.data ?? []) as OfficeDayRow[]).find((d) => d.schedule_day === day.code) ?? null,
       countA: mine.filter((r) => r.version === "A" && !r.is_repeat_variant).length,
-      countB: mine.filter((r) => r.version === "B" && !r.is_repeat_variant).length,
-      repeats: mine.filter((r) => r.is_repeat_variant).length,
+      repeats: mine.filter((r) => r.version === "A" && r.is_repeat_variant).length,
       missing: mine.filter((r) => r.missing_keys.length > 0).length,
       started: started.has(day.code),
       cards: (documents.data ?? [])

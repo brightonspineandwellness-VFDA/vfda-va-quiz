@@ -50,8 +50,8 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
       <p className="text-sm text-foreground/70">
         Card-first: Claude writes each day from the office&apos;s own cards mapped to it, with the master day as the
         pattern (same number of items, same multiple choice / situational split) and the VFDA standards where the
-        cards are silent. Every item shows the card and the card&apos;s words it came from, plus version B for retakes
-        and a repeat variant. A day with no card mapped is built from the master bank. Map cards on the{" "}
+        cards are silent. Every item shows the card and the card&apos;s words it came from, plus the repeat variant a
+        VA gets right after a situational answer below 2/2. A day with no card mapped is built from the master bank. Map cards on the{" "}
         <Link href={`/admin/offices/${office.id}/rules`} className="underline">
           Cards page
         </Link>
@@ -90,7 +90,7 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
                     {d.started && <p className="text-foreground/60">A VA has started this day</p>}
                   </td>
                   <td className="py-2 pr-3">
-                    {built ? `${d.countA} (version B: ${d.countB}, repeats: ${d.repeats})` : "–"}
+                    {built ? `${d.countA} (repeats: ${d.repeats})` : "–"}
                   </td>
                   <td className="py-2 pr-3">
                     <div className="flex flex-wrap gap-2">

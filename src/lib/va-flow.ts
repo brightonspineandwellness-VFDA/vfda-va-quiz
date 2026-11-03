@@ -1,15 +1,30 @@
 // The VA's training path, written as pure functions so it can be tested without
-// a database: which days the VA gets and in what order, what is blocking the
-// next one (SPEC section 6, Unlocking), the next item to show, the day result
-// (Scoring) and the honesty checks (Keeping it honest). The server
-// (src/lib/va-training.ts) loads the rows and acts on what these return.
+// a database: which days the VA gets and in what order, when the next one
+// opens, the next item to show, the day's result label and trend, and the
+// honesty checks (Keeping it honest). Quizzes measure understanding; they never
+// block. The server (src/lib/va-training.ts) loads the rows and acts on what
+// these return.
 
 import { applies, normalizeRemoteAccess, type Profile } from "@/lib/interview";
 
 export type AnswerFormat = "steps_say_doc" | "say_do_book";
-export type UnlockStatus = "locked" | "open" | "submitted" | "passed" | "in_review" | "retake";
+// "done": the day's one attempt was submitted. Older rows may still say
+// passed / in_review / submitted / retake; every one of those counts as done.
+export type UnlockStatus = "locked" | "open" | "done";
 export type Version = "A" | "B";
-export type DayResult = "pass" | "review" | "retake";
+export type ResultLabel = "strong" | "needs_coaching" | "at_risk";
+
+export const RESULT_LABELS: Record<ResultLabel, string> = {
+  strong: "Strong",
+  needs_coaching: "Needs coaching",
+  at_risk: "At risk",
+};
+
+// Older attempts may carry pass / review / retake until the SQL relabels them.
+export const resultLabel = (r: string | null | undefined) => (r && r in RESULT_LABELS ? RESULT_LABELS[r as ResultLabel] : "–");
+
+export const unlockStatus = (s: string | null | undefined): UnlockStatus =>
+  !s || s === "locked" ? "locked" : s === "open" ? "open" : "done";
 
 export type DayRow = {
   code: string;
@@ -28,10 +43,9 @@ export type DayRow = {
 export type UnlockRow = {
   schedule_day: string;
   version: Version;
-  status: UnlockStatus;
+  status: string;
   cards_done_at: string | null;
   unlocked_at: string | null;
-  opens_on: string | null;
 };
 
 export type ProofRow = {
@@ -84,7 +98,7 @@ export function trainingPath(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Dates. Training days are weekdays, counted from va_start_date.
+// Dates. Training days are weekdays (a new VA's suggested start date).
 // ---------------------------------------------------------------------------
 
 const parseDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -111,11 +125,8 @@ export function showDate(iso: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Today: the one open day, or exactly what is blocking it.
+// Today: the open day, or what it is waiting for.
 // ---------------------------------------------------------------------------
-
-export type CheckKey = "previous" | "cards" | "date" | "approved" | "proof";
-export type Check = { key: CheckKey; ok: boolean; text: string };
 
 export type DayView = {
   index: number; // 1-based training day number
@@ -125,16 +136,18 @@ export type DayView = {
   version: Version;
 };
 
+// "cards": waiting for the VA's "Mark today's cards done".
+// "preparing": cards done, but VFDA hasn't approved the day's scenarios for the office yet.
 export type Today =
   | { kind: "no_days" }
   | { kind: "finished"; days: DayView[] }
   | { kind: "open"; days: DayView[]; current: DayView }
-  | { kind: "waiting"; days: DayView[]; current: DayView; message: string }
-  | { kind: "blocked"; days: DayView[]; current: DayView; checks: Check[] };
+  | { kind: "cards"; days: DayView[]; current: DayView }
+  | { kind: "preparing"; days: DayView[]; current: DayView };
 
 export const dayName = (v: Pick<DayView, "index" | "day">) => `Day ${v.index} (${v.day.code}): ${v.day.title}`;
 
-// Proof for a day is done when VFDA accepted an upload, or the day asks for none.
+// Proof for a day: shown and reviewed, never blocking.
 export function proofState(day: DayRow, proofs: ProofRow[]): "none_needed" | "accepted" | "pending" | "redo" | "missing" {
   if (day.proof_of_work.length === 0) return "none_needed";
   const mine = proofs.filter((p) => p.schedule_day === day.code);
@@ -143,95 +156,26 @@ export function proofState(day: DayRow, proofs: ProofRow[]): "none_needed" | "ac
   return mine.length ? "redo" : "missing";
 }
 
-function waitingText(v: DayView) {
-  if (v.status === "submitted") return `${dayName(v)}: your answers are being graded`;
-  return v.version === "B"
-    ? `${dayName(v)}: VFDA will set up a call with you about your retake`
-    : `${dayName(v)}: VFDA is reviewing your results`;
-}
-
+// The next day opens once the day before it was submitted (any score), the VA
+// marked its cards done, and VFDA approved its scenarios for the office.
 export function buildToday(input: {
   path: DayRow[];
   unlocks: UnlockRow[];
-  proofs: ProofRow[];
-  // "W1D1:A" for every day and version VFDA has approved for the office.
+  // Every day VFDA has approved for the office.
   approved: Set<string>;
-  startDate: string | null;
-  today: string;
 }): Today {
   if (input.path.length === 0) return { kind: "no_days" };
   const byDay = new Map(input.unlocks.map((u) => [u.schedule_day, u]));
   const days: DayView[] = input.path.map((day, i) => {
     const unlock = byDay.get(day.code) ?? null;
-    return { index: i + 1, day, unlock, status: unlock?.status ?? "locked", version: unlock?.version ?? "A" };
+    return { index: i + 1, day, unlock, status: unlockStatus(unlock?.status), version: "A" };
   });
-  const first = days.findIndex((d) => d.status !== "passed");
-  if (first === -1) return { kind: "finished", days };
-  if (days[first].status === "open") return { kind: "open", days, current: days[first] };
-
-  // A finished day waiting on grading or VFDA blocks the day after it.
-  const waiting = days[first].status === "submitted" || days[first].status === "in_review";
-  const i = waiting ? first + 1 : first;
-  const previous = i > 0 ? days[i - 1] : null;
-  if (i >= days.length) {
-    return { kind: "waiting", days, current: days[first], message: waitingText(days[first]) };
-  }
-  const current = days[i];
-
-  const checks: Check[] = [];
-  // 1. Previous day passed (or approved from review).
-  if (previous) {
-    checks.push(
-      waiting
-        ? { key: "previous", ok: false, text: waitingText(previous) }
-        : { key: "previous", ok: true, text: `${dayName(previous)} passed` },
-    );
-  }
-  // 2. Today's cards marked done.
-  checks.push(
-    current.unlock?.cards_done_at
-      ? { key: "cards", ok: true, text: "Today's cards marked done" }
-      : { key: "cards", ok: false, text: `Read today's cards (${current.day.cards.join(", ")}) and mark them done` },
-  );
-  // 3. That training day reached (a retake's version B waits for the next day too).
-  if (!input.startDate) {
-    checks.push({ key: "date", ok: false, text: "VFDA hasn't set your training start date yet" });
-  } else {
-    let opens = addTrainingDays(input.startDate, i);
-    const retakeOn = current.status === "retake" ? current.unlock?.opens_on : null;
-    if (retakeOn && retakeOn > opens) opens = retakeOn;
-    const label = current.status === "retake" ? `Your retake (version B) opens` : `Training day ${current.index} opens`;
-    checks.push(
-      input.today >= opens
-        ? { key: "date", ok: true, text: `${label} today or earlier (${showDate(opens)})` }
-        : { key: "date", ok: false, text: `${label} on ${showDate(opens)}` },
-    );
-  }
-  // 4. VFDA approved this day's scenarios (in this version) for the office.
-  checks.push(
-    input.approved.has(`${current.day.code}:${current.version}`)
-      ? { key: "approved", ok: true, text: "VFDA approved today's scenarios for your office" }
-      : {
-          key: "approved",
-          ok: false,
-          text: `VFDA hasn't approved ${current.day.code}${current.version === "B" ? " version B" : ""} for your office yet`,
-        },
-  );
-  // 5. Previous day's proof of work accepted.
-  if (previous) {
-    const proof = proofState(previous.day, input.proofs);
-    const code = previous.day.code;
-    const proofCheck: Record<typeof proof, Check | null> = {
-      none_needed: null,
-      accepted: { key: "proof", ok: true, text: `Proof of work for ${code} accepted` },
-      pending: { key: "proof", ok: false, text: `VFDA hasn't checked your proof of work for ${code} yet` },
-      redo: { key: "proof", ok: false, text: `VFDA asked you to redo your proof of work for ${code}` },
-      missing: { key: "proof", ok: false, text: `Upload your proof of work for ${code}` },
-    };
-    if (proofCheck[proof]) checks.push(proofCheck[proof]);
-  }
-
-  return checks.every((c) => c.ok) ? { kind: "open", days, current } : { kind: "blocked", days, current, checks };
+  // Every day before this one is done, so the previous quiz was submitted.
+  const current = days.find((d) => d.status !== "done");
+  if (!current) return { kind: "finished", days };
+  if (current.status === "open") return { kind: "open", days, current };
+  if (!current.unlock?.cards_done_at) return { kind: "cards", days, current };
+  return input.approved.has(current.day.code) ? { kind: "open", days, current } : { kind: "preparing", days, current };
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +212,7 @@ export type ServedItem = {
   stem: string;
   options: string[] | null; // already shuffled for this VA
   priorFeedback: Feedback | null; // shown above a repeat
-  drillId: string | null; // a workflow retrain or recheck, not a training day
+  drillId: string | null; // a workflow recheck, not a training day
 };
 
 export type ItemProgress = {
@@ -316,16 +260,16 @@ export function shuffleOrder(seed: string, n: number): number[] {
 export const optionLetter = (index: number) => String.fromCharCode(65 + index);
 
 // ---------------------------------------------------------------------------
-// Day result (SPEC section 6, Scoring; settings.certification and .grading).
+// Day result: a label that never blocks (settings.grading).
 // ---------------------------------------------------------------------------
 
 export type CertificationRules = {
   mcPoints: number;
-  // A grade below this confidence sends the day to review.
+  // A grade below this confidence is flagged for VFDA to look at.
   lowConfidenceBelow: number;
-  // Used only when the day has no thresholds of its own (W2D5).
-  passRatio: number;
-  reviewRatio: number;
+  // First-try share for Strong, and below which a day is At risk.
+  strongPercent: number;
+  atRiskBelowPercent: number;
 };
 
 export function certificationRules(grading: unknown): CertificationRules {
@@ -334,8 +278,8 @@ export function certificationRules(grading: unknown): CertificationRules {
   return {
     mcPoints: num(g.mc_points, 1),
     lowConfidenceBelow: num(g.low_confidence_below, 0.7),
-    passRatio: num(g.pass_ratio, 0.8),
-    reviewRatio: num(g.review_ratio, 0.65),
+    strongPercent: num(g.strong_percent, 80),
+    atRiskBelowPercent: num(g.at_risk_below_percent, 60),
   };
 }
 
@@ -349,7 +293,7 @@ export type GradedItem = {
 };
 
 // A VFDA score override (attempt_items.vfda_override) replaces the grader's
-// scores and critical flag; a reviewed grade no longer counts as unsure.
+// scores and critical flag; it changes only the label.
 export type ScoreOverride = {
   first_score: number | null;
   repeat_score: number | null;
@@ -371,35 +315,52 @@ export function withOverride<T extends Omit<GradedItem, "type" | "points">>(item
   };
 }
 
-export function dayResult(day: DayRow, items: GradedItem[], rules: CertificationRules) {
-  const max = items.reduce((n, i) => n + i.points, 0);
-  // The day's thresholds are set for its full master list; scale them if the
-  // office's version of the day has a different total.
-  const scale = (points: number | null, ratio: number) =>
-    day.max_points && points !== null ? Math.ceil((points * max) / day.max_points) : Math.ceil(ratio * max);
-  const passPoints = scale(day.pass_points, rules.passRatio);
-  const reviewMin = scale(day.review_min_points, rules.reviewRatio);
-
-  const points = items.reduce((n, i) => n + (i.first_score ?? 0), 0);
+// Strong: first try >= 80% and no critical error.
+// Needs coaching: first try 60-79%, or a repeat still below 2/2.
+// At risk: first try below 60%, or any critical error.
+// An answer the grader couldn't score counts toward neither points nor max
+// until VFDA scores it.
+export function dayResult(items: GradedItem[], rules: CertificationRules) {
+  const graded = items.filter((i) => i.first_score !== null);
+  const max = graded.reduce((n, i) => n + i.points, 0);
+  const points = graded.reduce((n, i) => n + (i.first_score ?? 0), 0);
+  const percent = max > 0 ? Math.round((points * 100) / max) : 0;
   const criticalErrors = items.filter((i) => i.critical_error).length;
   const situational = items.filter((i) => i.type === "situational");
-  const uncorrected = situational.filter((i) => (i.first_score ?? 0) < 2 && i.repeat_score !== 2).length;
-  const lowConfidence = situational.filter((i) => i.ai_confidence === null || i.ai_confidence < rules.lowConfidenceBelow).length;
-
-  // A grade that never came back (the grader was down) isn't the VA's fault:
-  // VFDA decides those days.
+  const repeatsBelow = situational.filter((i) => i.repeat_score !== null && i.repeat_score < 2).length;
+  const lowConfidence = situational.filter((i) => i.ai_confidence !== null && i.ai_confidence < rules.lowConfidenceBelow).length;
   const ungraded = situational.filter((i) => i.first_score === null).length;
 
-  // A critical error or an unsure grade goes to VFDA (review), which can
-  // still assign the retake.
-  let result: DayResult;
-  if (criticalErrors > 0) result = "review";
-  else if (ungraded > 0) result = "review";
-  else if (points < reviewMin) result = "retake";
-  else if (points >= passPoints && uncorrected === 0 && lowConfidence === 0) result = "pass";
-  else result = "review";
-  return { result, points, max, passPoints, reviewMin, criticalErrors, uncorrected, lowConfidence, ungraded };
+  // Exact shares (79.6% is not 80%); `percent` is rounded for display only.
+  const below = (p: number) => max === 0 || points * 100 < p * max;
+  let result: ResultLabel;
+  if (criticalErrors > 0 || below(rules.atRiskBelowPercent)) result = "at_risk";
+  else if (below(rules.strongPercent) || repeatsBelow > 0) result = "needs_coaching";
+  else result = "strong";
+  return { result, points, max, percent, criticalErrors, repeatsBelow, lowConfidence, ungraded };
 }
+
+// ---------------------------------------------------------------------------
+// Trend across days: the latest days' first-try average against the days before.
+// ---------------------------------------------------------------------------
+
+export type Trend = "improving" | "flat" | "declining";
+// Points of difference that count as a change.
+const TREND_STEP = 5;
+
+// `percents`: first-try % per day, oldest first. Null with fewer than 2 days.
+export function trend(percents: number[]): Trend | null {
+  if (percents.length < 2) return null;
+  const recentCount = Math.min(3, Math.ceil(percents.length / 2));
+  const recent = percents.slice(-recentCount);
+  const earlier = percents.slice(0, -recentCount).slice(-3);
+  const avg = (xs: number[]) => xs.reduce((n, x) => n + x, 0) / xs.length;
+  const diff = avg(recent) - avg(earlier);
+  return diff >= TREND_STEP ? "improving" : diff <= -TREND_STEP ? "declining" : "flat";
+}
+
+export const percentOf = (points: number | string | null, max: number | null) =>
+  max ? Math.round((Number(points ?? 0) * 100) / max) : 0;
 
 // ---------------------------------------------------------------------------
 // Keeping it honest: flag finishes much faster than normal.

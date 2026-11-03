@@ -47,9 +47,9 @@ export async function approveDay(officeId: string, day: string): Promise<ActionR
       .eq("schedule_day", day),
   ]);
   if (status?.build_status !== "done") return fail("Build the day first.");
-  const rows = scenarios ?? [];
-  if (!rows.some((r) => r.version === "A" && !r.is_repeat_variant)) return fail("This day has no scenarios.");
-  if (!rows.some((r) => r.version === "B" && !r.is_repeat_variant)) return fail("This day has no version B for retakes.");
+  // One attempt per day: only version A is used (older builds may still have a version B).
+  const rows = (scenarios ?? []).filter((r) => r.version === "A");
+  if (!rows.some((r) => !r.is_repeat_variant)) return fail("This day has no scenarios.");
   const missing = rows.filter((r) => r.missing_keys.length > 0).length;
   if (missing) return fail(`${missing} scenario(s) still need office rules. Edit them, or add the rules and rebuild.`);
   if (rows.some((r) => r.type === "mc" && !r.options)) return fail("A multiple choice question has no options yet.");

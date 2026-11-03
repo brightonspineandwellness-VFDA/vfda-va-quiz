@@ -27,5 +27,5 @@ export function pointsLabel(quiz: {
 }) {
   return quiz.max_points === null
     ? "Points set per office"
-    : `${quiz.max_points} pts · pass ${quiz.pass_points} · review ${quiz.review_min_points}`;
+    : `${quiz.max_points} pts · labels: Strong 80%+, Needs coaching 60-79%, At risk below 60%`;
 }
