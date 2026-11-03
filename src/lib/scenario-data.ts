@@ -41,10 +41,11 @@ export type ScenarioRow = {
   position: number;
   source_card: string | null;
   source_quote: string | null;
+  review_error: string | null;
 };
 
 const SCENARIO_COLUMNS =
-  "id, scenario_id, version, workflow, part, part_title, code, type, points, answer_format, stem, options, answer, correct_response, critical_fail, escalation_level, is_repeat_variant, parent_scenario_id, test_status, edited_by_vfda, missing_keys, formula, position, source_card, source_quote";
+  "id, scenario_id, version, workflow, part, part_title, code, type, points, answer_format, stem, options, answer, correct_response, critical_fail, escalation_level, is_repeat_variant, parent_scenario_id, test_status, edited_by_vfda, missing_keys, formula, position, source_card, source_quote, review_error";
 
 export type DaySummary = {
   code: string;
@@ -54,6 +55,8 @@ export type DaySummary = {
   countA: number;
   repeats: number;
   missing: number;
+  // Items that still failed a check after the rewrites.
+  needsReview: number;
   started: boolean;
   // Card PDFs mapped to the day (the day is written from these).
   cards: string[];
@@ -70,7 +73,7 @@ export async function loadScenarioOverview(officeId: string) {
       .eq("office_id", officeId),
     supabase
       .from("office_scenarios")
-      .select("schedule_day, version, is_repeat_variant, missing_keys")
+      .select("schedule_day, version, is_repeat_variant, missing_keys, test_status")
       .eq("office_id", officeId),
     supabase.from("attempts").select("schedule_day").eq("office_id", officeId),
     supabase
@@ -93,6 +96,7 @@ export async function loadScenarioOverview(officeId: string) {
       countA: mine.filter((r) => r.version === "A" && !r.is_repeat_variant).length,
       repeats: mine.filter((r) => r.version === "A" && r.is_repeat_variant).length,
       missing: mine.filter((r) => r.missing_keys.length > 0).length,
+      needsReview: mine.filter((r) => r.version === "A" && r.test_status === "needs_review").length,
       started: started.has(day.code),
       cards: (documents.data ?? [])
         .filter((d) => (d.schedule_days ?? []).includes(day.code))

@@ -205,6 +205,8 @@ export type DraftScenario = {
   source_card: string | null;
   source_quote: string | null;
   source_document_id: string | null;
+  // A check it still fails: saved as "needs_review" for VFDA.
+  review_error?: string | null;
 };
 
 export function fillMaster(m: MasterScenario, values: Record<string, string>): DraftScenario {
@@ -308,6 +310,8 @@ export type CardItem = {
   source_card: string;
   source_quote: string;
   source_document_id: string | null;
+  // Set when the item still failed its checks: saved as "needs_review".
+  review_error: string | null;
 };
 
 export function cardDrafts(items: CardItem[], masters: DraftScenario[]): DraftScenario[] {
@@ -343,6 +347,7 @@ export function cardDrafts(items: CardItem[], masters: DraftScenario[]): DraftSc
       source_card: item.source_card,
       source_quote: item.source_quote,
       source_document_id: item.source_document_id,
+      review_error: item.review_error,
     };
   });
 }

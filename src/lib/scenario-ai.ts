@@ -4,13 +4,15 @@ import "server-only";
 // items are written from the office's own cards mapped to it, with the master
 // day as the pattern; gray card items from the gray cards. Also multiple
 // choice options from an options rule (days with no card), a skipped day's
-// phone drills, and a repeat variant for each situational item. Each
-// answer is checked (src/lib/scenario-build.ts) and retried once; VFDA reviews
-// all of it. AI_MODE=mock writes stand-ins without calling Claude.
+// phone drills, and a repeat variant for each situational item. Card-first
+// items are checked one by one (forgiving source matching: src/lib/
+// source-match.ts); a failing item is rewritten up to twice, then kept as
+// "needs review" so the rest of the day still builds. Other answers are
+// checked as a whole and retried once. VFDA reviews all of it.
+// AI_MODE=mock writes stand-ins without calling Claude.
 
 import { z } from "zod";
 import { aiMode, askStructured } from "@/lib/ai";
-import { quoteIn } from "@/lib/card-map";
 import {
   BUTTON_WORDS,
   checkMc,
@@ -20,6 +22,7 @@ import {
   type CorrectResponse,
   type DraftScenario,
 } from "@/lib/scenario-build";
+import { matchCardName, resolveSource, STANDARDS_SOURCE } from "@/lib/source-match";
 
 const SYSTEM = `You write training scenarios for virtual assistants (VAs) at one chiropractic office.
 The office's own rules are given; use them exactly and never invent office policy.
@@ -74,7 +77,13 @@ export type WorkflowFields = {
   prohibited_actions: string[];
 };
 
-export const STANDARDS_SOURCE = "VFDA standards";
+export { STANDARDS_SOURCE };
+
+// One failed check on one item, for the System log.
+export type CheckFailure = { item: string; field: string; value: string; reason: string };
+export type LogFailure = (f: CheckFailure) => void;
+// Rewrites of one item before it's saved for VFDA to review.
+const ITEM_REWRITES = 2;
 
 const BoxSteps = z.object({ box: z.string().nullable().describe("The box name (e.g. Say), or null for a plain step list"), steps: z.array(z.string()) });
 const CardItemSchema = z.object({
@@ -88,7 +97,7 @@ const CardItemSchema = z.object({
   correct_response: z.array(BoxSteps).nullable(),
   critical_fail: z.string().nullable(),
   escalation_level: z.enum(["none", "approval", "immediate"]),
-  source_card: z.string().describe(`The card's title exactly as listed, or "${STANDARDS_SOURCE}"`),
+  source_card: z.string().describe(`One of the allowed card names, exactly as listed, or "${STANDARDS_SOURCE}"`),
   source_quote: z.string().describe("The exact words from that card (or standard) the item is built on"),
 });
 type RawCardItem = z.infer<typeof CardItemSchema>;
@@ -96,8 +105,8 @@ type RawCardItem = z.infer<typeof CardItemSchema>;
 const CARD_RULES = `Write from the office's own cards. They are the source; the master items only show the pattern (format,
 answer format, the mix of multiple choice and situational items, difficulty).
 - Every correct_response follows the card's own steps, in the card's order and wording where it can.
-- source_card: the card's title exactly as listed; source_quote: words copied exactly from that card's text
-  (under 300 characters) that the item is built on.
+- source_card: one of the allowed card names below, exactly as written; source_quote: words copied exactly from
+  that card's text (under 300 characters) that the item is built on.
 - When a master item needs something the cards don't cover: use the VFDA standard for it if there is one
   (source_card "${STANDARDS_SOURCE}", quote the standard). If there's no standard either, drop that master
   item and write a different item from what the cards do cover. Never ask the doctor; never invent office policy.
@@ -109,8 +118,32 @@ answer format, the mix of multiple choice and situational items, difficulty).
   the VA must get approval first, otherwise "none".
 - Fake patients only: made-up first names; no real people, dates of birth, phone numbers, emails, insurance or card numbers.`;
 
+const allowedNames = (cards: CardSource[]) =>
+  `Allowed card names (source_card must be exactly one of these):\n${[...cards.map((c) => c.title), STANDARDS_SOURCE].map((n) => `- ${n}`).join("\n")}`;
+
 const cardsBlock = (cards: CardSource[]) =>
   cards.map((c) => `## ${c.title}${c.workflow ? ` (${c.workflow})` : ""}\n${c.text}`).join("\n\n");
+
+// What every card-first prompt carries: the cards, workflows and standards.
+type ItemContext = {
+  cards: CardSource[];
+  standards: { key: string; value: string }[];
+  boxes: string[] | null;
+  // Gray card items: situational, plain step lists.
+  gray: boolean;
+  sources: string;
+  log: LogFailure;
+};
+
+const sourcesBlock = (cards: CardSource[], workflows: WorkflowFields[], standards: { key: string; value: string }[]) => `<cards>
+${cardsBlock(cards)}
+</cards>
+${workflows.length ? `\n<workflows>\n${JSON.stringify(workflows, null, 1)}\n</workflows>\n` : ""}
+<vfda_standards>
+${rulesBlock(standards)}
+</vfda_standards>
+
+${allowedNames(cards)}`;
 
 function toCorrectResponse(raw: RawCardItem["correct_response"], boxes: string[] | null): CorrectResponse | null {
   if (!raw?.length) return null;
@@ -118,34 +151,34 @@ function toCorrectResponse(raw: RawCardItem["correct_response"], boxes: string[]
   return Object.fromEntries(boxes.map((k) => [k, (raw.find((b) => b.box?.toLowerCase() === k.toLowerCase())?.steps ?? []).map((s) => s.trim()).filter(Boolean)]));
 }
 
-// Checks one item; null when it's fine.
-function checkCardItem(i: RawCardItem, cards: CardSource[], standards: { key: string; value: string }[], boxes: string[] | null) {
-  if (!i.stem.trim()) return "empty stem";
+const shown = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v) ?? "").slice(0, 500);
+
+// Everything but the source: one failure, or null.
+function checkContent(i: RawCardItem, ctx: ItemContext): Omit<CheckFailure, "item"> | null {
+  if (ctx.gray && i.type !== "situational") return { field: "type", value: i.type, reason: "gray card items are situational" };
+  if (!i.stem.trim()) return { field: "stem", value: "", reason: "empty" };
   if (i.type === "mc") {
     const bad = checkMc(i.options, i.answer);
-    if (bad) return bad;
+    if (bad) return { field: "options", value: shown({ options: i.options, answer: i.answer }), reason: bad };
   } else {
-    if (!i.correct_response?.some((b) => b.steps.some((s) => s.trim()))) return "situational item needs correct_response";
-    if (boxes) {
-      const missing = boxes.filter((k) => !i.correct_response!.some((b) => b.box?.toLowerCase() === k.toLowerCase() && b.steps.length));
-      if (missing.length) return `correct_response needs steps under ${missing.join(", ")}`;
+    if (!i.correct_response?.some((b) => b.steps.some((s) => s.trim()))) {
+      return { field: "correct_response", value: shown(i.correct_response), reason: "a situational item needs steps" };
+    }
+    if (ctx.boxes) {
+      const missing = ctx.boxes.filter((k) => !i.correct_response!.some((b) => b.box?.toLowerCase() === k.toLowerCase() && b.steps.length));
+      if (missing.length) return { field: "correct_response", value: shown(i.correct_response), reason: `needs steps under ${missing.join(", ")}` };
     }
   }
-  if (hasPlaceholder([i.stem, i.options, i.correct_response, i.critical_fail])) return "placeholder left";
-  if (BUTTON_WORDS.test(JSON.stringify([i.stem, i.correct_response]))) return "mentions buttons or clicking; describe it in the VA's own words";
-  if (!i.source_quote.trim()) return "missing source_quote";
-  if (i.source_card === STANDARDS_SOURCE) {
-    if (!standards.some((s) => quoteIn(i.source_quote, s.value))) return "source_quote isn't the words of a VFDA standard";
-  } else {
-    const card = cards.find((c) => c.title === i.source_card);
-    if (!card) return `unknown source_card "${i.source_card}"`;
-    if (!quoteIn(i.source_quote, card.text)) return `source_quote isn't copied from "${card.title}"`;
+  if (hasPlaceholder([i.stem, i.options, i.correct_response, i.critical_fail])) {
+    return { field: "stem", value: shown(i.stem), reason: "a {PLACEHOLDER} is left" };
+  }
+  if (BUTTON_WORDS.test(JSON.stringify([i.stem, i.correct_response]))) {
+    return { field: "stem", value: shown(i.stem), reason: "mentions buttons or clicking; describe it in the VA's own words" };
   }
   return null;
 }
 
-function toCardItem(i: RawCardItem, cards: CardSource[], boxes: string[] | null): CardItem {
-  const card = cards.find((c) => c.title === i.source_card);
+function toCardItem(i: RawCardItem, card: CardSource | null, boxes: string[] | null, reviewError: string | null = null): CardItem {
   return {
     based_on: i.based_on,
     type: i.type,
@@ -161,7 +194,97 @@ function toCardItem(i: RawCardItem, cards: CardSource[], boxes: string[] | null)
     source_card: i.source_card,
     source_quote: i.source_quote.trim().slice(0, 1000),
     source_document_id: card?.id ?? null,
+    review_error: reviewError,
   };
+}
+
+// Checks one item: the content, then the source (forgiving). A passing item
+// carries the card it came from and the passage found as its quote.
+function checkCardItem(i: RawCardItem, ctx: ItemContext): { item: CardItem } | { failure: Omit<CheckFailure, "item"> } {
+  const bad = checkContent(i, ctx);
+  if (bad) return { failure: bad };
+  const src = resolveSource(i.source_card, i.source_quote, ctx.cards, ctx.standards);
+  if (!src.ok) return { failure: { field: src.field, value: shown(src.value), reason: src.reason } };
+  return { item: toCardItem({ ...i, source_card: src.source_card, source_quote: src.source_quote }, src.card, ctx.boxes) };
+}
+
+const itemLabel = (n: number, i: { based_on: string | null; type: string }) => `item ${n + 1}${i.based_on ? ` (${i.based_on})` : ""} ${i.type}`;
+
+// Asks Claude to rewrite one item, saying exactly what was wrong.
+async function rewriteItem(raw: RawCardItem, failure: Omit<CheckFailure, "item">, ctx: ItemContext): Promise<RawCardItem> {
+  const out = await askStructured(z.object({ item: CardItemSchema }), {
+    system: SYSTEM,
+    effort: "medium",
+    maxTokens: 16000,
+    content: [
+      {
+        type: "text",
+        text: `${CARD_RULES}
+
+${ctx.sources}
+
+Rewrite ONLY the item below so it passes the check. Keep its type (${raw.type})${raw.based_on ? ` and based_on ${raw.based_on}` : ""}${
+          ctx.gray ? "; situational, correct_response as a plain list of steps (box null)" : ctx.boxes ? `; correct_response split into ${ctx.boxes.join(", ")}` : ""
+        }.
+What was wrong: ${failure.field}${failure.value ? ` ${JSON.stringify(failure.value)}` : ""}: ${failure.reason}.
+
+<item>
+${JSON.stringify(raw, null, 1)}
+</item>`,
+      },
+    ],
+  });
+  return out.item;
+}
+
+// One item: checked; on a failure rewritten (up to ITEM_REWRITES times) with
+// the problem named; still failing, kept with the error for VFDA to review.
+// `failure` starts the rewrites at once (VFDA's Regenerate). Every failed
+// check is logged.
+async function settleItem(raw: RawCardItem, label: string, ctx: ItemContext, failure?: Omit<CheckFailure, "item">): Promise<CardItem> {
+  let current = raw;
+  let problem: Omit<CheckFailure, "item"> | null = failure ?? null;
+  for (let tries = 0; ; tries++) {
+    if (!problem) {
+      const r = checkCardItem(current, ctx);
+      if ("item" in r) return r.item;
+      problem = r.failure;
+      ctx.log({ item: label, ...problem });
+    }
+    if (tries >= ITEM_REWRITES) break;
+    try {
+      current = await rewriteItem(current, problem, ctx);
+    } catch (e) {
+      problem = { field: "item", value: "", reason: `rewrite failed: ${e instanceof Error ? e.message : String(e)}` };
+      ctx.log({ item: label, ...problem });
+      break;
+    }
+    problem = null;
+  }
+  const named = matchCardName(current.source_card, ctx.cards);
+  return toCardItem(current, named?.kind === "card" ? named.card : null, ctx.boxes, `${problem.field}: ${problem.reason}`);
+}
+
+// Asks for a whole set of items; a wrong count is asked again once, then the
+// items are used as they are (logged).
+async function askItems(text: string, countProblem: (items: RawCardItem[]) => string | null, log: LogFailure) {
+  const schema = z.object({ items: z.array(CardItemSchema) });
+  let problem: string | null = null;
+  let items: RawCardItem[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const out = await askStructured(schema, {
+      system: SYSTEM,
+      effort: "medium",
+      maxTokens: 64000,
+      content: [{ type: "text", text: problem ? `${text}\n\nYour last answer was rejected: ${problem}. Fix that.` : text }],
+    });
+    items = out.items;
+    problem = countProblem(items);
+    if (!problem) break;
+    log({ item: "day", field: "items", value: `${items.length} items`, reason: problem });
+  }
+  if (!items.length) throw new Error("Claude wrote no items for this day.");
+  return items;
 }
 
 export async function writeCardDay(input: {
@@ -171,21 +294,20 @@ export async function writeCardDay(input: {
   workflows: WorkflowFields[];
   standards: { key: string; value: string }[];
   boxes: string[] | null;
+  log?: LogFailure;
 }): Promise<CardItem[]> {
   const mcCount = input.masters.filter((m) => m.type === "mc").length;
   const total = input.masters.length;
   if (mock()) return mockCardDay(input);
+  const log = input.log ?? (() => {});
+  const sources = sourcesBlock(input.cards, input.workflows, input.standards);
+  const ctx: ItemContext = { cards: input.cards, standards: input.standards, boxes: input.boxes, gray: false, sources, log };
 
-  const schema = z.object({ items: z.array(CardItemSchema) });
   const text = `Write the test for training day ${input.day.code} "${input.day.title}" at this office: exactly ${total} items,
 ${mcCount} multiple choice and ${total - mcCount} situational, like the master day below.
 ${input.boxes ? `Situational correct responses are split into the boxes ${input.boxes.join(", ")} (each with steps).` : "Situational correct responses are a plain list of steps (box null)."}
 
 ${CARD_RULES}
-
-<cards>
-${cardsBlock(input.cards)}
-</cards>
 
 <master_day>
 ${input.masters
@@ -201,30 +323,24 @@ ${input.masters
   .join("\n\n")}
 </master_day>
 
-<workflows>
-${JSON.stringify(input.workflows, null, 1)}
-</workflows>
-
-<vfda_standards>
-${rulesBlock(input.standards)}
-</vfda_standards>`;
-  const out = await ask(schema, text, (o) => {
-    if (o.items.length !== total) return `need exactly ${total} items, got ${o.items.length}`;
-    const mc = o.items.filter((i) => i.type === "mc").length;
-    if (mc !== mcCount) return `need exactly ${mcCount} multiple choice items, got ${mc}`;
-    for (const [n, i] of o.items.entries()) {
-      const bad = checkCardItem(i, input.cards, input.standards, input.boxes);
-      if (bad) return `item ${n + 1}: ${bad}`;
-    }
-    return null;
-  });
-  return out.items.map((i) => toCardItem(i, input.cards, input.boxes));
+${sources}`;
+  const items = await askItems(
+    text,
+    (items) => {
+      if (items.length !== total) return `need exactly ${total} items, got ${items.length}`;
+      const mc = items.filter((i) => i.type === "mc").length;
+      return mc === mcCount ? null : `need exactly ${mcCount} multiple choice items, got ${mc}`;
+    },
+    log,
+  );
+  return Promise.all(items.map((i, n) => settleItem(i, itemLabel(n, i), ctx)));
 }
 
 // Gray card day: `count` situational items per card (1-2, planned by grayPlan).
 export async function writeCardGrayItems(input: {
   cards: (CardSource & { count: number })[];
   standards: { key: string; value: string }[];
+  log?: LogFailure;
 }): Promise<CardItem[]> {
   const total = input.cards.reduce((n, c) => n + c.count, 0);
   if (mock()) {
@@ -232,33 +348,62 @@ export async function writeCardGrayItems(input: {
       Array.from({ length: c.count }, (_, k) => mockItem(c, "situational", `${c.title}: a patient asks about this (${k + 1})`, null)),
     );
   }
-  const schema = z.object({ items: z.array(CardItemSchema) });
+  const log = input.log ?? (() => {});
+  const sources = sourcesBlock(input.cards, [], input.standards);
+  const ctx: ItemContext = { cards: input.cards, standards: input.standards, boxes: null, gray: true, sources, log };
   const text = `Write the gray card day: situational phone and task scenarios from this office's extra cards.
 Exactly the number of items listed per card (${total} in all), each with based_on null, type "situational" and
 correct_response as a plain list of steps (box null). The cards are the source.
+Items per card: ${input.cards.map((c) => `"${c.title}": ${c.count}${c.tags?.length ? ` (${c.tags.join(", ")})` : ""}`).join("; ")}.
 
 ${CARD_RULES}
 
-<cards>
-${input.cards.map((c) => `## ${c.title} (${c.count} item${c.count > 1 ? "s" : ""}${c.tags?.length ? `; ${c.tags.join(", ")}` : ""})\n${c.text}`).join("\n\n")}
-</cards>
+${sources}`;
+  const items = await askItems(
+    text,
+    (items) => {
+      for (const c of input.cards) {
+        const got = items.filter((i) => {
+          const named = matchCardName(i.source_card, input.cards);
+          return named?.kind === "card" && named.card === c;
+        }).length;
+        if (got !== c.count) return `"${c.title}" needs exactly ${c.count} item(s), got ${got}`;
+      }
+      return null;
+    },
+    log,
+  );
+  return Promise.all(items.map((i, n) => settleItem(i, itemLabel(n, i), ctx)));
+}
 
-<vfda_standards>
-${rulesBlock(input.standards)}
-</vfda_standards>`;
-  const out = await ask(schema, text, (o) => {
-    for (const c of input.cards) {
-      const got = o.items.filter((i) => i.source_card === c.title).length;
-      if (got !== c.count) return `"${c.title}" needs exactly ${c.count} item(s), got ${got}`;
-    }
-    for (const [n, i] of o.items.entries()) {
-      if (i.type !== "situational") return `item ${n + 1}: gray card items are situational`;
-      const bad = checkCardItem(i, input.cards, input.standards, null);
-      if (bad) return `item ${n + 1}: ${bad}`;
-    }
-    return null;
-  });
-  return out.items.map((i) => toCardItem(i, input.cards, null));
+// VFDA's "Regenerate" on an item that needs review: rewritten from the same
+// cards (up to ITEM_REWRITES times), told what was wrong.
+export async function regenerateCardItem(input: {
+  item: Omit<RawCardItem, "based_on"> & { based_on?: string | null; code: string };
+  problem: string;
+  cards: CardSource[];
+  workflows: WorkflowFields[];
+  standards: { key: string; value: string }[];
+  boxes: string[] | null;
+  gray: boolean;
+  log?: LogFailure;
+}): Promise<CardItem> {
+  const log = input.log ?? (() => {});
+  const ctx: ItemContext = {
+    cards: input.cards,
+    standards: input.standards,
+    boxes: input.boxes,
+    gray: input.gray,
+    sources: sourcesBlock(input.cards, input.workflows, input.standards),
+    log,
+  };
+  const raw: RawCardItem = { ...input.item, based_on: input.item.based_on ?? null };
+  if (mock()) {
+    const card = input.cards[0];
+    return card ? mockItem(card, raw.type, raw.stem, null) : toCardItem(raw, null, input.boxes, input.problem);
+  }
+  const [field, ...rest] = input.problem.split(": ");
+  return settleItem(raw, input.item.code, ctx, { field: rest.length ? field : "item", value: "", reason: rest.length ? rest.join(": ") : input.problem });
 }
 
 function mockItem(card: CardSource, type: "mc" | "situational", stem: string, basedOn: DraftScenario | null): CardItem {
@@ -283,6 +428,7 @@ function mockItem(card: CardSource, type: "mc" | "situational", stem: string, ba
     source_card: card.title,
     source_quote: quote,
     source_document_id: card.id,
+    review_error: null,
   };
 }
 
@@ -463,36 +609,46 @@ const Variant = z.object({
 });
 export type Variant = z.infer<typeof Variant>;
 
-export async function writeVariants(items: DraftScenario[], rules: { key: string; value: string }[]) {
+// Items whose repeat still doesn't come back after one more ask go without a
+// repeat (logged); the day is never failed for a repeat.
+export async function writeVariants(items: DraftScenario[], rules: { key: string; value: string }[], log?: LogFailure) {
   const wanted = items.filter((i) => i.wants_repeat);
   if (!wanted.length) return new Map<string, Variant>();
   if (mock()) return new Map(wanted.map((i) => [i.code, { code: i.code, repeat_stem: `(Repeat) ${i.stem}` }]));
   const schema = z.object({ items: z.array(Variant) });
-  const text = `For each test item below, write repeat_stem: a repeat variant shown right after a missed answer.
-Same skill and correct response, new details (different fake patient, time, situation).
+  const found = new Map<string, Variant>();
+  let todo = wanted;
+  for (let attempt = 0; attempt < 2 && todo.length; attempt++) {
+    const text = `For each test item below, write repeat_stem: a repeat variant shown right after a missed answer.
+Same skill and correct response, new details (different fake patient, time, situation). Keep each item's code.
 
 <office_rules>
 ${rulesBlock(rules)}
 </office_rules>
 
 <items>
-${wanted
+${todo
   .map(
     (i) =>
       `## ${i.code}\nStem: ${i.stem}\nCorrect response: ${JSON.stringify(i.correct_response)}${i.critical_fail ? `\nCritical fail: ${i.critical_fail}` : ""}`,
   )
   .join("\n\n")}
 </items>`;
-  const out = await ask(schema, text, (o) => {
-    for (const i of wanted) {
-      const v = o.items.find((x) => x.code === i.code);
-      if (!v) return `missing ${i.code}`;
-      if (!v.repeat_stem?.trim()) return `${i.code}: needs repeat_stem`;
-      if (hasPlaceholder(v)) return `${i.code}: placeholder left`;
+    let out: { items: Variant[] } = { items: [] };
+    try {
+      out = await askStructured(schema, { system: SYSTEM, effort: "medium", maxTokens: 64000, content: [{ type: "text", text }] });
+    } catch (e) {
+      log?.({ item: "repeats", field: "repeat_stem", value: "", reason: `Claude error: ${e instanceof Error ? e.message : String(e)}` });
+      continue;
     }
-    return null;
-  });
-  return new Map(out.items.map((v) => [v.code, v]));
+    for (const v of out.items) {
+      const stem = v.repeat_stem?.trim();
+      if (todo.some((i) => i.code === v.code) && stem && !hasPlaceholder(stem) && !found.has(v.code)) found.set(v.code, { code: v.code, repeat_stem: stem });
+    }
+    todo = todo.filter((i) => !found.has(i.code));
+  }
+  for (const i of todo) log?.({ item: i.code, field: "repeat_stem", value: "", reason: "no usable repeat variant after asking twice; saved without one" });
+  return found;
 }
 
 // ---------------------------------------------------------------------------

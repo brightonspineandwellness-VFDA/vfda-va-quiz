@@ -38,6 +38,9 @@ async function AdminHome() {
       <Link href="/admin/sops" className="self-start underline">
         SOPs to confirm ({sops ?? 0})
       </Link>
+      <Link href="/admin/logs" className="self-start underline">
+        System log (scenario checks)
+      </Link>
       <Link href="/admin/bank" className="self-start underline">
         Library
       </Link>

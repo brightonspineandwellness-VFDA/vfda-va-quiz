@@ -6,7 +6,7 @@ import { AutoRefresh, ScenarioEditor } from "@/components/scenarios/scenario-con
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
-import { approveDay, buildDay, reopenDay } from "@/lib/scenario-actions";
+import { approveDay, buildDay, regenerateScenario, removeScenario, reopenDay } from "@/lib/scenario-actions";
 import { correctResponseToText, LETTERS, type CorrectResponse } from "@/lib/scenario-build";
 import { loadScenarioDay, type ScenarioRow } from "@/lib/scenario-data";
 
@@ -44,6 +44,18 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
   const state = dayState(summary);
   const approved = !!summary.status?.approved_at;
   const repeatOf = (r: ScenarioRow) => rows.find((x) => x.parent_scenario_id === r.id);
+  // One attempt per day: older builds may still hold a version B, which is never used.
+  const items = rows.filter((r) => r.version === "A" && !r.is_repeat_variant);
+  const review = items.filter((r) => r.test_status === "needs_review");
+  const item = (r: ScenarioRow) => (
+    <Item
+      key={r.id}
+      row={r}
+      master={r.scenario_id ? (masters.get(r.scenario_id) as Master | undefined) : undefined}
+      repeat={repeatOf(r)}
+      locked={approved}
+    />
+  );
 
   return (
     <>
@@ -65,7 +77,7 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
       </div>
       <div className="flex flex-wrap gap-2">
         {summary.status?.build_status === "done" && !approved && (
-          <ActionButton action={approveDay.bind(null, office.id, day)} label="Approve day" primary />
+          <ActionButton action={approveDay.bind(null, office.id, day)} label="Approve day" primary disabled={review.length > 0} />
         )}
         {approved && !summary.started && <ActionButton action={reopenDay.bind(null, office.id, day)} label="Reopen" />}
         {!summary.started && !approved && summary.status?.build_status !== "running" && (
@@ -78,23 +90,26 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
       </div>
       {approved && <p className="text-sm text-foreground/70">Approved days can&apos;t be edited. Reopen the day first.</p>}
 
-      {/* One attempt per day: older builds may still hold a version B, which is never used. */}
-      {[rows.filter((r) => r.version === "A" && !r.is_repeat_variant)].map((items) => {
-        if (!items.length) return null;
-        return (
-          <section key="A" className="flex flex-col gap-3">
-            {items.map((r) => (
-              <Item
-                key={r.id}
-                row={r}
-                master={r.scenario_id ? (masters.get(r.scenario_id) as Master | undefined) : undefined}
-                repeat={repeatOf(r)}
-                locked={approved}
-              />
-            ))}
-          </section>
-        );
-      })}
+      {review.length > 0 && (
+        <section className="flex flex-col gap-3 rounded-lg border-2 border-red-700/60 p-3 dark:border-red-400/60">
+          <h2 className="text-lg font-semibold text-red-700 dark:text-red-400">
+            {review.length} item{review.length > 1 ? "s" : ""} need{review.length > 1 ? "" : "s"} review
+          </h2>
+          <p className="text-sm">
+            These still failed a check after Claude rewrote them twice. Edit, regenerate or remove each one; the day can be approved
+            once none are left. Every failed check is on the{" "}
+            <Link href="/admin/logs" className="underline">
+              System log
+            </Link>
+            .
+          </p>
+          {review.map(item)}
+        </section>
+      )}
+
+      {items.length > review.length && (
+        <section className="flex flex-col gap-3">{items.filter((r) => r.test_status !== "needs_review").map(item)}</section>
+      )}
     </>
   );
 }
@@ -115,8 +130,23 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
         }}
       />
     );
+  const needsReview = row.test_status === "needs_review";
   return (
-    <article className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-4 py-3">
+    <article
+      className={`flex flex-col gap-2 rounded-lg border px-4 py-3 ${needsReview ? "border-red-700/60 bg-red-50 dark:border-red-400/60 dark:bg-red-950/40" : "border-foreground/15"}`}
+    >
+      {needsReview && (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm font-medium text-red-700 dark:text-red-400">Needs review: {row.review_error ?? "failed a check"}</p>
+          {!locked && (
+            <div className="flex flex-wrap gap-2">
+              <ActionButton action={regenerateScenario.bind(null, row.id)} label="Regenerate" pendingLabel="Regenerating…" />
+              <ActionButton action={removeScenario.bind(null, row.id)} label="Remove" pendingLabel="Removing…" />
+              <span className="self-center text-sm text-foreground/60">or Edit below</span>
+            </div>
+          )}
+        </div>
+      )}
       <p className="text-sm text-foreground/60">
         {row.code} · {row.workflow}
         {row.part_title && ` · ${row.part_title}`} · {row.type === "mc" ? "multiple choice" : "situational"} ·{" "}
@@ -172,7 +202,9 @@ function Item({ row, master, repeat, locked }: { row: ScenarioRow; master?: Mast
               {editable(repeat)}
             </>
           ) : (
-            <p className="text-foreground/60">None. A VA who misses this item goes to VFDA review instead.</p>
+            <p className="text-foreground/60">
+              None{needsReview ? " yet: one is written once the item passes" : ". A VA who misses this item gets no repeat"}.
+            </p>
           )}
         </div>
       )}

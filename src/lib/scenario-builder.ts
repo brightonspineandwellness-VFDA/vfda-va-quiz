@@ -22,6 +22,7 @@ import {
   type Drill,
   type GrayCard,
   type CardSource,
+  type CheckFailure,
   type Variant,
   type WorkflowFields,
 } from "@/lib/scenario-ai";
@@ -123,7 +124,8 @@ type Row = Omit<DraftScenario, "options_rule" | "wants_repeat"> & {
   version: "A" | "B";
   is_repeat_variant: boolean;
   parent_scenario_id: string | null;
-  test_status: "draft";
+  test_status: "draft" | "needs_review";
+  review_error: string | null;
 };
 
 // Drafts become rows, with the repeat variants of situational items.
@@ -141,7 +143,8 @@ function toRows(officeId: string, day: string, drafts: DraftScenario[], variants
       version: "A",
       is_repeat_variant: false,
       parent_scenario_id: null,
-      test_status: "draft",
+      test_status: d.review_error ? "needs_review" : "draft",
+      review_error: d.review_error ?? null,
     };
   };
   const repeatOf = (parent: Row, stem: string): Row => ({
@@ -152,6 +155,8 @@ function toRows(officeId: string, day: string, drafts: DraftScenario[], variants
     answer: null,
     is_repeat_variant: true,
     parent_scenario_id: parent.id,
+    test_status: "draft",
+    review_error: null,
   });
   for (const d of drafts) {
     const a = base(d);
@@ -214,92 +219,122 @@ const drillDraft = (d: Drill, i: number): DraftScenario => ({
   source_document_id: null,
 });
 
+// What a day is written from: the office's rules, the master day, the cards
+// mapped to the day, the workflows and the VFDA standards.
+export async function loadDaySources(db: Db, officeId: string, dayCode: string) {
+  const ctx = await loadOfficeBuild(db, officeId);
+  const entry = ctx?.days.find((d) => d.day.code === dayCode);
+  if (!ctx || !entry) throw new Error("This day isn't part of the office's training.");
+  const [rules, masters, grayCards, documents, slots, workflowRows] = await Promise.all([
+    db
+      .from("office_rules")
+      .select("rule_slot_key, rule, source_document_id, source")
+      .eq("office_id", officeId)
+      .eq("status", "accepted"),
+    db
+      .from("scenarios")
+      .select(
+        "id, schedule_day, code, version, workflow, part, part_title, condition, type, stem, options, options_rule, answer, correct_response, critical_fail, escalation_level, points, answer_format, repeat_variant, position",
+      )
+      .eq("schedule_day", dayCode),
+    db.from("office_workflows").select("id, code, risk_tag, card_answers").eq("office_id", officeId).order("position"),
+    // The cards mapped to this day (read, with process content).
+    db
+      .from("office_documents")
+      .select("id, card_title, file_name, extracted_text, workflow, tags, created_at")
+      .eq("office_id", officeId)
+      .eq("kind", "card")
+      .eq("skip", false)
+      .not("imported_at", "is", null)
+      .contains("schedule_days", [dayCode])
+      .order("created_at"),
+    db.from("rule_slots").select("key, tier"),
+    db
+      .from("workflows")
+      .select("code, name, trigger, steps, definition_of_done, va_can_decide, requires_approval, immediate_escalation, prohibited_actions")
+      .order("code"),
+  ]);
+  const ruleRows = (must(rules) ?? []) as RuleForBuild[];
+  const values = placeholderValues(
+    ruleRows,
+    (settingOf(ctx.settings, "derived_placeholders") ?? []) as DerivedPlaceholder[],
+    officeId,
+  );
+  const ruleList = Object.entries(values).map(([key, value]) => ({ key, value }));
+  // What Claude may fall back on where the cards are silent: the VFDA
+  // standards (as this office has them) and the must-ask rules.
+  const tierOf = new Map(((must(slots) ?? []) as { key: string; tier: string }[]).map((s) => [s.key, s.tier]));
+  const standards = ruleList.filter((r) => tierOf.get(r.key) === "default" || isMustAsk(r.key));
+  const cards: CardSource[] = ((must(documents) ?? []) as {
+    id: string;
+    card_title: string;
+    file_name: string;
+    extracted_text: string | null;
+    workflow: string | null;
+    tags: string[] | null;
+  }[])
+    .filter((d) => d.extracted_text?.trim())
+    .map((d, n, all) => {
+      const title = d.card_title || d.file_name;
+      // Two cards with the same title: number them so items can name one.
+      const same = all.filter((x) => (x.card_title || x.file_name) === title);
+      return {
+        id: d.id,
+        title: same.length > 1 ? `${title} (${same.indexOf(d) + 1})` : title,
+        text: d.extracted_text!,
+        workflow: d.workflow,
+        tags: d.tags ?? [],
+      };
+    });
+
+  const masterList = (must(masters) ?? []) as MasterScenario[];
+  const selected = selectMasters(masterList, dayCode, ctx.conditions, ctx.profile);
+  const filled = selected.map((m) => fillMaster(m, values));
+  const dayWorkflows = new Set(filled.map((m) => m.workflow));
+  return {
+    ctx,
+    entry,
+    values,
+    ruleList,
+    standards,
+    cards,
+    filled,
+    boxes: responseBoxes(selected),
+    grayCards: (must(grayCards) ?? []) as { id: string; code: string; risk_tag: string | null; card_answers: unknown }[],
+    workflows: ((must(workflowRows) ?? []) as WorkflowFields[]).filter((w) => dayWorkflows.has(w.code)),
+  };
+}
+
+// Check failures go to the System log (/admin/logs).
+export async function logCheckFailures(db: Db, officeId: string, day: string, failures: CheckFailure[]) {
+  if (!failures.length) return;
+  const { error } = await db.from("system_logs").insert(
+    failures.map((f) => ({
+      kind: "scenario_check",
+      office_id: officeId,
+      schedule_day: day,
+      item: f.item.slice(0, 200),
+      field: f.field.slice(0, 100),
+      value: f.value.slice(0, 2000),
+      reason: f.reason.slice(0, 1000),
+    })),
+  );
+  if (error) console.error("System log not written", error.message);
+}
+
 export async function buildOfficeDay(officeId: string, dayCode: string) {
   const db = createAdminClient();
+  const failures: CheckFailure[] = [];
+  const log = (f: CheckFailure) => failures.push(f);
   try {
-    const ctx = await loadOfficeBuild(db, officeId);
-    const entry = ctx?.days.find((d) => d.day.code === dayCode);
-    if (!ctx || !entry) throw new Error("This day isn't part of the office's training.");
     if (await dayHasAttempts(db, officeId, dayCode)) throw new Error("A VA has already started this day; it can't be rebuilt.");
-
-    const [rules, masters, grayCards, documents, slots, workflowRows] = await Promise.all([
-      db
-        .from("office_rules")
-        .select("rule_slot_key, rule, source_document_id, source")
-        .eq("office_id", officeId)
-        .eq("status", "accepted"),
-      db
-        .from("scenarios")
-        .select(
-          "id, schedule_day, code, version, workflow, part, part_title, condition, type, stem, options, options_rule, answer, correct_response, critical_fail, escalation_level, points, answer_format, repeat_variant, position",
-        )
-        .eq("schedule_day", dayCode),
-      db.from("office_workflows").select("id, code, risk_tag, card_answers").eq("office_id", officeId).order("position"),
-      // The cards mapped to this day (read, with process content).
-      db
-        .from("office_documents")
-        .select("id, card_title, file_name, extracted_text, workflow, tags, created_at")
-        .eq("office_id", officeId)
-        .eq("kind", "card")
-        .eq("skip", false)
-        .not("imported_at", "is", null)
-        .contains("schedule_days", [dayCode])
-        .order("created_at"),
-      db.from("rule_slots").select("key, tier"),
-      db
-        .from("workflows")
-        .select("code, name, trigger, steps, definition_of_done, va_can_decide, requires_approval, immediate_escalation, prohibited_actions")
-        .order("code"),
-    ]);
-    const ruleRows = (must(rules) ?? []) as RuleForBuild[];
-    const values = placeholderValues(
-      ruleRows,
-      (settingOf(ctx.settings, "derived_placeholders") ?? []) as DerivedPlaceholder[],
-      officeId,
-    );
-    const ruleList = Object.entries(values).map(([key, value]) => ({ key, value }));
-    // What Claude may fall back on where the cards are silent: the VFDA
-    // standards (as this office has them) and the must-ask rules.
-    const tierOf = new Map(((must(slots) ?? []) as { key: string; tier: string }[]).map((s) => [s.key, s.tier]));
-    const standards = ruleList.filter((r) => tierOf.get(r.key) === "default" || isMustAsk(r.key));
-    const cards: CardSource[] = ((must(documents) ?? []) as {
-      id: string;
-      card_title: string;
-      file_name: string;
-      extracted_text: string | null;
-      workflow: string | null;
-      tags: string[] | null;
-    }[])
-      .filter((d) => d.extracted_text?.trim())
-      .map((d, n, all) => {
-        const title = d.card_title || d.file_name;
-        // Two cards with the same title: number them so items can name one.
-        const same = all.filter((x) => (x.card_title || x.file_name) === title);
-        return {
-          id: d.id,
-          title: same.length > 1 ? `${title} (${same.indexOf(d) + 1})` : title,
-          text: d.extracted_text!,
-          workflow: d.workflow,
-          tags: d.tags ?? [],
-        };
-      });
+    const { ctx, entry, ruleList, standards, cards, filled, boxes, grayCards, workflows } = await loadDaySources(db, officeId, dayCode);
 
     let drafts: DraftScenario[];
     if (entry.kind === "standard") {
-      const filled = selectMasters((must(masters) ?? []) as MasterScenario[], dayCode, ctx.conditions, ctx.profile).map((m) =>
-        fillMaster(m, values),
-      );
       if (cards.length) {
         // Card-first: the master day is the pattern, the cards the source.
-        const dayWorkflows = new Set(filled.map((m) => m.workflow));
-        const items = await writeCardDay({
-          day: entry.day,
-          masters: filled,
-          cards,
-          workflows: ((must(workflowRows) ?? []) as WorkflowFields[]).filter((w) => dayWorkflows.has(w.code)),
-          standards,
-          boxes: responseBoxes(selectMasters((must(masters) ?? []) as MasterScenario[], dayCode, ctx.conditions, ctx.profile)),
-        });
+        const items = await writeCardDay({ day: entry.day, masters: filled, cards, workflows, standards, boxes, log });
         drafts = cardDrafts(items, filled);
       } else {
         // No card for this day: the master scenarios, filled with the office's rules.
@@ -319,10 +354,10 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
       }
     } else if (entry.kind === "gray" && cards.length) {
       // Gray cards: 1-2 items each, patient-facing or risky cards first.
-      const cap = selectMasters((must(masters) ?? []) as MasterScenario[], dayCode, ctx.conditions, ctx.profile).length || GRAY_ITEM_CAP;
+      const cap = filled.length || GRAY_ITEM_CAP;
       const plan = grayPlan(cards.map((c) => ({ ...c, tags: c.tags ?? [] })), cap);
-      const items = await writeCardGrayItems({ cards: plan.map((p) => ({ ...p.card, count: p.count })), standards });
-      const grayWorkflow = new Map(((must(grayCards) ?? []) as { id: string; code: string }[]).map((g) => [g.code, g.id]));
+      const items = await writeCardGrayItems({ cards: plan.map((p) => ({ ...p.card, count: p.count })), standards, log });
+      const grayWorkflow = new Map(grayCards.map((g) => [g.code, g.id]));
       drafts = items.map((item, n) => ({
         ...cardDrafts([item], [])[0],
         office_workflow_id: grayWorkflow.get(item.workflow) ?? null,
@@ -331,7 +366,7 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
         position: n,
       }));
     } else if (entry.kind === "gray") {
-      const cards: GrayCard[] = (must(grayCards) ?? []).map((c) => ({
+      const cards: GrayCard[] = grayCards.map((c) => ({
         id: c.id,
         code: c.code,
         risk_tag: c.risk_tag,
@@ -358,12 +393,14 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
       drafts = drills.map(drillDraft);
     }
 
-    // Repeat variants, for items that are complete.
-    const complete = drafts.filter((d) => d.missing_keys.length === 0 && (d.type !== "mc" || d.options));
-    const variants = await writeVariants(complete, ruleList);
+    // Repeat variants, for items that are complete (not for one that needs review).
+    const complete = drafts.filter((d) => d.missing_keys.length === 0 && !d.review_error && (d.type !== "mc" || d.options));
+    const variants = await writeVariants(complete, ruleList, log);
     await replaceDay(db, officeId, dayCode, toRows(officeId, dayCode, drafts, variants));
     await finishBuild(db, officeId, dayCode);
+    await logCheckFailures(db, officeId, dayCode, failures);
   } catch (e) {
+    await logCheckFailures(db, officeId, dayCode, failures);
     console.error("Scenario build failed", officeId, dayCode, e);
     await db
       .from("office_days")
