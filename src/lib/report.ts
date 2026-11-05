@@ -36,6 +36,8 @@ export type AttemptReport = {
   timeSpent: number | null; // seconds
   fastFinish: boolean;
   pastes: number;
+  // Days from the VA's start date to this attempt (reports only).
+  sinceStart?: string;
   items: ReportItem[];
   workflows: WorkflowStatus[];
 };
@@ -87,6 +89,7 @@ export function reportSections(r: AttemptReport) {
       ["First-try score", `${r.points}/${r.maxPoints} (${percent}%)`],
       ["Trend", trendText(r.trend)],
       ["Time spent", minutesText(r.timeSpent)],
+      ...(r.sinceStart ? [["Since start", r.sinceStart] as [string, string]] : []),
     ] as [string, string][],
     repeated: repeated.map(
       (i) =>

@@ -21,7 +21,9 @@ import {
   type ReportItem,
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
-import { percentOf, RESULT_LABELS, trend, withOverride, type ResultLabel } from "@/lib/va-flow";
+import { percentOf, RESULT_LABELS, sinceStartText, todayIn, trend, withOverride, type ResultLabel } from "@/lib/va-flow";
+
+const TIME_ZONE = process.env.TRAINING_TIME_ZONE || "America/New_York";
 
 type Db = ReturnType<typeof createAdminClient>;
 const TIMEOUT_MS = 15000;
@@ -58,7 +60,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
   if (!attempt?.submitted_at || !attempt.result || !(attempt.result in RESULT_LABELS)) return null;
 
   const [va, office, day, doctors, attempts, workflows, grayWorkflows, certifications] = await Promise.all([
-    db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
+    db.from("profiles").select("full_name, email, va_start_date").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select("title").eq("code", attempt.schedule_day).maybeSingle(),
     db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
@@ -158,6 +160,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     timeSpent: attempt.time_spent,
     fastFinish: attempt.fast_finish,
     pastes: Array.isArray(attempt.paste_log) ? attempt.paste_log.length : 0,
+    sinceStart: sinceStartText(must(va)?.va_start_date, todayIn(TIME_ZONE, new Date(attempt.submitted_at))),
     items: mine,
     workflows: dayWorkflows.map((code) => ({
       code,

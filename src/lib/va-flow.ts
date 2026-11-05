@@ -99,7 +99,8 @@ export function trainingPath(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Dates. Training days are weekdays (a new VA's suggested start date).
+// Dates. Training days are weekdays (a new VA's suggested start date). The
+// start date never opens or blocks a day; reports show the days since it.
 // ---------------------------------------------------------------------------
 
 const parseDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -123,6 +124,14 @@ export function todayIn(timeZone: string, now = new Date()): string {
 
 export function showDate(iso: string): string {
   return parseDate(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+// Calendar days from the VA's start date to `today` (both YYYY-MM-DD), for reports.
+export function sinceStartText(start: string | null | undefined, today: string): string {
+  if (!start) return "start date not set";
+  const days = Math.round((parseDate(today).getTime() - parseDate(start).getTime()) / 86_400_000);
+  if (days < 0) return `starts ${showDate(start)}`;
+  return `${days} day${days === 1 ? "" : "s"} since start (${showDate(start)})`;
 }
 
 // ---------------------------------------------------------------------------

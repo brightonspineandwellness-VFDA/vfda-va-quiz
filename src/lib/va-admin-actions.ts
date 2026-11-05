@@ -1,8 +1,9 @@
 "use server";
 
 // VFDA's side of VA training (/admin/vas): accept proof of work or ask for a
-// redo, set a VA's training start date, override a score (which changes only
-// the label), and "Reset day (test)". Nothing else here blocks or unlocks a day.
+// redo, set a VA's training start date (reports only: days since start),
+// override a score (which changes only the label), and "Reset day (test)".
+// Nothing here blocks or unlocks a day.
 // VFDA admins only; writes as the admin (row-level security applies).
 
 import { after } from "next/server";

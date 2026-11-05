@@ -11,7 +11,7 @@ import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
 import { resetDay } from "@/lib/va-admin-actions";
-import { percentOf, resultLabel, trend, unlockStatus } from "@/lib/va-flow";
+import { percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
 // "Send again" sends a report while you wait.
@@ -227,7 +227,13 @@ async function Vas() {
                 {va.email} · {va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office"}
               </p>
             </div>
-            <StartDateForm vaId={va.id} value={va.va_start_date} />
+            <div className="flex flex-col gap-1">
+              <StartDateForm vaId={va.id} value={va.va_start_date} />
+              <p className="text-xs text-foreground/60">
+                {sinceStartText(va.va_start_date, todayIn(process.env.TRAINING_TIME_ZONE || "America/New_York"))}. Reports
+                only: a day opens when its cards are done, the previous quiz is submitted and VFDA approved it.
+              </p>
+            </div>
 
             <p className="text-sm">
               <span className="font-medium">Days: </span>
