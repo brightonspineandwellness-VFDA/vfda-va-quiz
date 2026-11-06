@@ -11,7 +11,7 @@ import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
 import { resetDay } from "@/lib/va-admin-actions";
-import { percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
+import { attemptLabel, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
 // "Send again" sends a report while you wait.
@@ -60,7 +60,7 @@ async function Vas() {
     supabase.from("day_unlocks").select("va_id, office_id, schedule_day, status, cards_done_at, prep_notified_at"),
     supabase
       .from("attempts")
-      .select("id, va_id, office_id, schedule_day, version, kind, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
+      .select("id, va_id, office_id, schedule_day, version, kind, parent_attempt_id, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish")
       .not("submitted_at", "is", null)
       // Archived attempts (reset for testing) don't count.
       .is("archived_at", null)
@@ -284,11 +284,17 @@ async function Vas() {
                       return (
                         <tr key={a.id} className="border-b border-foreground/10 align-top">
                           <td className="py-1 pr-3">
-                            {a.kind === "day" ? a.schedule_day : a.kind === "retrain" ? "Retrain" : "Recheck"}{" "}
-                            <AttemptLink id={a.id} area="admin" />
+                            {attemptLabel(a)} <AttemptLink id={a.id} area="admin" />
                           </td>
                           <td className="py-1 pr-3">
+                            {a.kind === "retake" && "retake "}
                             {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%)
+                            {a.kind === "retake" &&
+                              (() => {
+                                // The first try stays the official score.
+                                const first = attemptRows.find((x) => x.id === a.parent_attempt_id);
+                                return first ? ` · first try ${Number(first.first_try_points)}/${first.max_points} (${percentOf(first.first_try_points, first.max_points)}%)` : "";
+                              })()}
                           </td>
                           <td className={`py-1 pr-3 font-medium ${LABEL_TONE[a.result ?? ""] ?? ""}`}>{resultLabel(a.result)}</td>
                           <td className="py-1 pr-3">

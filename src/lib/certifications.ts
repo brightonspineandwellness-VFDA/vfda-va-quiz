@@ -18,7 +18,7 @@ import {
 } from "@/lib/certification";
 import { writeRecheckVariants } from "@/lib/scenario-ai";
 import { createAdminClient } from "@/lib/supabase/server";
-import { withOverride } from "@/lib/va-flow";
+import { percentOf, withOverride } from "@/lib/va-flow";
 import { officeRulesFor } from "@/lib/va-training";
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -463,6 +463,8 @@ export type GridCell = {
   certifiedAt: string | null;
   recheckDate: string | null;
   openDrill: "recheck" | null;
+  // Certification uses first-try scores; a retake on the workflow's days shows here as a note.
+  retakeNote: string | null;
 };
 
 export type GridRow = {
@@ -489,13 +491,36 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
   const vaRows = (must(vas) ?? []) as { id: string; full_name: string | null; email: string; office_id: string | null }[];
   const vaIds = vaRows.map((v) => v.id);
   const officeIds = [...new Set(vaRows.map((v) => v.office_id).filter((x): x is string => !!x))];
-  const [perOffice, certsRes, drillsRes] = await Promise.all([
+  const [perOffice, certsRes, drillsRes, retakesRes] = await Promise.all([
     Promise.all(officeIds.map(async (id) => [id, (await officeWorkflows(db, id)).workflows] as const)),
     vaIds.length ? db.from("certifications").select(CERT_COLUMNS).in("va_id", vaIds) : Promise.resolve({ data: [], error: null }),
     vaIds.length
       ? db.from("attempts").select("va_id, kind, certification_id").in("va_id", vaIds).eq("kind", "recheck").is("submitted_at", null)
       : Promise.resolve({ data: [], error: null }),
+    // Finished day attempts and retakes, for the retake notes.
+    vaIds.length
+      ? db
+          .from("attempts")
+          .select("id, va_id, office_id, kind, schedule_day, parent_attempt_id, first_try_points, max_points")
+          .in("va_id", vaIds)
+          .in("kind", ["day", "retake"])
+          .not("submitted_at", "is", null)
+          .is("archived_at", null)
+      : Promise.resolve({ data: [], error: null }),
   ]);
+  type Scored = { id: string; va_id: string; office_id: string; kind: string; schedule_day: string; parent_attempt_id: string | null; first_try_points: number | null; max_points: number | null };
+  const scored = (must(retakesRes) ?? []) as Scored[];
+  const retakeNote = (vaId: string, officeId: string | null, days: string[]) => {
+    const notes = scored
+      .filter((a) => a.kind === "retake" && a.va_id === vaId && a.office_id === officeId && days.includes(a.schedule_day))
+      .flatMap((r) => {
+        const first = scored.find((a) => a.id === r.parent_attempt_id);
+        return first
+          ? [`${r.schedule_day} ${percentOf(first.first_try_points, first.max_points)}% → ${percentOf(r.first_try_points, r.max_points)}%`]
+          : [];
+      });
+    return notes.length ? `Retake: ${notes.join(", ")} (first try counts)` : null;
+  };
   const workflowsOf = new Map(perOffice);
   const certs = (must(certsRes) ?? []) as CertRow[];
   const drills = (must(drillsRes) ?? []) as { va_id: string; kind: "recheck"; certification_id: string }[];
@@ -519,6 +544,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
         certifiedAt: c?.certified_at ?? null,
         recheckDate: c?.recheck_date ?? null,
         openDrill: c ? (drills.find((d) => d.certification_id === c.id)?.kind ?? null) : null,
+        retakeNote: ow ? retakeNote(va.id, va.office_id, ow.days) : null,
       };
     };
     const cells = [

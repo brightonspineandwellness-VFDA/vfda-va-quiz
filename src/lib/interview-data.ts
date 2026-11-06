@@ -173,9 +173,11 @@ async function signedUrls(supabase: Supabase, rules: RuleRow[]) {
   return fileUrls;
 }
 
-// Everything about one office: setup data plus the doctor's flow.
-export async function loadOfficeSetup(officeId: string) {
-  const supabase = await createSessionClient();
+// Everything about one office: setup data plus the doctor's flow. As the
+// signed-in user, or with the client given (the service role, for work done
+// after a response, e.g. the SOP gap report).
+export async function loadOfficeSetup(officeId: string, client?: Supabase) {
+  const supabase = client ?? (await createSessionClient());
   const { data: office, error } = await supabase
     .from("offices")
     .select(`id, name, status, ${OFFICE_STATE_COLUMNS}`)

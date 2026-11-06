@@ -8,6 +8,7 @@ import "server-only";
 // what hasn't gone out yet. Each send is tried twice.
 
 import { passPercent } from "@/lib/certification";
+import { loadRetakeComparison } from "@/lib/retake";
 import {
   criticalAlertText,
   escapeHtml,
@@ -21,7 +22,7 @@ import {
   type ReportItem,
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
-import { percentOf, RESULT_LABELS, sinceStartText, todayIn, trend, withOverride, type ResultLabel } from "@/lib/va-flow";
+import { attemptLabel, percentOf, RESULT_LABELS, sinceStartText, todayIn, trend, withOverride, type ResultLabel } from "@/lib/va-flow";
 
 const TIME_ZONE = process.env.TRAINING_TIME_ZONE || "America/New_York";
 
@@ -141,12 +142,19 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
   const certs = must(certifications) ?? [];
   const certOf = (code: string) =>
     certs.find((c) => (grayIds.has(code) ? c.office_workflow_id === grayIds.get(code) : c.workflow === code)) ?? null;
-  // A retrain or recheck is reported under its workflow.
-  const drill = attempt.kind === "day" ? null : (attempt.kind as "retrain" | "recheck");
+  // A retrain or recheck is reported under its workflow; a retake under its
+  // day, next to its first try.
+  const drill = attempt.kind === "retrain" || attempt.kind === "recheck" ? (attempt.kind as "retrain" | "recheck") : null;
+  const retake = attempt.kind === "retake" ? await loadRetakeComparison(db, attempt.id) : null;
   const percents = drill ? [percentOf(attempt.first_try_points, attempt.max_points)] : dayPercents;
   const drillWorkflow = drill ? (mine[0]?.workflow ?? "") : "";
   const dayWorkflows = [...new Set(mine.map((i) => i.workflow))].sort();
-  const everything = allItems.map(toItem).filter((i): i is ReportItem => !!i);
+  // Workflow statuses are first-try evidence: retakes don't count.
+  const retakeIds = new Set(attemptRows.filter((a) => a.kind === "retake").map((a) => a.id));
+  const everything = allItems
+    .filter((i) => !retakeIds.has(i.attempt_id))
+    .map(toItem)
+    .filter((i): i is ReportItem => !!i);
 
   const report: AttemptReport = {
     vaName: must(va)?.full_name || must(va)?.email || "VA",
@@ -161,6 +169,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     fastFinish: attempt.fast_finish,
     pastes: Array.isArray(attempt.paste_log) ? attempt.paste_log.length : 0,
     sinceStart: sinceStartText(must(va)?.va_start_date, todayIn(TIME_ZONE, new Date(attempt.submitted_at))),
+    ...(retake ? { retake } : {}),
     items: mine,
     workflows: dayWorkflows.map((code) => ({
       code,
@@ -180,7 +189,14 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
 // Channels
 // ---------------------------------------------------------------------------
 
-export async function sendEmail(to: string, subject: string, html: string, text: string, idempotencyKey: string) {
+export async function sendEmail(
+  to: string,
+  subject: string,
+  html: string,
+  text: string,
+  idempotencyKey: string,
+  attachments: { filename: string; content: string }[] = [], // content: base64
+) {
   const key = process.env.RESEND_API_KEY;
   const from = reportFrom();
   if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM_EMAIL are needed.");
@@ -188,7 +204,15 @@ export async function sendEmail(to: string, subject: string, html: string, text:
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-    body: JSON.stringify({ from, to: [to], subject, html, text, ...(replyTo ? { reply_to: replyTo } : {}) }),
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject,
+      html,
+      text,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+      ...(attachments.length ? { attachments } : {}),
+    }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -197,7 +221,7 @@ export async function sendEmail(to: string, subject: string, html: string, text:
   }
 }
 
-async function postSlack(payload: { text: string }) {
+export async function postSlack(payload: { text: string }) {
   const url = process.env.SLACK_WEBHOOK_URL;
   if (!url) throw new Error("Slack isn't set up: SLACK_WEBHOOK_URL is needed.");
   const res = await fetch(url, {
@@ -372,7 +396,7 @@ export async function sendCriticalAlert(itemId: string, phase: "first" | "repeat
   const { subject, lines } = criticalAlertText({
     vaName: (must(va)?.full_name || must(va)?.email || "VA") as string,
     officeName: (must(office)?.name ?? "Office") as string,
-    dayCode: attempt.kind === "day" ? attempt.schedule_day : attempt.kind === "recheck" ? "Recheck" : "Retrain",
+    dayCode: attemptLabel(attempt),
     code: s?.code ?? "",
     workflow: s?.workflow ?? "",
     repeat: phase === "repeat",

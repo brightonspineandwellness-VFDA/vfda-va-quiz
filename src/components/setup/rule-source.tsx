@@ -2,6 +2,14 @@ import type { RuleRow } from "@/lib/doctor-flow";
 
 // Where a rule came from: the card (with its quote), the doctor, or VFDA.
 export function RuleSource({ row }: { row: RuleRow }) {
+  if (row.source === "doctor_card") {
+    return (
+      <p className="text-xs text-foreground/60">
+        Your answer on the <span className="font-medium">VA Office Rules</span> card
+        {row.source_quote && <>: &ldquo;{row.source_quote}&rdquo;</>}
+      </p>
+    );
+  }
   if (row.source !== "card_import") {
     return (
       <p className="text-xs text-foreground/60">

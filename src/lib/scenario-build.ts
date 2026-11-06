@@ -115,7 +115,8 @@ export type DerivedPlaceholder = { key: string; from_key: string; rule: string }
 
 // Every placeholder value the office has: accepted rules plus
 // settings.derived_placeholders. Cards come first: a card's version wins over
-// the VFDA default, and an answer the doctor or VFDA typed in wins over both.
+// the VFDA default, the doctor's VA Office Rules card over other cards, and an
+// answer the doctor or VFDA typed in over all of them.
 export function placeholderValues(
   rules: RuleForBuild[],
   derived: DerivedPlaceholder[],
@@ -123,7 +124,7 @@ export function placeholderValues(
 ): Record<string, string> {
   const raw = new Map<string, unknown>();
   const rank = (r: RuleForBuild) =>
-    r.source === "vfda_default" ? 0 : r.source_document_id ? 1 : 2;
+    r.source === "vfda_default" ? 0 : r.source === "doctor_card" ? 2 : r.source_document_id ? 1 : 3;
   for (const r of [...rules].sort((a, b) => rank(a) - rank(b))) {
     raw.set(r.rule_slot_key, r.rule);
   }

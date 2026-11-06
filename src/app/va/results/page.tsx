@@ -2,12 +2,14 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { FeedbackList, loadFeedback } from "@/components/va/attempt-feedback";
+import { RetakeCompare } from "@/components/va/retake-compare";
 import { requireRole } from "@/lib/auth";
 import { CERT_LABELS, SOP_LABELS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
+import { loadRetakeComparison } from "@/lib/retake";
 import { createAdminClient } from "@/lib/supabase/server";
-import { percentOf, showDate, trend } from "@/lib/va-flow";
+import { attemptLabel, percentOf, showDate, trend } from "@/lib/va-flow";
 
 export default function ResultsPage() {
   return (
@@ -24,8 +26,9 @@ export default function ResultsPage() {
 }
 
 // Scores and feedback for every finished day (shown right away), the trend
-// across days, and where each workflow stands. Read on the server for this VA
-// only; never answer keys.
+// across days (first tries only), each retake next to its first try, and
+// where each workflow stands. Read on the server for this VA only; never
+// answer keys.
 async function Results() {
   const user = await requireRole("va");
   const db = createAdminClient();
@@ -41,11 +44,13 @@ async function Results() {
     loadCertGrid(db, { vaIds: [user.id] }),
   ]);
   const done = attempts ?? [];
-  const feedback = await loadFeedback(done.map((a) => a.id));
+  const [feedback, retakes] = await Promise.all([
+    loadFeedback(done.map((a) => a.id)),
+    Promise.all(done.filter((a) => a.kind === "retake").map(async (a) => [a.id, await loadRetakeComparison(db, a.id)] as const)),
+  ]);
+  const retakeOf = new Map(retakes);
   const direction = trend(done.filter((a) => a.kind === "day").map((a) => percentOf(a.first_try_points, a.max_points)));
   const row = grid.rows[0];
-  const label = (a: { kind: string; schedule_day: string }) =>
-    a.kind === "day" ? a.schedule_day : a.kind === "retrain" ? "Retrain" : "Recheck";
 
   return (
     <>
@@ -70,6 +75,7 @@ async function Results() {
                   {c.status !== "certified" && c.submittedAt && c.sopStatus && ` · Trello card: ${SOP_LABELS[c.sopStatus]}`}
                 </span>
                 {c.sopNote && c.status !== "certified" && <span className="text-foreground/70">VFDA: {c.sopNote}</span>}
+                {c.retakeNote && <span className="text-foreground/70">{c.retakeNote}</span>}
               </li>
             ))}
         </ul>
@@ -81,10 +87,17 @@ async function Results() {
         {!done.length && <p className="text-sm">No finished days yet.</p>}
         {done.map((a) => (
           <div key={a.id} className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-4 py-3 text-sm">
-            <p className="font-medium">
-              {label(a)}: {Number(a.first_try_points)}/{a.max_points} first try ({percentOf(a.first_try_points, a.max_points)}%)
-            </p>
-            <FeedbackList items={feedback.get(a.id) ?? []} />
+            {a.kind === "retake" ? (
+              <>
+                <p className="font-medium">{attemptLabel(a)}</p>
+                {retakeOf.get(a.id) && <RetakeCompare data={retakeOf.get(a.id)!} />}
+              </>
+            ) : (
+              <p className="font-medium">
+                {attemptLabel(a)}: {Number(a.first_try_points)}/{a.max_points} first try ({percentOf(a.first_try_points, a.max_points)}%)
+              </p>
+            )}
+            <FeedbackList items={feedback.get(a.id) ?? []} first={a.kind === "retake" ? "on the retake" : "first try"} />
           </div>
         ))}
       </section>

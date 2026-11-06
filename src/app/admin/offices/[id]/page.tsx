@@ -65,6 +65,9 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
           <Link href={`/admin/offices/${id}/scenarios`} className="underline">
             Scenarios
           </Link>
+          <Link href={`/admin/offices/${id}/report`} className="underline">
+            SOP gap report (VFDA only)
+          </Link>
         </p>
       </div>
 

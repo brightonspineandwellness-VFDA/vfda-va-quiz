@@ -7,7 +7,7 @@ import { currentStep } from "@/lib/doctor-flow";
 import { loadOfficeSetup } from "@/lib/interview-data";
 import { TREND_LABELS } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
-import { percentOf, resultLabel, trend } from "@/lib/va-flow";
+import { attemptLabel, percentOf, resultLabel, trend } from "@/lib/va-flow";
 
 export default function DoctorPage() {
   return (
@@ -83,7 +83,7 @@ async function Results() {
         {attempts.map((a) => (
           <li key={a.id}>
             <Link href={`/doctor/attempts/${a.id}`} className="underline">
-              {name.get(a.va_id) ?? "Former VA"} · {a.kind === "day" ? a.schedule_day : "Recheck"}
+              {name.get(a.va_id) ?? "Former VA"} · {attemptLabel(a)}
             </Link>{" "}
             · {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%) · {resultLabel(a.result)}
           </li>

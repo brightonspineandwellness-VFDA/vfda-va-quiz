@@ -53,6 +53,7 @@ const SOURCE_LABELS = {
   doctor: "doctor",
   vfda: "VFDA",
   vfda_default: "VFDA default",
+  doctor_card: "doctor (VA Office Rules card)",
   auto: "filled automatically",
   card_import: "card",
 } as const;

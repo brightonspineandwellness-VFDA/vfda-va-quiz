@@ -2,11 +2,13 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { OverrideForm } from "@/components/attempts/override-form";
 import { ActionButton } from "@/components/setup/action-button";
+import { RetakeCompare } from "@/components/va/retake-compare";
 import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
 import { minutesText } from "@/lib/report";
+import type { RetakeComparison } from "@/lib/retake";
 import { resendAttemptReport } from "@/lib/va-admin-actions";
-import { percentOf, resultLabel } from "@/lib/va-flow";
+import { attemptLabel, percentOf, resultLabel } from "@/lib/va-flow";
 
 const LABEL_TONE: Record<string, string> = {
   strong: "text-green-700 dark:text-green-400",
@@ -18,16 +20,14 @@ const LABEL_TONE: Record<string, string> = {
 // the label) and the report status; the doctor's view is read-only.
 export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
   const { attempt, items } = data;
-  const drill = attempt.kind === "day" ? null : attempt.kind === "retrain" ? "Retrain" : "Recheck";
+  const drill = attempt.kind === "retrain" ? "Retrain" : attempt.kind === "recheck" ? "Recheck" : null;
   const workflow = items[0]?.workflow ?? "";
-  const repeats = items.filter((i) => i.repeat);
-  const alerts = data.notifications.filter((n) => n.event.startsWith("critical") && n.status === "sent");
 
   return (
     <>
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">
-          {data.vaName}: {drill ? `${drill} ${workflow}` : attempt.schedule_day}
+          {data.vaName}: {drill ? `${drill} ${workflow}` : attemptLabel(attempt)}
         </h1>
         <p className="text-sm text-foreground/60">
           {data.officeName}
@@ -35,12 +35,98 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
         </p>
       </div>
 
+      <Summary data={data} admin={admin} />
+      <p className="text-sm text-foreground/60">
+        Labels never block: the VA saw their score and feedback and moved on. Changing a score changes only the label.
+      </p>
+
+      <ol className="flex flex-col gap-4">
+        {items.map((item) => (
+          <li key={item.id}>
+            <Item item={item} admin={admin} />
+          </li>
+        ))}
+      </ol>
+    </>
+  );
+}
+
+// A day and its retake side by side: both summaries, every question's
+// first-try and retake score (missed the first time highlighted), then each
+// question's two answers next to each other. The first try stays official.
+export function RetakeReview({
+  first,
+  retake,
+  comparison,
+  admin,
+}: {
+  first: AttemptReviewData;
+  retake: AttemptReviewData;
+  comparison: RetakeComparison;
+  admin: boolean;
+}) {
+  const retakeOf = (item: ReviewItem) => retake.items.find((r) => r.first.scenario?.parent_scenario_id === item.first.scenario?.id) ?? null;
+  return (
+    <>
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold">
+          {first.vaName}: {first.attempt.schedule_day} and its retake
+        </h1>
+        <p className="text-sm text-foreground/60">
+          {first.officeName}
+          {first.day?.title && ` · ${first.day.title}`}
+        </p>
+      </div>
+      <RetakeCompare data={comparison} />
+      <p className="text-sm text-foreground/60">
+        The first try is the official score (certification uses it); the retake is shown as improvement. Changing a score
+        changes only that attempt&apos;s label.
+      </p>
+      <div className="grid gap-4 md:grid-cols-2">
+        <section className="flex flex-col gap-2 rounded-lg border border-foreground/15 p-3">
+          <h2 className="font-semibold">First try (official)</h2>
+          <Summary data={first} admin={admin} />
+        </section>
+        <section className="flex flex-col gap-2 rounded-lg border border-blue-300 p-3 dark:border-blue-800">
+          <h2 className="font-semibold">Retake</h2>
+          <Summary data={retake} admin={admin} />
+        </section>
+      </div>
+      <ol className="flex flex-col gap-4">
+        {first.items.map((item) => {
+          const again = retakeOf(item);
+          const missed = item.first.score === null || item.first.score < item.points;
+          return (
+            <li key={item.id} className="flex flex-col gap-2">
+              <p className={`text-sm font-semibold ${missed ? "text-amber-700 dark:text-amber-300" : ""}`}>
+                {item.code}
+                {missed && " · missed the first time"}
+              </p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Item item={item} admin={admin} heading="First try" />
+                {again ? <Item item={again} admin={admin} heading="Retake" /> : <p className="text-sm text-foreground/60">Not answered on the retake yet.</p>}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </>
+  );
+}
+
+// An attempt's label, score, repeats, time and flags, and (admin) where its report went.
+function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
+  const { attempt, items } = data;
+  const repeats = items.filter((i) => i.repeat);
+  const alerts = data.notifications.filter((n) => n.event.startsWith("critical") && n.status === "sent");
+  return (
+    <>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-foreground/60">Label</dt>
         <dd className={`font-medium ${LABEL_TONE[attempt.result ?? ""] ?? ""}`}>
           {attempt.submitted_at ? resultLabel(attempt.result) : "not finished"}
         </dd>
-        <dt className="text-foreground/60">First try</dt>
+        <dt className="text-foreground/60">{attempt.kind === "retake" ? "Score" : "First try"}</dt>
         <dd className="font-medium">
           {attempt.first_try_points === null
             ? "–"
@@ -65,10 +151,6 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
             .join(", ") || "–"}
         </dd>
       </dl>
-      <p className="text-sm text-foreground/60">
-        Labels never block: the VA saw their score and feedback and moved on. Changing a score changes only the label.
-      </p>
-
       {admin && (
         <div className="flex flex-col gap-1">
           <ReportStatus attemptId={attempt.id} rows={data.notifications.filter((n) => n.event === "")} />
@@ -77,12 +159,6 @@ export function AttemptReview({ data, admin }: { data: AttemptReviewData; admin:
           )}
         </div>
       )}
-
-      <ol className="flex flex-col gap-4">
-        {items.map((item) => (
-          <Item key={item.id} item={item} admin={admin} />
-        ))}
-      </ol>
     </>
   );
 }
@@ -91,13 +167,13 @@ function scoreText(score: number | null, max: number) {
   return score === null ? "needs review" : `${score}/${max}`;
 }
 
-function Item({ item, admin }: { item: ReviewItem; admin: boolean }) {
+function Item({ item, admin, heading }: { item: ReviewItem; admin: boolean; heading?: string }) {
   const max = item.type === "mc" ? item.points : 2;
   const o = item.override;
   return (
-    <li className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
+    <div className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-semibold">{item.code}</span>
+        <span className="font-semibold">{heading ?? item.code}</span>
         <span className="text-sm text-foreground/60">
           {item.workflow} · {ITEM_TYPE_LABELS[item.type]}
           {item.seconds !== null && ` · ${Math.max(1, Math.round(item.seconds / 60))} min`}
@@ -139,7 +215,7 @@ function Item({ item, admin }: { item: ReviewItem; admin: boolean }) {
           critical={o ? o.critical_error : item.criticalError}
         />
       )}
-    </li>
+    </div>
   );
 }
 

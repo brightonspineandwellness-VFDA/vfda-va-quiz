@@ -3,9 +3,11 @@ import "server-only";
 // The attempt review page (/admin/attempts/[id], and read-only for the
 // office's doctor at /doctor/attempts/[id]): every item's first and repeat
 // answer with scores and missed steps, and VFDA's score overrides, which
-// change only the day's label. Reads with the signed-in user's session, so
-// row-level security decides who sees what.
+// change only the day's label. A day with a retake shows both side by side.
+// Reads with the signed-in user's session, so row-level security decides who
+// sees what.
 
+import { loadRetakeComparison } from "@/lib/retake";
 import type { createSessionClient } from "@/lib/supabase/server";
 import {
   ANSWER_BOXES,
@@ -25,6 +27,8 @@ const DAY_COLUMNS =
 
 type Scenario = {
   id: string;
+  // A retake item: the day's item it is a new version of.
+  parent_scenario_id: string | null;
   code: string;
   type: "mc" | "situational" | "describe";
   points: number;
@@ -81,7 +85,7 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
     await db
       .from("attempts")
       .select(
-        "id, va_id, office_id, schedule_day, version, kind, started_at, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish, feedback_released_at",
+        "id, va_id, office_id, schedule_day, version, kind, parent_attempt_id, started_at, submitted_at, first_try_points, max_points, result, critical_errors, time_spent, paste_log, fast_finish, feedback_released_at",
       )
       .eq("id", attemptId)
       .maybeSingle(),
@@ -107,7 +111,7 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
     ? ((must(
         await db
           .from("office_scenarios")
-          .select("id, code, type, points, workflow, part_title, stem, answer_format")
+          .select("id, parent_scenario_id, code, type, points, workflow, part_title, stem, answer_format")
           .in("id", ids),
       ) ?? []) as Scenario[])
     : [];
@@ -171,6 +175,20 @@ export async function loadAttemptReview(db: Db, attemptId: string) {
 }
 
 export type AttemptReviewData = NonNullable<Awaited<ReturnType<typeof loadAttemptReview>>>;
+
+// The attempt, and when it is a retake or a day that has one, both of them:
+// the first try (official) and the retake.
+export async function loadAttemptWithRetake(db: Db, attemptId: string) {
+  const main = await loadAttemptReview(db, attemptId);
+  if (!main || (main.attempt.kind !== "day" && main.attempt.kind !== "retake")) return main && { main, pair: null };
+  const comparison = await loadRetakeComparison(db, attemptId);
+  if (!comparison) return { main, pair: null };
+  const otherId = main.attempt.kind === "retake" ? comparison.firstAttemptId : comparison.retakeAttemptId;
+  const other = await loadAttemptReview(db, otherId);
+  if (!other) return { main, pair: null };
+  const [first, retake] = main.attempt.kind === "retake" ? [other, main] : [main, other];
+  return { main, pair: { first, retake, comparison } };
+}
 
 // Works the label out again with VFDA's overrides. Nothing else changes:
 // quizzes never block.

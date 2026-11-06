@@ -24,6 +24,16 @@ export const RESULT_LABELS: Record<ResultLabel, string> = {
 // Older attempts may carry pass / review / retake until the SQL relabels them.
 export const resultLabel = (r: string | null | undefined) => (r && r in RESULT_LABELS ? RESULT_LABELS[r as ResultLabel] : "–");
 
+// How an attempt is named in lists and reports.
+export const attemptLabel = (a: { kind: string; schedule_day: string }) =>
+  a.kind === "day"
+    ? a.schedule_day
+    : a.kind === "retake"
+      ? `${a.schedule_day} RETAKE`
+      : a.kind === "retrain"
+        ? "Retrain"
+        : "Recheck";
+
 export const unlockStatus = (s: string | null | undefined): UnlockStatus =>
   !s || s === "locked" ? "locked" : s === "open" ? "open" : "done";
 

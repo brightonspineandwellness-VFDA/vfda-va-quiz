@@ -4,7 +4,9 @@ import "server-only";
 // API once, for its title, color, word-for-word text and a suggested mapping
 // to training day(s) and a workflow, plus any VFDA standard or must-ask rule
 // it states (proposed office rules with the exact quote, for VFDA to review).
-// The text is what scenarios are later written from.
+// The text is what scenarios are later written from. The VA Office Rules card
+// is the doctor's own answers to the must-ask rules: saved as accepted rules
+// (source doctor_card), no VFDA review, and not a scenario source.
 //
 // Runs on the server with the service role, after "Done uploading". Only
 // documents not read before (imported_at is null) are sent. Slots the doctor
@@ -13,17 +15,19 @@ import "server-only";
 
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
 import { isMustAsk, suggestMapping, type DayForMapping } from "@/lib/card-map";
-import { directAnswer, slotApplies, type RuleRow } from "@/lib/doctor-flow";
+import { directAnswer, OFFICE_RULES_CARD, ownAnswer, slotApplies, type RuleRow } from "@/lib/doctor-flow";
 import {
   buildPrompt,
   CardReadSchema,
   SYSTEM,
+  toOfficeRules,
   toReading,
   type CardReading,
   type DocumentForExtraction,
   type Workflow,
 } from "@/lib/extraction-parse";
 import { profileFromAnswers, type Answer, type InterviewQuestion } from "@/lib/interview";
+import { reportIfDue } from "@/lib/office-reports";
 import { createAdminClient } from "@/lib/supabase/server";
 
 export const DOCUMENT_BUCKET = "office-documents";
@@ -129,20 +133,23 @@ export async function runExtraction(officeId: string) {
       conditions: (settings.data?.value ?? {}) as Record<string, string>,
       profile: profileFromAnswers(answers),
     };
-    // Only VFDA standards and the must-ask rules are still filled from cards.
+    // Only VFDA standards and the must-ask rules are still filled from cards,
+    // and never one the doctor already answered.
+    const rowsOf = (key: string) => ruleRows.filter((r) => r.rule_slot_key === key);
+    const fillable = (s: InterviewQuestion) => s.answer_type !== "matrix" && slotApplies(s, flowInput);
     const wanted = questions.filter(
-      (s) =>
-        (s.tier === "default" || (s.tier === "doctor" && isMustAsk(s.key))) &&
-        s.answer_type !== "matrix" &&
-        slotApplies(s, flowInput) &&
-        !directAnswer(s, ruleRows.filter((r) => r.rule_slot_key === s.key)),
+      (s) => (s.tier === "default" || (s.tier === "doctor" && isMustAsk(s.key))) && fillable(s) && !ownAnswer(s, rowsOf(s.key)),
     );
+    // The VA Office Rules card answers the must-ask rules; a newer card
+    // replaces an older card's answers, but never one typed in.
+    const officeRuleSlots = questions.filter((s) => s.tier === "doctor" && isMustAsk(s.key) && fillable(s) && !directAnswer(s, rowsOf(s.key)));
     const workflowList = [...((workflows.data ?? []) as Workflow[]), ...((grayWorkflows.data ?? []) as Workflow[])];
     const dayList = (days.data ?? []).map((d) => ({ code: d.code, cards: d.cards ?? [], workflows: d.workflows ?? [] })) as DayForMapping[];
     const slotWorkflows = new Map((slots.data ?? []).map((s) => [s.key as string, (s.workflows ?? []) as string[]]));
     const mock = aiMode() === "mock";
 
     const errors = await eachLimited(documents, PARALLEL, async (doc) => {
+      const officeRules = doc.card_name === OFFICE_RULES_CARD;
       let reading: CardReading;
       let found: ReturnType<typeof toReading>["rules"] = [];
       if (mock) {
@@ -160,30 +167,35 @@ export async function runExtraction(officeId: string) {
         if (error || !data) throw new Error(`Couldn't open ${doc.file_name}.`);
         const bytes = Buffer.from(await data.arrayBuffer());
         if (bytes.length > MAX_CARD_BYTES) throw new Error(`${doc.file_name} is too big to read (over 20 MB).`);
+        const slotsAsked = officeRules ? officeRuleSlots : wanted;
         const output = await readCard(
-          buildPrompt(wanted, doc, workflowList),
+          buildPrompt(slotsAsked, doc, workflowList, officeRules),
           `${doc.card_name || "Card"}: ${doc.file_name}`,
           bytes.toString("base64"),
         );
-        ({ reading, rules: found } = toReading(output, wanted, doc, workflowList));
+        ({ reading, rules: found } = toReading(output, slotsAsked, doc, workflowList));
+        if (officeRules) found = toOfficeRules(output.rules, reading.extracted_text, officeRuleSlots, doc);
       }
-      const suggestion = suggestMapping(
-        { title: reading.card_title, cardName: doc.card_name, color: reading.card_color, workflow: reading.workflow },
-        dayList,
-      );
+      // Rules only: the office's rules reach the scenarios, the card itself doesn't.
+      if (officeRules) reading.skip = true;
+      const suggestion = officeRules
+        ? { days: [], workflow: null }
+        : suggestMapping({ title: reading.card_title, cardName: doc.card_name, color: reading.card_color, workflow: reading.workflow }, dayList);
 
       if (found.length) {
+        const now = new Date().toISOString();
         const { error } = await db.from("office_rules").upsert(
           found.map((r) => ({
             ...r,
             office_id: officeId,
-            source: "card_import",
-            status: "proposed",
+            // The doctor wrote the VA Office Rules card: their answers are confirmed.
+            source: officeRules ? "doctor_card" : "card_import",
+            status: officeRules ? "accepted" : "proposed",
             workflows: slotWorkflows.get(r.rule_slot_key) ?? [],
             vfda_reviewed_by: null,
             vfda_reviewed_at: null,
             doctor_approved_by: null,
-            doctor_approved_at: null,
+            doctor_approved_at: officeRules ? now : null,
           })),
           { onConflict: "office_id,rule_slot_key,source_document_id" },
         );
@@ -206,6 +218,8 @@ export async function runExtraction(officeId: string) {
       .from("offices")
       .update({ extraction_status: "done", extracted_at: new Date().toISOString(), extraction_error: null })
       .eq("id", officeId);
+    // A re-import with nothing for VFDA to review: the gap report is due now.
+    await reportIfDue(officeId).catch((e) => console.error("Office SOP gap report not written", officeId, e));
   } catch (e) {
     console.error("Reading cards failed", officeId, e);
     await db

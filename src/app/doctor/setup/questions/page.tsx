@@ -51,7 +51,16 @@ async function QuestionsStep() {
         </p>
       </div>
 
-      {!flow.unlocked ? (
+      {flow.questionsSkipped ? (
+        <>
+          <p className="text-foreground/70">
+            Nothing to ask: your cards (and your VA Office Rules card) answer every office rule. This step is done.
+          </p>
+          <Link href="/doctor/setup/standards" className={nextButton}>
+            Next: VFDA standards →
+          </Link>
+        </>
+      ) : !flow.unlocked ? (
         <LockedStep />
       ) : (
         <>

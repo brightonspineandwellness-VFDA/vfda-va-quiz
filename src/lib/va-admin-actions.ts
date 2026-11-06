@@ -163,8 +163,8 @@ export async function confirmSop(
   return { ok: true, data: null };
 }
 
-// "Reset day (test)": archives the VA's attempt at one day (kept, marked
-// archived, with who and when; no longer counted in scores or reports) and
+// "Reset day (test)": archives the VA's attempt at one day and its retake
+// (kept, marked archived, with who and when; no longer counted in scores or reports) and
 // opens the day again, so the VA takes it on the live version. Logged to the
 // System log.
 export async function resetDay(vaId: string, day: string): Promise<ActionResult> {
@@ -181,9 +181,9 @@ export async function resetDay(vaId: string, day: string): Promise<ActionResult>
     .eq("va_id", vaId)
     .eq("office_id", va.office_id)
     .eq("schedule_day", day)
-    .eq("kind", "day")
+    .in("kind", ["day", "retake"])
     .is("archived_at", null)
-    .select("id, build_version, submitted_at");
+    .select("id, kind, build_version, submitted_at");
   if (error) return fail("Couldn't reset. Try again.");
   if (!archived?.length) return fail(`${va.full_name || va.email} has no attempt at ${day} to reset.`);
   await supabase
@@ -192,7 +192,7 @@ export async function resetDay(vaId: string, day: string): Promise<ActionResult>
     .eq("va_id", vaId)
     .eq("office_id", va.office_id)
     .eq("schedule_day", day);
-  const a = archived[0];
+  const a = archived.find((x) => x.kind === "day") ?? archived[0];
   const { error: logError } = await createAdminClient()
     .from("system_logs")
     .insert({

@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { AttemptReview } from "@/components/attempts/attempt-review";
+import { AttemptReview, RetakeReview } from "@/components/attempts/attempt-review";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
-import { loadAttemptReview } from "@/lib/attempt-review";
+import { loadAttemptWithRetake } from "@/lib/attempt-review";
 import { requireRole } from "@/lib/auth";
 import { createSessionClient } from "@/lib/supabase/server";
 
@@ -27,7 +27,9 @@ async function Attempt({ params }: { params: Promise<{ id: string }> }) {
   await requireRole("doctor");
   const { id } = await params;
   if (!UUID.test(id)) notFound();
-  const data = await loadAttemptReview(await createSessionClient(), id);
+  const data = await loadAttemptWithRetake(await createSessionClient(), id);
   if (!data) notFound();
-  return <AttemptReview data={data} admin={false} />;
+  // A day with a retake: the original and the retake side by side.
+  if (data.pair) return <RetakeReview {...data.pair} admin={false} />;
+  return <AttemptReview data={data.main} admin={false} />;
 }

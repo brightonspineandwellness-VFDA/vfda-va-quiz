@@ -14,6 +14,7 @@ import {
   claimPreparingNotice,
   loadToday,
   markCardsDone,
+  startRetake,
   submitAnswer,
   type SubmitOutcome,
   type SubmittedAnswer,
@@ -104,4 +105,14 @@ export async function submitSop(certificationId: string, links: string): Promise
   if (error) return fail(error);
   after(() => sendSopNotice(certificationId, "submitted").then(() => undefined));
   return { ok: true, data: null };
+}
+
+// "Retake this day" (optional, once): prepares every item again with new
+// details, then the retake opens from Today.
+export async function startDayRetake(parentAttemptId: string): Promise<ActionResult> {
+  const user = await va();
+  if (!user) return fail("VAs only.");
+  if (!UUID.test(parentAttemptId)) return fail("Invalid request.");
+  const result = await startRetake(user, parentAttemptId);
+  return "error" in result ? fail(result.error) : { ok: true, data: null };
 }

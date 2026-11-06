@@ -40,7 +40,7 @@ async function AllStandards() {
             {row?.source === "card_import" && (
               <p className="text-xs text-foreground/60">From your card{row.document_name ? `: ${row.document_name}` : ""}</p>
             )}
-            {(row?.source === "doctor" || row?.source === "vfda") && <p className="text-xs text-foreground/60">Your office&apos;s version</p>}
+            {(row?.source === "doctor" || row?.source === "doctor_card" || row?.source === "vfda") && <p className="text-xs text-foreground/60">Your office&apos;s version</p>}
           </li>
         ))}
       </ul>

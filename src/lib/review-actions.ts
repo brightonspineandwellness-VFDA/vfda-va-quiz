@@ -2,13 +2,16 @@
 
 // VFDA's review of rules read from the cards (/admin/offices/[id]/rules) and
 // "Send to doctor", which writes the must-ask questions and opens steps 4-5
-// for the doctor.
+// for the doctor. Once the review is finished (and again after a re-import),
+// the office SOP gap report is written for VFDA, after the response.
 // VFDA admins only; writes as the admin (row-level security applies).
 
+import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { checkAnswerValue, type InterviewQuestion } from "@/lib/interview";
 import type { ActionResult } from "@/lib/interview-actions";
 import { loadOfficeSetup } from "@/lib/interview-data";
+import { reportIfDue } from "@/lib/office-reports";
 import { createSessionClient } from "@/lib/supabase/server";
 
 const fail = (error: string) => ({ ok: false, error }) as const;
@@ -18,13 +21,23 @@ async function admin() {
   return user?.role === "vfda_admin" ? user : null;
 }
 
+// The gap report, if this finished the review (never fails the action).
+const reportLater = (officeId: string, by: string) =>
+  after(async () => {
+    try {
+      await reportIfDue(officeId, by);
+    } catch (e) {
+      console.error("Office SOP gap report not written", officeId, e);
+    }
+  });
+
 // Accept or reject one rule read from a card. Accepted card rules are the
 // office's rules; the doctor isn't asked to confirm them.
 export async function reviewRule(ruleId: string, decision: "accept" | "reject"): Promise<ActionResult> {
   const user = await admin();
   if (!user) return fail("VFDA admins only.");
   const supabase = await createSessionClient();
-  const { error } = await supabase
+  const { data: saved, error } = await supabase
     .from("office_rules")
     .update({
       status: decision === "accept" ? "accepted" : "rejected",
@@ -32,8 +45,11 @@ export async function reviewRule(ruleId: string, decision: "accept" | "reject"):
       vfda_reviewed_at: new Date().toISOString(),
     })
     .eq("id", ruleId)
-    .eq("source", "card_import");
-  return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+    .eq("source", "card_import")
+    .select("office_id");
+  if (error) return fail("Couldn't save. Try again.");
+  if (saved?.[0]) reportLater(saved[0].office_id, user.id);
+  return { ok: true, data: null };
 }
 
 // Fix an extracted rule's wording, then accept it.
@@ -53,17 +69,21 @@ export async function editAndAcceptRule(ruleId: string, value: unknown): Promise
   if (!slot) return fail("That rule is gone.");
   const problem = checkAnswerValue(slot as InterviewQuestion, value);
   if (problem) return fail(problem);
-  const { error } = await supabase
+  const { data: saved, error } = await supabase
     .from("office_rules")
     .update({ rule: value, status: "accepted", vfda_reviewed_by: user.id, vfda_reviewed_at: new Date().toISOString() })
-    .eq("id", ruleId);
-  return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+    .eq("id", ruleId)
+    .select("office_id");
+  if (error) return fail("Couldn't save. Try again.");
+  if (saved?.[0]) reportLater(saved[0].office_id, user.id);
+  return { ok: true, data: null };
 }
 
 // Writes the must-ask questions (only rules still missing; never re-asks an
 // answered one), releases them to the doctor, and opens steps 4-5.
 export async function sendToDoctor(officeId: string): Promise<ActionResult> {
-  if (!(await admin())) return fail("VFDA admins only.");
+  const user = await admin();
+  if (!user) return fail("VFDA admins only.");
   const setup = await loadOfficeSetup(officeId);
   if (!setup) return fail("Office not found.");
   if (!setup.state.cardsUploadedAt) return fail("No cards uploaded yet.");
@@ -100,5 +120,6 @@ export async function sendToDoctor(officeId: string): Promise<ActionResult> {
     .eq("id", officeId);
   if (error) return fail("Couldn't save. Try again.");
   await supabase.from("offices").update({ status: "gap_list" }).eq("id", officeId).in("status", ["setup", "rules_in_review"]);
+  reportLater(officeId, user.id);
   return { ok: true, data: null };
 }

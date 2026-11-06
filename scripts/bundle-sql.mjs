@@ -101,6 +101,12 @@ const PHASES = [
     title: "Build versions database changes (rebuild after VAs started, reset day for testing)",
     after: "day-rules.sql",
   },
+  {
+    name: "reports-retakes",
+    starts: "20261106120000",
+    title: "Office rules card, SOP gap reports and day retakes database changes",
+    after: "build-versions.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

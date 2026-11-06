@@ -7,9 +7,12 @@ import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
 import { loadVaTasks } from "@/lib/certifications";
 import { sendPreparingNotice } from "@/lib/reports";
-import { markTodaysCardsDone } from "@/lib/va-actions";
-import { dayName, proofState, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
-import { claimPreparingNotice, loadToday } from "@/lib/va-training";
+import { markTodaysCardsDone, startDayRetake } from "@/lib/va-actions";
+import { dayName, proofState, RESULT_LABELS, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
+import { claimPreparingNotice, loadRetakeTasks, loadToday } from "@/lib/va-training";
+
+// "Retake this day" waits while Claude writes the day's new versions.
+export const maxDuration = 300;
 
 export default function VaPage() {
   return (
@@ -128,12 +131,45 @@ async function Today() {
   );
 }
 
-// Rechecks to do, and Trello cards to update. Neither blocks the next day.
+// Rechecks to do, optional retakes, and Trello cards to update. None of
+// them blocks the next day.
 async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
-  const { sop, drills } = await loadVaTasks(vaId, officeId);
-  if (!sop.length && !drills.length) return null;
+  const [{ sop, drills }, retakes] = await Promise.all([loadVaTasks(vaId, officeId), loadRetakeTasks(vaId, officeId)]);
+  if (!sop.length && !drills.length && !retakes.length) return null;
   return (
     <>
+      {retakes.map((t) =>
+        t.kind === "open" ? (
+          <div key={t.parentId} className={card}>
+            <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Retake (optional)</p>
+            <p className="text-lg font-semibold">
+              {t.day}: {t.title}
+            </p>
+            <p className="text-sm">
+              Every question of the day again, with new details. Your first try stays your official score.
+            </p>
+            <Link href={`/va/drill/${t.id}`} className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+              Continue retake →
+            </Link>
+          </div>
+        ) : (
+          <div key={t.parentId} className={card}>
+            <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Retake available (optional)</p>
+            <p className="text-lg font-semibold">
+              {t.day}: {t.title} · {RESULT_LABELS[t.result]}
+            </p>
+            <p className="text-sm">
+              You can retake this whole day once, with new details. It&apos;s optional and doesn&apos;t block your next
+              day. Your first try stays your official score.
+            </p>
+            <ActionButton
+              action={startDayRetake.bind(null, t.parentId)}
+              label="Retake this day"
+              pendingLabel="Preparing your retake (about a minute)…"
+            />
+          </div>
+        ),
+      )}
       {drills.map((d) => (
         <div key={d.id} className={card}>
           <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Recheck</p>

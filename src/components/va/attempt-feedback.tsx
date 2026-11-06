@@ -57,12 +57,13 @@ export type FeedbackItem = {
   repeatReason: string;
 };
 
-export function FeedbackList({ items }: { items: FeedbackItem[] }) {
+// `first`: what the first answer is called ("on the retake" for a retake).
+export function FeedbackList({ items, first = "first try" }: { items: FeedbackItem[]; first?: string }) {
   return (
     <ul className="flex flex-col gap-2">
       {items.map((i) => (
         <li key={i.key}>
-          <span className="font-medium">{i.code}</span>: {i.firstScore ?? "–"}/{i.max} first try
+          <span className="font-medium">{i.code}</span>: {i.firstScore ?? "–"}/{i.max} {first}
           {i.repeated && `, ${i.repeatScore ?? "–"}/${i.max} on repeat`}
           {i.critical && " · critical error"}
           {i.reason && <span className="block text-foreground/70">{i.reason}</span>}

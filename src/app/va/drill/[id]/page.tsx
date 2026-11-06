@@ -4,13 +4,16 @@ import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { FeedbackList, loadFeedback } from "@/components/va/attempt-feedback";
+import { RetakeCompare } from "@/components/va/retake-compare";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
 import { sendAttemptReport } from "@/lib/reports";
+import { loadRetakeComparison } from "@/lib/retake";
+import { createAdminClient } from "@/lib/supabase/server";
 import { loadDrillScreen, type FinishedDay } from "@/lib/va-training";
 
-// A workflow recheck: same screen as a training day. Grading runs in the
-// answer action; the report goes out after the last item.
+// A workflow recheck, or a day's retake: same screen as a training day.
+// Grading runs in the answer action; the report goes out after the last item.
 export const maxDuration = 300;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -43,14 +46,22 @@ async function Drill({ params }: { params: Promise<{ id: string }> }) {
 
 async function Finished({ result }: { result: FinishedDay }) {
   const items = (await loadFeedback([result.attemptId])).get(result.attemptId) ?? [];
+  // Only this VA's own attempt gets here (loadDrillScreen checked it).
+  const retake = result.drill === "retake" ? await loadRetakeComparison(createAdminClient(), result.attemptId) : null;
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
-      <p className="text-lg font-semibold">Recheck done: {result.dayCode}</p>
-      <p>
-        First try: <span className="font-medium">{result.points}/{result.max}</span>
+      <p className="text-lg font-semibold">
+        {result.drill === "retake" ? "Retake done" : "Recheck done"}: {result.dayCode}
       </p>
+      {retake ? (
+        <RetakeCompare data={retake} />
+      ) : (
+        <p>
+          First try: <span className="font-medium">{result.points}/{result.max}</span>
+        </p>
+      )}
       <div className="text-sm">
-        <FeedbackList items={items} />
+        <FeedbackList items={items} first={result.drill === "retake" ? "on the retake" : "first try"} />
       </div>
       <Link href="/va" className="self-start rounded-lg border border-foreground/25 px-4 py-2 font-medium">
         Back to Today

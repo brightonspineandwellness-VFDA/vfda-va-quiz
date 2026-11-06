@@ -816,3 +816,78 @@ ${items
   });
   return new Map(out.items.map((v) => [v.key, v.stem.trim()]));
 }
+
+// ---------------------------------------------------------------------------
+// Retake variants: a whole day again, every item with new details. Situational
+// items also get the repeat shown right after a missed answer.
+// ---------------------------------------------------------------------------
+
+export type RetakeItem = {
+  key: string;
+  type: "mc" | "situational" | "describe";
+  stem: string;
+  options: string[] | null;
+  answer: string | null;
+  correct_response: unknown;
+  critical_fail: string | null;
+  // Versions the VA has seen (the item and its repeat): the new ones must differ.
+  seen: string[];
+  wantsRepeat: boolean;
+};
+export type RetakeVariant = { stem: string; repeat_stem: string | null };
+
+export async function writeRetakeVariants(items: RetakeItem[], rules: { key: string; value: string }[]) {
+  if (mock()) {
+    return new Map<string, RetakeVariant>(
+      items.map((i) => [i.key, { stem: `(Retake) ${i.stem}`, repeat_stem: i.wantsRepeat ? `(Retake repeat) ${i.stem}` : null }]),
+    );
+  }
+  const schema = z.object({ items: z.array(z.object({ key: z.string(), stem: z.string(), repeat_stem: z.string().nullable() })) });
+  const text = `A VA is retaking a whole training day. For each item below, write a new stem: the same skill and the same
+correct answer, new details (different fake patient, time and situation), different from every version under "Seen".
+Multiple choice items keep their options exactly as listed, so write the stem so the same option is still the right
+answer. For items marked "Repeat: yes", also write repeat_stem: one more version with other new details, shown right
+after a missed answer; otherwise repeat_stem is null. Keep each item's key.
+
+<office_rules>
+${rulesBlock(rules)}
+</office_rules>
+
+<items>
+${items
+  .map((i) =>
+    [
+      `## ${i.key} (${i.type === "mc" ? "multiple choice" : i.type})`,
+      `Stem: ${i.stem}`,
+      i.options ? `Options: ${i.options.map((o, n) => `${LETTERS[n] ?? n + 1}) ${o}`).join(" | ")}\nRight answer: ${i.answer ?? ""}` : "",
+      i.type !== "mc" ? `Correct response: ${JSON.stringify(i.correct_response)}` : "",
+      i.critical_fail ? `Critical fail: ${i.critical_fail}` : "",
+      `Seen:\n${i.seen.map((s) => `- ${s}`).join("\n")}`,
+      `Repeat: ${i.wantsRepeat ? "yes" : "no"}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  )
+  .join("\n\n")}
+</items>`;
+  const squash = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+  const out = await ask(schema, text, (o) => {
+    for (const i of items) {
+      const v = o.items.find((x) => x.key === i.key);
+      const stem = v?.stem.trim() ?? "";
+      if (!stem) return `missing ${i.key}`;
+      if (i.seen.some((s) => squash(s) === squash(stem))) return `${i.key}: same as a version the VA has seen`;
+      if (hasPlaceholder(stem)) return `${i.key}: placeholder left`;
+      if (i.wantsRepeat) {
+        const repeat = v?.repeat_stem?.trim() ?? "";
+        if (!repeat) return `${i.key}: repeat_stem missing`;
+        if (squash(repeat) === squash(stem) || i.seen.some((s) => squash(s) === squash(repeat))) return `${i.key}: repeat_stem not new`;
+        if (hasPlaceholder(repeat)) return `${i.key}: placeholder left in repeat_stem`;
+      }
+    }
+    return null;
+  });
+  return new Map<string, RetakeVariant>(
+    out.items.map((v) => [v.key, { stem: v.stem.trim(), repeat_stem: items.find((i) => i.key === v.key)?.wantsRepeat ? (v.repeat_stem?.trim() ?? null) : null }]),
+  );
+}

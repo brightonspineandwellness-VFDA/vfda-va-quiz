@@ -98,6 +98,7 @@ function Cell({ cell }: { cell: GridCell }) {
       {cell.status !== "certified" && !cell.submittedAt && <span className="text-foreground/60">card not updated</span>}
       {cell.recheckDate && <span className="text-foreground/60">recheck {showDate(cell.recheckDate)}</span>}
       {cell.openDrill && <span className="text-foreground/60">{cell.openDrill} open</span>}
+      {cell.retakeNote && <span className="text-foreground/60">{cell.retakeNote}</span>}
     </div>
   );
 }

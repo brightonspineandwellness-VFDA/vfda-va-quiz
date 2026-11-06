@@ -3,6 +3,7 @@
 // and a Slack post. An At risk day reads as an alert. src/lib/reports.ts
 // loads the data and sends it.
 
+import { retakeLineText, type RetakeComparison } from "@/lib/retake";
 import { RESULT_LABELS, type ResultLabel, type Trend } from "@/lib/va-flow";
 
 export type ReportItem = {
@@ -38,6 +39,8 @@ export type AttemptReport = {
   pastes: number;
   // Days from the VA's start date to this attempt (reports only).
   sinceStart?: string;
+  // A day's retake: its first try (the official score) question by question.
+  retake?: RetakeComparison;
   items: ReportItem[];
   workflows: WorkflowStatus[];
 };
@@ -77,16 +80,29 @@ export function reportSections(r: AttemptReport) {
   const percent = r.maxPoints ? Math.round((r.points * 100) / r.maxPoints) : 0;
   // At risk (or any critical error) is an alert: VFDA coaches, the VA keeps going.
   const alert = r.result === "at_risk" ? "ALERT: " : "";
+  const rt = r.retake;
+  const firstLabel = rt?.first.result ? RESULT_LABELS[rt.first.result] : "–";
 
   return {
     alert: !!alert,
-    subject: `${alert}${r.vaName} – ${r.dayCode} – ${RESULT_LABELS[r.result]} – ${r.officeName}`,
+    retake: !!rt,
+    subject: rt
+      ? `${alert}RETAKE: ${r.vaName} – ${r.dayCode} – retake ${RESULT_LABELS[r.result]} (first try ${firstLabel}) – ${r.officeName}`
+      : `${alert}${r.vaName} – ${r.dayCode} – ${RESULT_LABELS[r.result]} – ${r.officeName}`,
     summary: [
       ["VA", r.vaName],
       ["Office", r.officeName],
-      ["Day", `${r.dayCode}: ${r.dayTitle}`],
-      ["Result", RESULT_LABELS[r.result]],
-      ["First-try score", `${r.points}/${r.maxPoints} (${percent}%)`],
+      ["Day", `${r.dayCode}: ${r.dayTitle}${rt ? " (RETAKE)" : ""}`],
+      ...((rt
+        ? [
+            ["Retake result", RESULT_LABELS[r.result]],
+            ["Retake score", `${r.points}/${r.maxPoints} (${percent}%)`],
+            ["First try (official)", `${rt.first.points}/${rt.first.max} (${rt.first.percent}%) · ${firstLabel}`],
+          ]
+        : [
+            ["Result", RESULT_LABELS[r.result]],
+            ["First-try score", `${r.points}/${r.maxPoints} (${percent}%)`],
+          ]) as [string, string][]),
       ["Trend", trendText(r.trend)],
       ["Time spent", minutesText(r.timeSpent)],
       ...(r.sinceStart ? [["Since start", r.sinceStart] as [string, string]] : []),
@@ -104,6 +120,11 @@ export function reportSections(r: AttemptReport) {
     })),
     workflows: r.workflows.map((w) => `${w.code} ${w.name}: ${w.status}${w.why ? ` (${w.why})` : ""}`),
     flags,
+    // Every question, first try next to retake; the ones missed the first time are highlighted.
+    retakeLines: (rt?.lines ?? []).map((l) => ({ text: retakeLineText(l), missed: l.missedFirst })),
+    retakeNote: rt
+      ? `${rt.fixed} of ${rt.missedFirst} question(s) missed the first time got full points on the retake. The first try stays the official score; certification uses first-try scores.`
+      : "",
   };
 }
 
@@ -115,8 +136,14 @@ export function reportText(r: AttemptReport, link: string): string {
   const s = reportSections(r);
   const list = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : NONE);
   return [
+    s.retake ? "RETAKE" : "",
     s.summary.map(([k, v]) => `${k}: ${v}`).join("\n"),
     s.alert ? ALERT_LINE : "",
+    s.retake
+      ? `First try vs retake, every question (* = missed the first time):\n${s.retakeLines
+          .map((l) => `${l.missed ? "* " : "- "}${l.text}`)
+          .join("\n")}\n${s.retakeNote}`
+      : "",
     `Items repeated (repeat scores):\n${list(s.repeated)}`,
     `Critical errors (VA's exact words):\n${list(s.critical)}`,
     `Weakest items:\n${
@@ -142,10 +169,18 @@ export function reportHtml(r: AttemptReport, link: string): string {
   const list = (items: string[]) =>
     items.length ? `<ul style="margin:0;padding-left:20px">${items.map((i) => `<li>${e(i)}</li>`).join("")}</ul>` : `<p style="margin:0">${NONE}</p>`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">
+${s.retake ? `<p style="margin:0 0 12px;padding:6px 12px;background:#e8eefc;color:#1e3a8a;font-weight:bold;letter-spacing:1px">RETAKE</p>` : ""}
 ${s.alert ? `<p style="margin:0 0 12px;padding:8px 12px;background:#fde8e8;color:#9b1c1c;font-weight:bold">${e(ALERT_LINE)}</p>` : ""}
 <table style="border-collapse:collapse">${s.summary
     .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#555">${e(k)}</td><td style="padding:2px 0"><b>${e(v)}</b></td></tr>`)
     .join("")}</table>
+${
+  s.retake
+    ? `${h("First try vs retake, every question")}<p style="margin:0 0 4px;color:#555">Highlighted: missed the first time.</p><ul style="margin:0;padding-left:20px">${s.retakeLines
+        .map((l) => (l.missed ? `<li style="background:#fff3cd"><b>${e(l.text)}</b></li>` : `<li>${e(l.text)}</li>`))
+        .join("")}</ul><p style="margin:6px 0 0">${e(s.retakeNote)}</p>`
+    : ""
+}
 ${h("Items repeated (repeat scores)")}${list(s.repeated)}
 ${h("Critical errors (VA's exact words)")}${list(s.critical)}
 ${h("Weakest items")}${
@@ -171,7 +206,14 @@ export function reportSlack(r: AttemptReport, link: string): { text: string } {
   const line = (label: string, items: string[]) => (items.length ? `*${label}:* ${items.map(slackEscape).join(" · ")}` : "");
   const lines = [
     `${s.alert ? ":rotating_light: " : ""}*${slackEscape(s.subject)}*`,
-    `${RESULT_LABELS[r.result]} · first try ${r.points}/${r.maxPoints} · trend: ${slackEscape(trendText(r.trend))} · ${minutesText(r.timeSpent)}`,
+    r.retake
+      ? `RETAKE ${r.points}/${r.maxPoints} (${RESULT_LABELS[r.result]}) · first try ${r.retake.first.points}/${r.retake.first.max} (official) · ${minutesText(r.timeSpent)}`
+      : `${RESULT_LABELS[r.result]} · first try ${r.points}/${r.maxPoints} · trend: ${slackEscape(trendText(r.trend))} · ${minutesText(r.timeSpent)}`,
+    r.retake
+      ? `*First try → retake* (bold = missed the first time): ${s.retakeLines
+          .map((l) => (l.missed ? `*${slackEscape(l.text)}*` : slackEscape(l.text)))
+          .join(" · ")}`
+      : "",
     line("Repeated", s.repeated),
     line("Critical (VA's words)", s.critical),
     line(

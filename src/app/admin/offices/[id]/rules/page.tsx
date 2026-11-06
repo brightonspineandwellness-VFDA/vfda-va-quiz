@@ -59,6 +59,8 @@ async function AdminRules({ params }: { params: Promise<{ id: string }> }) {
   const unmapped = documents.filter((d) => d.imported_at && !d.skip && !(d.schedule_days ?? []).length).length;
 
   const cardRows = rules.filter((r) => r.source === "card_import");
+  // The doctor's own answers (VA Office Rules card): accepted, not reviewed.
+  const officeRuleRows = rules.filter((r) => r.source === "doctor_card" && r.status === "accepted");
   const toReview = cardRows.filter((r) => r.status === "proposed").length;
   const slots = interview.questions.filter((q) => cardRows.some((r) => r.rule_slot_key === q.key));
   const standardFor = (key: string) =>
@@ -139,6 +141,26 @@ async function AdminRules({ params }: { params: Promise<{ id: string }> }) {
             officeId={officeId}
           />
         ))}
+        {officeRuleRows.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border border-foreground/15 p-4">
+            <p className="font-medium">From the doctor&apos;s VA Office Rules card</p>
+            <p className="text-sm text-foreground/70">
+              The doctor&apos;s own answers (&ldquo;VFDA default&rdquo; is VFDA&apos;s suggestion, taken as theirs). Saved as
+              accepted; no review needed, and the doctor isn&apos;t asked these again.
+            </p>
+            <ul className="flex flex-col gap-2 text-sm">
+              {officeRuleRows.map((row) => {
+                const slot = interview.questions.find((q) => q.key === row.rule_slot_key);
+                return (
+                  <li key={row.id}>
+                    <span className="font-mono text-xs text-foreground/60">{row.rule_slot_key}</span>{" "}
+                    {slot ? <RuleValue slot={slot} value={row.rule} /> : String(row.rule)}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </section>
 
       <section className="flex flex-col gap-3 border-t border-foreground/10 pt-4">
@@ -149,7 +171,10 @@ async function AdminRules({ params }: { params: Promise<{ id: string }> }) {
         </p>
         {state.sentToDoctorAt && (
           <p className="text-sm text-foreground/70">
-            Sent on {new Date(state.sentToDoctorAt).toLocaleDateString("en-US", { dateStyle: "medium" })}.
+            Sent on {new Date(state.sentToDoctorAt).toLocaleDateString("en-US", { dateStyle: "medium" })}.{" "}
+            <Link href={`/admin/offices/${officeId}/report`} className="underline">
+              SOP gap report (VFDA only) →
+            </Link>
           </p>
         )}
         {sendNeeded ? (

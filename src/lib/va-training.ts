@@ -3,13 +3,15 @@ import "server-only";
 // VA training on the server: loads the VA's days, opens the next one once the
 // day before it was submitted, its cards are marked done and VFDA approved it
 // for the office, serves scenarios one at a time, grades answers and labels
-// the day. Quizzes never block. Uses the service role, so every function here
+// the day, and prepares a day's one optional retake. Quizzes never block.
+// Uses the service role, so every function here
 // checks the VA itself and returns only what the VA may see: never answer,
 // correct_response, critical_fail or options_rule.
 
-import { CONFIDENCE_VALUE, gradeSituational } from "@/lib/ai";
+import { aiErrorMessage, CONFIDENCE_VALUE, gradeSituational } from "@/lib/ai";
 import type { CurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
+import { writeRetakeVariants } from "@/lib/scenario-ai";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   addTrainingDays,
@@ -189,12 +191,14 @@ export async function claimPreparingNotice(user: CurrentUser, day: string): Prom
 // The scenario screen
 // ---------------------------------------------------------------------------
 
+type DrillKind = "retrain" | "recheck" | "retake";
+
 type DayContext = {
   db: Db;
   user: CurrentUser & { officeId: string };
   current: DayView;
-  // A workflow recheck instead of a training day.
-  drill: { id: string; kind: "retrain" | "recheck"; workflow: string } | null;
+  // A workflow recheck, or a day's retake, instead of a training day.
+  drill: { id: string; kind: DrillKind; workflow: string } | null;
   attempt: { id: string; started_at: string; submitted_at: string | null };
   scenarios: DisplayScenario[];
   items: (ItemProgress & {
@@ -258,7 +262,8 @@ async function openDay(user: CurrentUser): Promise<DayContext | null> {
   };
 }
 
-// A retrain or recheck of one workflow: its items were set when it was assigned.
+// A retrain or recheck of one workflow, or a day's retake: its items were set
+// when it was assigned (or prepared).
 async function openDrill(user: CurrentUser, attemptId: string): Promise<DayContext | null> {
   if (!user.officeId) return null;
   const db = createAdminClient();
@@ -290,14 +295,15 @@ async function openDrill(user: CurrentUser, attemptId: string): Promise<DayConte
     : [];
   const byId = new Map(scenarios.map((s) => [s.id, s]));
   const ordered = items.map((i) => byId.get(i.office_scenario_id)).filter((s): s is DisplayScenario => !!s);
-  const kind = attempt.kind as "retrain" | "recheck";
+  const kind = attempt.kind as DrillKind;
   const workflow = ordered[0]?.workflow ?? "";
+  const dayRow = must(day) as DayRow;
   return {
     db,
     user: { ...user, officeId: user.officeId },
     current: {
       index: 0,
-      day: { ...(must(day) as DayRow), title: workflow },
+      day: { ...dayRow, title: kind === "retake" ? dayRow.title : workflow },
       unlock: null,
       status: "open",
       version: attempt.version as DayView["version"],
@@ -308,6 +314,12 @@ async function openDrill(user: CurrentUser, attemptId: string): Promise<DayConte
     items,
   };
 }
+
+const DRILL_LABELS: Record<DrillKind, (day: string) => string> = {
+  retrain: () => "Retrain",
+  recheck: () => "Recheck",
+  retake: (day) => `Retake ${day}`,
+};
 
 function toServed(
   ctx: DayContext,
@@ -323,7 +335,7 @@ function toServed(
     phase,
     number: ctx.scenarios.findIndex((s) => s.id === parent.id) + 1,
     total: ctx.scenarios.length,
-    dayCode: ctx.drill ? (ctx.drill.kind === "retrain" ? "Retrain" : "Recheck") : ctx.current.day.code,
+    dayCode: ctx.drill ? DRILL_LABELS[ctx.drill.kind](ctx.current.day.code) : ctx.current.day.code,
     dayTitle: ctx.current.day.title,
     workflow: shown.workflow,
     partTitle: shown.part_title,
@@ -446,7 +458,7 @@ export async function officeRulesFor(db: Db, officeId: string, workflow: string)
     must(
       await db
         .from("office_rules")
-        .select("rule_slot_key, rule, source_document_id")
+        .select("rule_slot_key, rule, source_document_id, source")
         .eq("office_id", officeId)
         .eq("status", "accepted")
         .in(
@@ -454,8 +466,11 @@ export async function officeRulesFor(db: Db, officeId: string, workflow: string)
           slots.map((s) => s.key),
         ),
     ) ?? [];
-  // A direct answer (doctor or VFDA) wins over a card's version.
-  const sorted = [...rows].sort((a, b) => Number(!!a.source_document_id) - Number(!!b.source_document_id));
+  // A direct answer (doctor or VFDA) wins over the doctor's VA Office Rules
+  // card, and that over another card's version.
+  const rank = (r: { source_document_id: string | null; source: string }) =>
+    !r.source_document_id ? 0 : r.source === "doctor_card" ? 1 : 2;
+  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
   const seen = new Set<string>();
   return sorted
     .filter((r) => !seen.has(r.rule_slot_key) && seen.add(r.rule_slot_key))
@@ -556,6 +571,7 @@ export async function submitAnswer(
   });
 
   // Below 2/2 on the first try: the repeat variant comes right away (situational only).
+  // A retake item's repeat was written with it (a drill variant too).
   let repeat: DisplayScenario | null = null;
   if (phase === "first" && grade && grade.score < 2 && key.type === "situational") {
     const { data } = await ctx.db
@@ -563,7 +579,7 @@ export async function submitAnswer(
       .select(DISPLAY_COLUMNS)
       .eq("parent_scenario_id", scenarioId)
       .eq("is_repeat_variant", true)
-      .eq("recheck", false)
+      .eq("recheck", ctx.drill?.kind === "retake")
       .eq("test_status", "live")
       .maybeSingle();
     repeat = data as DisplayScenario | null;
@@ -618,7 +634,7 @@ export async function submitAnswer(
 
 export type FinishedDay = {
   attemptId: string;
-  drill: "retrain" | "recheck" | null;
+  drill: DrillKind | null;
   // True only for the request that worked the result out (it sends the report).
   fresh: boolean;
   dayCode: string;
@@ -633,7 +649,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
   const base = {
     attemptId: attempt.id,
     drill: ctx.drill?.kind ?? null,
-    dayCode: ctx.drill ? current.day.title : current.day.code,
+    dayCode: ctx.drill && ctx.drill.kind !== "retake" ? current.day.title : current.day.code,
   };
 
   // Claim the finish, so it is worked out once.
@@ -755,6 +771,229 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
 
   await recalculateCertifications(ctx.user.id);
   return { ...base, fresh: true, result: outcome.result, points: outcome.points, max: outcome.max };
+}
+
+// ---------------------------------------------------------------------------
+// One optional retake of a whole day (Needs coaching or At risk). Never
+// blocks the next day; the first try stays the official score.
+// ---------------------------------------------------------------------------
+
+const RETAKE_LABELS: ResultLabel[] = ["needs_coaching", "at_risk"];
+// A retake still without items this long after it was claimed: its
+// preparation died, and it may be started again.
+const STALE_RETAKE_MS = 10 * 60 * 1000;
+
+export type RetakeTask =
+  | { kind: "available"; parentId: string; day: string; title: string; result: ResultLabel }
+  | { kind: "open"; id: string; parentId: string; day: string; title: string };
+
+type RetakeRow = { id: string; parent_attempt_id: string; created_at: string; submitted_at: string | null };
+
+// Retakes with their items written (the others are still being prepared, or died).
+async function preparedRetakes(db: Db, ids: string[]) {
+  if (!ids.length) return new Set<string>();
+  const rows = (must(await db.from("attempt_items").select("attempt_id").in("attempt_id", ids)) ?? []) as { attempt_id: string }[];
+  return new Set(rows.map((r) => r.attempt_id));
+}
+
+// The VA's retakes: days they may still retake, and retakes started but not finished.
+export async function loadRetakeTasks(vaId: string, officeId: string): Promise<RetakeTask[]> {
+  const db = createAdminClient();
+  const [daysRes, retakesRes, titlesRes] = await Promise.all([
+    db
+      .from("attempts")
+      .select("id, schedule_day, result, submitted_at")
+      .eq("va_id", vaId)
+      .eq("office_id", officeId)
+      .eq("kind", "day")
+      .is("archived_at", null)
+      .not("submitted_at", "is", null)
+      .in("result", RETAKE_LABELS)
+      .order("submitted_at"),
+    db
+      .from("attempts")
+      .select("id, parent_attempt_id, created_at, submitted_at")
+      .eq("va_id", vaId)
+      .eq("office_id", officeId)
+      .eq("kind", "retake")
+      .is("archived_at", null),
+    db.from("schedule_days").select("code, title"),
+  ]);
+  const titles = new Map(((must(titlesRes) ?? []) as { code: string; title: string }[]).map((d) => [d.code, d.title]));
+  const retakes = (must(retakesRes) ?? []) as RetakeRow[];
+  const prepared = await preparedRetakes(db, retakes.map((r) => r.id));
+  const tasks: RetakeTask[] = [];
+  for (const d of (must(daysRes) ?? []) as { id: string; schedule_day: string; result: ResultLabel }[]) {
+    const retake = retakes.find((r) => r.parent_attempt_id === d.id);
+    const title = titles.get(d.schedule_day) ?? "";
+    if (!retake || !prepared.has(retake.id)) {
+      tasks.push({ kind: "available", parentId: d.id, day: d.schedule_day, title, result: d.result });
+    } else if (!retake.submitted_at) {
+      tasks.push({ kind: "open", id: retake.id, parentId: d.id, day: d.schedule_day, title });
+    }
+  }
+  return tasks;
+}
+
+type ScenarioCopy = Record<string, unknown> & {
+  id: string;
+  code: string;
+  type: "mc" | "situational" | "describe";
+  stem: string;
+  options: unknown;
+  answer: string | null;
+  correct_response: unknown;
+  critical_fail: string | null;
+  workflow: string;
+};
+
+// The office's rules for every workflow in the day, for the writer.
+async function officeRulesForAll(db: Db, officeId: string, workflows: string[]) {
+  const seen = new Map<string, string>();
+  for (const w of workflows) for (const r of await officeRulesFor(db, officeId, w)) if (!seen.has(r.key)) seen.set(r.key, r.value);
+  return [...seen].map(([key, value]) => ({ key, value }));
+}
+
+// "Retake this day": writes every item of the day again as a new version
+// (same correct answer, new details; situational items with their repeat)
+// and opens the retake. Takes a minute while Claude writes.
+export async function startRetake(user: CurrentUser, parentId: string): Promise<{ id: string } | { error: string }> {
+  if (!user.officeId) return { error: "Your account isn't linked to an office yet." };
+  const officeId = user.officeId;
+  const db = createAdminClient();
+  const parent = must(
+    await db
+      .from("attempts")
+      .select("id, schedule_day, kind, submitted_at, result, archived_at, build_version")
+      .eq("id", parentId)
+      .eq("va_id", user.id)
+      .eq("office_id", officeId)
+      .maybeSingle(),
+  ) as {
+    id: string;
+    schedule_day: string;
+    kind: string;
+    submitted_at: string | null;
+    result: string | null;
+    archived_at: string | null;
+    build_version: number | null;
+  } | null;
+  if (!parent || parent.kind !== "day" || !parent.submitted_at || parent.archived_at) return { error: "There's no finished day to retake here." };
+  if (!RETAKE_LABELS.includes(parent.result as ResultLabel)) return { error: "Only a day labeled Needs coaching or At risk can be retaken." };
+
+  // Once per day. A retake whose preparation died is started again.
+  const existing = must(
+    await db
+      .from("attempts")
+      .select("id, parent_attempt_id, created_at, submitted_at")
+      .eq("parent_attempt_id", parent.id)
+      .eq("kind", "retake")
+      .is("archived_at", null)
+      .maybeSingle(),
+  ) as RetakeRow | null;
+  if (existing) {
+    if ((await preparedRetakes(db, [existing.id])).has(existing.id)) return existing.submitted_at ? { error: "You've already retaken this day." } : { id: existing.id };
+    if (Date.now() - Date.parse(existing.created_at) < STALE_RETAKE_MS) return { error: "Your retake is being prepared. Try again in a minute." };
+    must(await db.from("attempts").delete().eq("id", existing.id));
+  }
+  const { data: claimed, error: claimError } = await db
+    .from("attempts")
+    .insert({
+      va_id: user.id,
+      office_id: officeId,
+      schedule_day: parent.schedule_day,
+      version: "B",
+      kind: "retake",
+      is_retake: true,
+      parent_attempt_id: parent.id,
+      build_version: parent.build_version,
+    })
+    .select("id")
+    .single();
+  if (claimError?.code === "23505") return { error: "Your retake is being prepared. Try again in a minute." };
+  if (claimError || !claimed) throw new Error(claimError?.message ?? "The retake couldn't be started.");
+  const retakeId = (claimed as { id: string }).id;
+  const written: string[] = [];
+
+  try {
+    const items = (must(
+      await db.from("attempt_items").select("office_scenario_id, position").eq("attempt_id", parent.id).order("position"),
+    ) ?? []) as { office_scenario_id: string; position: number }[];
+    if (!items.length) throw new Error("the day has no items");
+    const ids = items.map((i) => i.office_scenario_id);
+    const [originalsRes, repeatsRes] = await Promise.all([
+      db.from("office_scenarios").select("*").in("id", ids).eq("office_id", officeId),
+      db
+        .from("office_scenarios")
+        .select("parent_scenario_id, stem")
+        .in("parent_scenario_id", ids)
+        .eq("is_repeat_variant", true)
+        .eq("recheck", false),
+    ]);
+    const byId = new Map(((must(originalsRes) ?? []) as ScenarioCopy[]).map((o) => [o.id, o]));
+    const repeats = (must(repeatsRes) ?? []) as { parent_scenario_id: string; stem: string }[];
+    const originals = ids.map((id) => byId.get(id)).filter((o): o is ScenarioCopy => !!o);
+    const key = (n: number) => `R${n + 1}`;
+
+    const variants = await writeRetakeVariants(
+      originals.map((o, n) => ({
+        key: key(n),
+        type: o.type,
+        stem: o.stem,
+        options: Array.isArray(o.options) ? (o.options as unknown[]).map(String) : null,
+        answer: o.answer,
+        correct_response: o.correct_response,
+        critical_fail: o.critical_fail,
+        seen: [o.stem, ...repeats.filter((r) => r.parent_scenario_id === o.id).map((r) => r.stem)],
+        wantsRepeat: o.type === "situational",
+      })),
+      await officeRulesForAll(db, officeId, [...new Set(originals.map((o) => o.workflow))]),
+    );
+
+    // Drill variants (recheck = true) of the day's items: never served as a day's repeat.
+    const copy = (o: ScenarioCopy, fields: Record<string, unknown>) => {
+      const { id: _id, created_at: _c, updated_at: _u, ...rest } = o;
+      void _id;
+      void _c;
+      void _u;
+      return {
+        ...rest,
+        id: crypto.randomUUID(),
+        is_repeat_variant: true,
+        recheck: true,
+        test_status: "live",
+        edited_by_vfda: false,
+        review_error: null,
+        ...fields,
+      };
+    };
+    const retakeRows = originals.map((o, n) => {
+      const v = variants.get(key(n));
+      if (!v?.stem) throw new Error(`no new version of ${o.code}`);
+      return copy(o, { stem: v.stem, parent_scenario_id: o.id });
+    });
+    const repeatRows = originals.flatMap((o, n) => {
+      const stem = variants.get(key(n))?.repeat_stem;
+      return stem ? [copy(o, { stem, options: null, answer: null, parent_scenario_id: retakeRows[n].id })] : [];
+    });
+    must(await db.from("office_scenarios").insert(retakeRows));
+    written.push(...retakeRows.map((r) => r.id));
+    if (repeatRows.length) must(await db.from("office_scenarios").insert(repeatRows));
+    must(
+      await db
+        .from("attempt_items")
+        .insert(retakeRows.map((r, position) => ({ attempt_id: retakeId, office_scenario_id: r.id, position }))),
+    );
+    // Time runs from now, not from when Claude started writing.
+    must(await db.from("attempts").update({ started_at: new Date().toISOString() }).eq("id", retakeId));
+    return { id: retakeId };
+  } catch (e) {
+    console.error("Retake not prepared", parent.id, e);
+    await db.from("attempts").delete().eq("id", retakeId);
+    // Their repeats go with them (on delete cascade).
+    if (written.length) await db.from("office_scenarios").delete().in("id", written);
+    return { error: `Couldn't prepare your retake: ${aiErrorMessage(e).slice(0, 160)}. Try again.` };
+  }
 }
 
 // ---------------------------------------------------------------------------

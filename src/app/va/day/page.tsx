@@ -7,7 +7,7 @@ import { FeedbackList, loadFeedback } from "@/components/va/attempt-feedback";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
 import { sendAttemptReport } from "@/lib/reports";
-import { percentOf } from "@/lib/va-flow";
+import { percentOf, RESULT_LABELS } from "@/lib/va-flow";
 import { loadDayScreen, type FinishedDay } from "@/lib/va-training";
 
 // Grading a situational answer (and its retry) runs in the answer action;
@@ -53,6 +53,12 @@ async function Finished({ result }: { result: FinishedDay }) {
       <div className="text-sm">
         <FeedbackList items={items} />
       </div>
+      {result.result && result.result !== "strong" && (
+        <p className="text-sm">
+          {RESULT_LABELS[result.result]}: you can retake this whole day once, with new details, from Today. It&apos;s
+          optional and doesn&apos;t block your next day.
+        </p>
+      )}
       <p className="text-sm text-foreground/70">Read the feedback, then go on to your next day.</p>
       <div className="flex flex-wrap gap-3">
         <Link href="/va" className="rounded-lg bg-foreground px-4 py-2 font-medium text-background">

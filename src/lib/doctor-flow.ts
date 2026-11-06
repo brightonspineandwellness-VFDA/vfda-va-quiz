@@ -6,7 +6,8 @@
 //   2 Upload your cards     card PDFs; "Done uploading" reads them
 //   3 Waiting for VFDA      reading, card mapping, VFDA review and "Send to doctor"
 //   4 Questions for you     only the 12 must-ask rules the cards don't cover,
-//                           with the VFDA suggestion to confirm or change
+//                           with the VFDA suggestion to confirm or change;
+//                           skipped (done) when no must-ask rule is blank
 //   5 VFDA standards        one checkbox: anything the cards don't cover uses them
 // Steps 4-5 stay locked until VFDA sends the reviewed rules. The cards are the
 // source of the office's scenarios; every other rule slot is no longer asked.
@@ -27,7 +28,8 @@ export type RuleRow = {
   rule_slot_key: string;
   rule: AnswerValue;
   attachments: Attachment[];
-  source: "card_import" | "doctor" | "vfda_default" | "vfda" | "auto";
+  // doctor_card: the doctor's own answer, read from their VA Office Rules card.
+  source: "card_import" | "doctor_card" | "doctor" | "vfda_default" | "vfda" | "auto";
   source_document_id: string | null;
   source_quote: string | null;
   status: "proposed" | "accepted" | "needs_doctor" | "rejected";
@@ -76,9 +78,14 @@ export type GapRow = {
   released_at: string | null;
 };
 
+// VFDA's form card: each must-ask rule's question with the doctor's "Our
+// answer:" (or "VFDA default"). Its answers are the doctor's own rules.
+export const OFFICE_RULES_CARD = "VA Office Rules";
+
 // The Trello cards a doctor uploads, in the order of the card groups they feed.
 export const CARD_CHECKLIST = [
   { name: "VA Onboarding", group: "VA Onboarding & Basics", note: "" },
+  { name: OFFICE_RULES_CARD, group: null, note: "VFDA's form: your answer to each office rule" },
   { name: "Open & Close", group: "Open & Close Daily List", note: "" },
   { name: "Patient Journey", group: "Patient Journey", note: "" },
   { name: "New Patient Checklist", group: "New Patient Checklist", note: "" },
@@ -106,7 +113,8 @@ export type StandardItem = { slot: InterviewQuestion; row: RuleRow | null };
 
 export type StepKey = "profile" | "upload" | "review" | "questions" | "standards";
 export type StepState = "done" | "todo" | "waiting" | "locked";
-export type Step = { key: StepKey; label: string; href: string; state: StepState; detail: string };
+// skipped: done without anything to do (no must-ask rule left blank).
+export type Step = { key: StepKey; label: string; href: string; state: StepState; detail: string; skipped?: boolean };
 
 export type FlowInput = {
   slots: InterviewQuestion[];
@@ -137,8 +145,20 @@ export function directAnswer(slot: InterviewQuestion, rows: RuleRow[]) {
   return direct && isAnswered(slot, asAnswer(direct)) ? direct : null;
 }
 
+// The doctor's answer from their VA Office Rules card (the latest card wins).
+export function doctorCardAnswer(slot: InterviewQuestion, rows: RuleRow[]) {
+  const latest = rows
+    .filter((r) => r.source === "doctor_card" && r.status === "accepted" && isAnswered(slot, asAnswer(r)))
+    .sort((a, b) => Date.parse(b.doctor_approved_at ?? "") - Date.parse(a.doctor_approved_at ?? "") || 0)[0];
+  return latest ?? null;
+}
+
+// The doctor's (or VFDA's) own answer: typed in, else from the VA Office Rules
+// card. Cards are never read again for these.
+export const ownAnswer = (slot: InterviewQuestion, rows: RuleRow[]) => directAnswer(slot, rows) ?? doctorCardAnswer(slot, rows);
+
 export function slotFinding(slot: InterviewQuestion, rows: RuleRow[]): SlotFinding {
-  const answered = directAnswer(slot, rows);
+  const answered = ownAnswer(slot, rows);
   if (answered) return { kind: "answered", row: answered };
   const cards = rows.filter(isReviewedCard);
   const versions = cards.filter((c, i) => cards.findIndex((d) => sameValue(d.rule, c.rule)) === i);
@@ -225,9 +245,19 @@ export function buildDoctorFlow(input: FlowInput) {
     }))
     .sort((a, b) => Number(a.gap.answered_at !== null) - Number(b.gap.answered_at !== null));
   const openQuestions = questions.filter((q) => q.gap.answered_at === null).length;
+  // No must-ask rule blank (answered by the doctor, or found on cards VFDA
+  // reviewed) and nothing was ever asked: step 4 is done and skipped. Answers
+  // from the VA Office Rules card need no VFDA review, so this can happen
+  // before VFDA sends the reviewed rules.
+  const blankRules = askedSlots(input).filter((s) => {
+    const kind = slotFinding(s, rowsFor(s.key)).kind;
+    return kind !== "answered" && kind !== "found";
+  }).length;
+  const questionsSkipped = blankRules === 0 && questions.length === 0;
 
   // Step 5: the VFDA standards, accepted all at once.
-  const sourceRank = (r: RuleRow) => (r.source === "doctor" || r.source === "vfda" ? 2 : r.source === "card_import" ? 1 : 0);
+  const sourceRank = (r: RuleRow) =>
+    r.source === "doctor" || r.source === "vfda" ? 3 : r.source === "doctor_card" ? 2 : r.source === "card_import" ? 1 : 0;
   const standards: StandardItem[] = input.slots
     .filter((s) => s.tier === "default" && slotApplies(s, input))
     .map((slot) => {
@@ -276,10 +306,19 @@ export function buildDoctorFlow(input: FlowInput) {
               ? "Reviewing new cards"
               : "VFDA is reviewing",
     },
-    locked(
-      { key: "questions", label: "Questions for you", href: "/doctor/setup/questions" },
-      openQuestions === 0 ? { state: "done", detail: "Done" } : { state: "todo", detail: plural(openQuestions, "question") },
-    ),
+    questionsSkipped
+      ? {
+          key: "questions",
+          label: "Questions for you",
+          href: "/doctor/setup/questions",
+          state: "done",
+          detail: "Skipped: nothing to ask",
+          skipped: true,
+        }
+      : locked(
+          { key: "questions", label: "Questions for you", href: "/doctor/setup/questions" },
+          openQuestions === 0 ? { state: "done", detail: "Done" } : { state: "todo", detail: plural(openQuestions, "question") },
+        ),
     locked(
       { key: "standards", label: "VFDA standards", href: "/doctor/setup/standards" },
       standardsAccepted ? { state: "done", detail: "Accepted" } : { state: "todo", detail: "Not accepted yet" },
@@ -291,6 +330,7 @@ export function buildDoctorFlow(input: FlowInput) {
     unlocked,
     questions,
     openQuestions,
+    questionsSkipped,
     standards,
     standardsAccepted,
     newDocuments,

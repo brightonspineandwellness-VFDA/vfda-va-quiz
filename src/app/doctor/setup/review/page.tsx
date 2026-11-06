@@ -54,9 +54,15 @@ async function ReviewStep() {
               ? "VFDA is checking the cards you added. Anything new will show up in your questions when they're done. You can carry on meanwhile."
               : "VFDA has reviewed your cards. ✓"}
           </p>
-          <Link href="/doctor/setup/questions" className={nextButton}>
-            Next: Questions for you →
-          </Link>
+          {flow.questionsSkipped ? (
+            <Link href="/doctor/setup/standards" className={nextButton}>
+              Next: VFDA standards →
+            </Link>
+          ) : (
+            <Link href="/doctor/setup/questions" className={nextButton}>
+              Next: Questions for you →
+            </Link>
+          )}
         </div>
       )}
     </>
