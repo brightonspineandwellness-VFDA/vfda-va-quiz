@@ -15,6 +15,10 @@ export const CardReadSchema = z.object({
       .describe("false when the card has no steps, rules or scripts (only links, attachments, or nothing)"),
     text: z.string().describe("Everything the card says, word for word: title, description, checklists, comments"),
     workflow: z.string().nullable().describe("The workflow code it fits best, e.g. WF04, or null"),
+    covers_day: z
+      .string()
+      .nullable()
+      .describe("The standard training day (code from the list) whose topic this card covers, whatever its name; null if it covers none"),
     patient_facing: z.boolean().describe("true when the VA talks or writes to patients in this task"),
     risky: z.boolean().describe("true when mistakes cost money, leak patient information, or touch legal or clinical matters"),
   }),
@@ -39,6 +43,9 @@ office trains its virtual assistant (VA).
   link URLs and attachment file names. Keep the card's own line breaks and numbering.
 - has_process_content: false when the card has no steps, rules or scripts: only links, attachments, or nothing.
 - workflow: the workflow code it fits best, or null.
+- covers_day: the standard training day (from the list) whose topic the card actually covers, judged by its content, not
+  its name (e.g. a card named "Front desk calls" covers the phone day); null when it covers none of them (an extra card
+  about something else, like a referral process or a supply order).
 - patient_facing / risky: as described in the schema.
 
 2. Rule slots: for each slot listed, report a rule only when the card actually states it:
@@ -70,10 +77,20 @@ after "Our answer:". For each rule slot listed, report what the doctor wrote aft
 If the answer says to use the VFDA default (e.g. "VFDA default"), put exactly VFDA default as the value.
 Leave a slot out when its "Our answer:" is blank or the card doesn't ask it.`;
 
-export function buildPrompt(slots: SlotForExtraction[], document: DocumentForExtraction, workflows: Workflow[], officeRulesCard = false) {
+// A standard training day and the topic its cards cover.
+export type DayTopic = { code: string; title: string; cards: string[] };
+
+export function buildPrompt(
+  slots: SlotForExtraction[],
+  document: DocumentForExtraction,
+  workflows: Workflow[],
+  officeRulesCard = false,
+  days: DayTopic[] = [],
+) {
   const slotList = slots.map((s) => `- ${s.key} [${FORMAT_HINT[s.answer_type] ?? "text"}]: ${s.question}`).join("\n");
   const workflowList = workflows.map((w) => `- ${w.code}: ${w.name}`).join("\n");
-  return `The card: ${document.card_name || "Card"} (${document.file_name})\n\nWorkflows:\n${workflowList}\n\nRule slots:\n${slotList || "(none)"}${
+  const dayList = days.map((d) => `- ${d.code}: ${d.title}${d.cards.length ? ` (cards: ${d.cards.join(", ")})` : ""}`).join("\n");
+  return `The card: ${document.card_name || "Card"} (${document.file_name})\n\nWorkflows:\n${workflowList}\n\nStandard training days:\n${dayList || "(none)"}\n\nRule slots:\n${slotList || "(none)"}${
     officeRulesCard ? `\n\n${OFFICE_RULES_PROMPT}` : ""
   }`;
 }
@@ -108,8 +125,9 @@ export type CardReading = {
 };
 
 // Checks the model's answer against the slots and workflows it was given.
-// Anything that doesn't fit is dropped.
-export function toReading(output: CardReadOutput, slots: InterviewQuestion[], document: DocumentForExtraction, workflows: Workflow[]) {
+// Anything that doesn't fit is dropped. coversDay: a standard day from
+// `dayCodes` whose topic the card covers (null: none).
+export function toReading(output: CardReadOutput, slots: InterviewQuestion[], document: DocumentForExtraction, workflows: Workflow[], dayCodes: string[] = []) {
   const c = output.card;
   const text = c.text.trim();
   const reading: CardReading = {
@@ -136,7 +154,8 @@ export function toReading(output: CardReadOutput, slots: InterviewQuestion[], do
       partial: r.partial,
     });
   }
-  return { reading, rules: [...rules.values()] };
+  const coversDay = c.covers_day && dayCodes.includes(c.covers_day) ? c.covers_day : null;
+  return { reading, rules: [...rules.values()], coversDay };
 }
 
 // ---------------------------------------------------------------------------

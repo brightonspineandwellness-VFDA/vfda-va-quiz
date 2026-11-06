@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { ActionButton } from "@/components/setup/action-button";
 import { CardMapping } from "@/components/setup/card-mapping";
 import { CardUpload, NoPatientInfoWarning } from "@/components/setup/card-upload";
+import { ExtraWorkflowEditor } from "@/components/setup/extra-workflow-editor";
 import { RuleEditor } from "@/components/setup/rule-editor";
 import { RuleSource } from "@/components/setup/rule-source";
 import { RuleValue } from "@/components/setup/rule-value";
@@ -11,11 +12,13 @@ import { StepProgress } from "@/components/setup/step-progress";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { requireRole } from "@/lib/auth";
 import { finishUploading } from "@/lib/card-actions";
+import { GRAY_DAY } from "@/lib/card-map";
+import { loadExtraWorkflows } from "@/lib/extra-workflows";
 import type { OfficeState, RuleRow } from "@/lib/doctor-flow";
 import type { InterviewQuestion } from "@/lib/interview";
 import { loadOfficeSetup } from "@/lib/interview-data";
 import { editAndAcceptRule, reviewRule, sendToDoctor } from "@/lib/review-actions";
-import { createSessionClient } from "@/lib/supabase/server";
+import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
 // "Done uploading" / "Try again" read the cards after the response is sent.
 export const maxDuration = 300;
@@ -57,6 +60,14 @@ async function AdminRules({ params }: { params: Promise<{ id: string }> }) {
   ];
   const dayOptions = interview.quizzes.filter((q) => /^W\dD\d$/.test(q.code)).map((q) => ({ code: q.code, title: q.title }));
   const unmapped = documents.filter((d) => d.imported_at && !d.skip && !(d.schedule_days ?? []).length).length;
+  // Extra cards: their workflows, and gray cards found to cover a standard topic.
+  const extra = await loadExtraWorkflows(createAdminClient(), officeId);
+  const matched = documents.filter(
+    (d) => d.card_name === "Gray cards" && d.imported_at && !d.skip && (d.schedule_days ?? []).length && !(d.schedule_days ?? []).includes(GRAY_DAY),
+  );
+  const extraWaiting = documents.filter(
+    (d) => d.imported_at && !d.skip && (d.schedule_days ?? []).includes(GRAY_DAY) && !extra.some((w) => w.card?.id === d.id),
+  ).length;
 
   const cardRows = rules.filter((r) => r.source === "card_import");
   // The doctor's own answers (VA Office Rules card): accepted, not reviewed.
@@ -115,10 +126,53 @@ async function AdminRules({ params }: { params: Promise<{ id: string }> }) {
           links or nothing in them as skip.
           {unmapped > 0 && <span className="font-medium text-amber-700 dark:text-amber-300"> {unmapped} card(s) have no day yet.</span>}
         </p>
+        {matched.length > 0 && (
+          <p className="text-sm text-foreground/70">
+            Uploaded as extra cards, but they cover a standard topic, so they&apos;re suggested for that topic&apos;s day:{" "}
+            {matched.map((d) => `${d.card_title || d.file_name} (${(d.schedule_days ?? []).join(", ")})`).join("; ")}. Map them to{" "}
+            {GRAY_DAY} to keep them as extra cards.
+          </p>
+        )}
         <CardMapping documents={documents} days={dayOptions} workflows={workflowOptions} />
         <Link href={`/admin/offices/${officeId}/scenarios`} className="self-start text-sm underline">
           Build scenarios →
         </Link>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-xl font-semibold">Extra cards: workflows</h2>
+        <p className="text-sm text-foreground/70">
+          Each extra card (mapped to {GRAY_DAY}) is read into a workflow. Process cards get a task scenario (the card&apos;s
+          steps are the answer; skipping its approval or escalation is the critical fail), info only cards a question. A
+          phone-call process is trained on W2D1 or W2D2 instead. Edit anything that&apos;s off, then approve: scenarios are
+          built only from approved workflows. Each one is certified like the standard workflows; its SOP is the card itself
+          on Trello.
+        </p>
+        {extraWaiting > 0 && <p className="text-sm text-amber-700 dark:text-amber-300">{extraWaiting} extra card(s) still being read (refresh in a minute).</p>}
+        {!extra.length && !extraWaiting && <p className="text-sm text-foreground/60">No extra cards.</p>}
+        {extra.map((w) => (
+          <ExtraWorkflowEditor
+            key={`${w.id}:${w.approved_at ?? ""}:${w.steps.join("|")}:${w.name}`}
+            workflow={{
+              id: w.id,
+              code: w.code,
+              name: w.name,
+              kind: w.kind,
+              phone: w.phone,
+              trigger: w.trigger,
+              steps: w.steps,
+              definition_of_done: w.definition_of_done,
+              va_can_decide: w.va_can_decide,
+              requires_approval: w.requires_approval,
+              immediate_escalation: w.immediate_escalation,
+              approved: !!w.approved_at,
+              cardTitle: w.card?.title ?? "",
+              quotes: w.source_quotes,
+              patientFacing: w.patient_facing,
+              risky: w.risky,
+            }}
+          />
+        ))}
       </section>
 
       <section className="flex flex-col gap-3">

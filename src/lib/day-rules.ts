@@ -115,6 +115,13 @@ export const DEFAULT_DAY_RULES: DayRules = {
       types: ALL,
       banned: ["care plans", "report of findings"],
     },
+    // Extra cards: situational items for process cards; calls still only on W2D1 / W2D2.
+    // Added by supabase/migrations/20261106170000_extra_card_workflows.sql.
+    W2D5: {
+      focus: "The office's own extra cards: task scenarios from their processes, questions about their information.",
+      types: ALL,
+      banned: NOT_PHONE_DAY,
+    },
   },
   moves: [
     { topics: CALL_ADVANCED, to: "W2D2" },

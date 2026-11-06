@@ -94,12 +94,16 @@ export type CardForMapping = {
   cardName: string; // the upload checklist entry it was uploaded as
   color: CardColor | null;
   workflow: string | null; // what reading the card suggested
+  // The standard day whose topic the card's content covers (reading it), if any.
+  coversDay?: string | null;
 };
 
-// Suggested day(s) and workflow for one card, in this order: gray cards go to
-// the gray card day; then the days whose card names match the card's title
-// (in the color's week when known); then the days of the checklist entry it
-// was uploaded as; then the first day of the week covering the workflow.
+// Suggested day(s) and workflow for one card, in this order: a gray (extra)
+// card that actually covers a standard topic (by its title, or its content as
+// read) goes to that topic's day, any other gray card to the gray card day
+// (an extra card); then the days whose card names match the card's title (in
+// the color's week when known); then the days of the checklist entry it was
+// uploaded as; then the first day of the week covering the workflow.
 export function suggestMapping(card: CardForMapping, days: DayForMapping[]): { days: string[]; workflow: string | null } {
   const week = weekOfColor(card.color);
   const inWeek = (code: string) => week === null || code.startsWith(`W${week}`);
@@ -108,7 +112,12 @@ export function suggestMapping(card: CardForMapping, days: DayForMapping[]): { d
     card.workflow ?? days.find((d) => codes.includes(d.code))?.workflows[0] ?? null;
 
   if (card.color === "gray" || card.cardName === "Gray cards") {
-    return known.has(GRAY_DAY) ? { days: [GRAY_DAY], workflow: card.workflow } : { days: [], workflow: card.workflow };
+    const named = card.title ? days.filter((d) => d.code !== GRAY_DAY && d.cards.some((c) => nameMatches(c, card.title))).map((d) => d.code) : [];
+    if (named.length) return { days: named, workflow: pickWorkflow(named) };
+    if (card.coversDay && card.coversDay !== GRAY_DAY && known.has(card.coversDay)) {
+      return { days: [card.coversDay], workflow: pickWorkflow([card.coversDay]) };
+    }
+    return known.has(GRAY_DAY) ? { days: [GRAY_DAY], workflow: null } : { days: [], workflow: card.workflow };
   }
   if (card.title) {
     const byName = days.filter((d) => d.code !== GRAY_DAY && inWeek(d.code) && d.cards.some((c) => nameMatches(c, card.title))).map((d) => d.code);

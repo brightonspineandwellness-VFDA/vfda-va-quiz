@@ -78,10 +78,15 @@ const latestBy = <T extends { submitted_at: string | null }>(rows: T[]) =>
 
 // The workflows an office trains: standard ones it has scenarios for, and its
 // gray card workflows. key = the workflow code on its scenarios.
+type ExtraSop = { steps: string[] | null; office_documents: { card_title: string; file_name: string } | null };
+const extraSopOutline = (g: ExtraSop) => [
+  `This workflow's SOP is the office's own card "${g.office_documents?.card_title || g.office_documents?.file_name || "the extra card"}" on Trello: check it matches how you do it, and update it if not`,
+  ...(g.steps ?? []),
+];
 export async function officeWorkflows(db: Db, officeId: string) {
   const [workflows, gray, scenarios, sequence] = await Promise.all([
     db.from("workflows").select("code, name, pass_standard, sop_outline").order("code"),
-    db.from("office_workflows").select("id, code, name, card_answers").eq("office_id", officeId).order("position"),
+    db.from("office_workflows").select("id, code, name, card_answers, steps, source_document_id, office_documents(card_title, file_name)").eq("office_id", officeId).order("position"),
     db
       .from("office_scenarios")
       .select("id, workflow, office_workflow_id, schedule_day, version, type, points, test_status")
@@ -111,7 +116,8 @@ export async function officeWorkflows(db: Db, officeId: string) {
       name: (g.name as string | null) || String((g.card_answers as Record<string, unknown>)?.CARD_NAME ?? g.code),
       grayId: g.id as string,
       passStandard: null,
-      sopOutline: null,
+      // An extra card's SOP is the card itself on Trello.
+      sopOutline: g.source_document_id ? extraSopOutline(g as unknown as ExtraSop) : null,
     })),
   ].map((w) => ({ ...w, days: daysOf(w.code) }));
   return { workflows: list, scenarios: rows };

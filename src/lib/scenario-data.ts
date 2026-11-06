@@ -17,6 +17,8 @@ export type OfficeDayRow = {
   // The latest version built (reviewed here) and the one new attempts get.
   build_version: number | null;
   live_version: number | null;
+  // Extra cards left out of the gray card day (more than its item count).
+  left_out?: { code: string; name: string; reason: string }[];
 };
 
 // A missing {KEY} and the rule that answers it (the key's own slot, or the
@@ -85,7 +87,7 @@ export async function loadScenarioOverview(officeId: string) {
   const [days, scenarios, attempts, documents] = await Promise.all([
     supabase
       .from("office_days")
-      .select("schedule_day, build_status, build_error, built_at, approved_at, build_version, live_version")
+      .select("schedule_day, build_status, build_error, built_at, approved_at, build_version, live_version, left_out")
       .eq("office_id", officeId),
     supabase
       .from("office_scenarios")

@@ -119,6 +119,12 @@ const PHASES = [
     title: "Missing cards and VA scope database changes",
     after: "multiple-doctors.sql",
   },
+  {
+    name: "extra-card-workflows",
+    starts: "20261106170000",
+    title: "Extra card workflows database changes (WF-G workflows from extra cards, W2D5 situational)",
+    after: "card-gaps-va-scope.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

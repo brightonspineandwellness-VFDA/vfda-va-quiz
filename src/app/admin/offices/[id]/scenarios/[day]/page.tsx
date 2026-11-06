@@ -97,6 +97,18 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
         )}
       </div>
       {note && <p className="text-sm text-amber-700 dark:text-amber-300">{note}</p>}
+      {(summary.status?.left_out ?? []).length > 0 && (
+        <div className="rounded-lg border border-amber-300 px-4 py-3 text-sm dark:border-amber-700">
+          <p className="font-medium">Extra cards left out of this day</p>
+          <ul className="mt-1 list-disc pl-5">
+            {summary.status!.left_out!.map((l) => (
+              <li key={l.code}>
+                {l.code} {l.name}: {l.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {approved && (
         <p className="text-sm text-foreground/70">
           {summary.liveTaken

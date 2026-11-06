@@ -14,7 +14,7 @@ import "server-only";
 // AI_MODE=mock records the cards without reading them.
 
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
-import { isMustAsk, suggestMapping, type DayForMapping } from "@/lib/card-map";
+import { GRAY_DAY, isMustAsk, suggestMapping, type DayForMapping } from "@/lib/card-map";
 import { directAnswer, OFFICE_RULES_CARD, ownAnswer, slotApplies, type RuleRow } from "@/lib/doctor-flow";
 import {
   buildPrompt,
@@ -27,6 +27,7 @@ import {
   type Workflow,
 } from "@/lib/extraction-parse";
 import { profileFromAnswers, type Answer, type InterviewQuestion } from "@/lib/interview";
+import { extractExtraWorkflows } from "@/lib/extra-workflows";
 import { reportIfDue } from "@/lib/office-reports";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -97,7 +98,7 @@ export async function runExtraction(officeId: string) {
         .select("key, tier, card_group, suggested_answer, schedule_day, question, answer_type, condition, card_source, workflows")
         .in("tier", ["profile", "doctor", "default"])
         .order("position"),
-      db.from("schedule_days").select("code, condition, cards, workflows"),
+      db.from("schedule_days").select("code, title, condition, cards, workflows"),
       db.from("settings").select("value").eq("key", "conditions").maybeSingle(),
       db
         .from("office_rules")
@@ -145,6 +146,10 @@ export async function runExtraction(officeId: string) {
     const officeRuleSlots = questions.filter((s) => s.tier === "doctor" && isMustAsk(s.key) && fillable(s) && !directAnswer(s, rowsOf(s.key)));
     const workflowList = [...((workflows.data ?? []) as Workflow[]), ...((grayWorkflows.data ?? []) as Workflow[])];
     const dayList = (days.data ?? []).map((d) => ({ code: d.code, cards: d.cards ?? [], workflows: d.workflows ?? [] })) as DayForMapping[];
+    // The standard topics a card may cover (not the gray card day itself).
+    const dayTopics = (days.data ?? [])
+      .filter((d) => d.code !== GRAY_DAY)
+      .map((d) => ({ code: d.code as string, title: (d.title as string) ?? "", cards: (d.cards as string[]) ?? [] }));
     const slotWorkflows = new Map((slots.data ?? []).map((s) => [s.key as string, (s.workflows ?? []) as string[]]));
     const mock = aiMode() === "mock";
 
@@ -152,6 +157,7 @@ export async function runExtraction(officeId: string) {
       const officeRules = doc.card_name === OFFICE_RULES_CARD;
       let reading: CardReading;
       let found: ReturnType<typeof toReading>["rules"] = [];
+      let coversDay: string | null = null;
       if (mock) {
         const title = doc.card_name || doc.file_name.replace(/\.pdf$/i, "");
         reading = {
@@ -169,18 +175,18 @@ export async function runExtraction(officeId: string) {
         if (bytes.length > MAX_CARD_BYTES) throw new Error(`${doc.file_name} is too big to read (over 20 MB).`);
         const slotsAsked = officeRules ? officeRuleSlots : wanted;
         const output = await readCard(
-          buildPrompt(slotsAsked, doc, workflowList, officeRules),
+          buildPrompt(slotsAsked, doc, workflowList, officeRules, dayTopics),
           `${doc.card_name || "Card"}: ${doc.file_name}`,
           bytes.toString("base64"),
         );
-        ({ reading, rules: found } = toReading(output, slotsAsked, doc, workflowList));
+        ({ reading, rules: found, coversDay } = toReading(output, slotsAsked, doc, workflowList, dayTopics.map((d) => d.code)));
         if (officeRules) found = toOfficeRules(output.rules, reading.extracted_text, officeRuleSlots, doc);
       }
       // Rules only: the office's rules reach the scenarios, the card itself doesn't.
       if (officeRules) reading.skip = true;
       const suggestion = officeRules
         ? { days: [], workflow: null }
-        : suggestMapping({ title: reading.card_title, cardName: doc.card_name, color: reading.card_color, workflow: reading.workflow }, dayList);
+        : suggestMapping({ title: reading.card_title, cardName: doc.card_name, color: reading.card_color, workflow: reading.workflow, coversDay }, dayList);
 
       if (found.length) {
         const now = new Date().toISOString();
@@ -218,6 +224,8 @@ export async function runExtraction(officeId: string) {
       .from("offices")
       .update({ extraction_status: "done", extracted_at: new Date().toISOString(), extraction_error: null })
       .eq("id", officeId);
+    // Extra cards (mapped to the gray card day): their workflows, for VFDA to approve.
+    await extractExtraWorkflows(officeId).catch((e) => console.error("Extra card workflows not read", officeId, e));
     // A re-import with nothing for VFDA to review: the gap report is due now.
     await reportIfDue(officeId).catch((e) => console.error("Office SOP gap report not written", officeId, e));
   } catch (e) {

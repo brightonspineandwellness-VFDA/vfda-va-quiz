@@ -2,9 +2,14 @@
 
 // VFDA's card mapping (/admin/offices/[id]/rules): which training day(s) and
 // workflow each card PDF feeds, or "skip" for a card with no process content.
-// VFDA admins only; writes as the admin (row-level security applies).
+// A card mapped to the gray card day is an extra card: its workflow is read
+// after the response. VFDA admins only; writes as the admin (row-level
+// security applies).
 
+import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { GRAY_DAY } from "@/lib/card-map";
+import { extractExtraWorkflows } from "@/lib/extra-workflows";
 import type { ActionResult } from "@/lib/interview-actions";
 import { createSessionClient } from "@/lib/supabase/server";
 
@@ -44,5 +49,9 @@ export async function updateCardMapping(documentId: string, mapping: CardMapping
       mapped_at: new Date().toISOString(),
     })
     .eq("id", documentId);
-  return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+  if (error) return fail("Couldn't save. Try again.");
+  if (!mapping.skip && chosen.includes(GRAY_DAY)) {
+    after(() => extractExtraWorkflows(doc.office_id).then(() => undefined));
+  }
+  return { ok: true, data: null };
 }

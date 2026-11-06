@@ -25,6 +25,7 @@ import {
   type DraftScenario,
 } from "@/lib/scenario-build";
 import { matchCardName, resolveSource, STANDARDS_SOURCE } from "@/lib/source-match";
+import { squashText } from "@/lib/card-map";
 
 const SYSTEM = `You write training scenarios for virtual assistants (VAs) at one chiropractic office.
 The office's own rules are given; use them exactly and never invent office policy.
@@ -438,50 +439,6 @@ ${sources}`;
   return Promise.all(items.map((i, n) => settleItem(i, itemLabel(n, i), ctx)));
 }
 
-// Gray card day: `count` written items per card (1-2, planned by grayPlan):
-// situational where the day allows it, otherwise describe.
-export async function writeCardGrayItems(input: {
-  day: string;
-  cards: (CardSource & { count: number })[];
-  standards: { key: string; value: string }[];
-  rules: DayRules;
-  log?: LogFailure;
-}): Promise<CardItem[]> {
-  const total = input.cards.reduce((n, c) => n + c.count, 0);
-  const log = input.log ?? (() => {});
-  const sources = sourcesBlock(input.cards, [], input.standards, input.day, input.rules);
-  const ctx: ItemContext = { day: input.day, rules: input.rules, cards: input.cards, standards: input.standards, boxes: null, gray: true, sources, log };
-  const type = rewriteType("situational", ctx);
-  if (mock()) {
-    return input.cards.flatMap((c) =>
-      Array.from({ length: c.count }, (_, k) => mockItem(c, type, `${c.title}: what do you do here? (${k + 1})`, null)),
-    );
-  }
-  const text = `Write the gray card day: ${type === "situational" ? "task scenarios" : "short questions the VA answers in their own words"} from this office's extra cards.
-Exactly the number of items listed per card (${total} in all), each with based_on null, type "${type}" and
-correct_response as a plain list of ${type === "describe" ? "key points" : "steps"} (box null). The cards are the source.
-Items per card: ${input.cards.map((c) => `"${c.title}": ${c.count}${c.tags?.length ? ` (${c.tags.join(", ")})` : ""}`).join("; ")}.
-
-${CARD_RULES}
-
-${sources}`;
-  const items = await askItems(
-    text,
-    (items) => {
-      for (const c of input.cards) {
-        const got = items.filter((i) => {
-          const named = matchCardName(i.source_card, input.cards);
-          return named?.kind === "card" && named.card === c;
-        }).length;
-        if (got !== c.count) return `"${c.title}" needs exactly ${c.count} item(s), got ${got}`;
-      }
-      return null;
-    },
-    log,
-  );
-  return Promise.all(items.map((i, n) => settleItem(i, itemLabel(n, i), ctx)));
-}
-
 // VFDA's "Regenerate" on an item that needs review: rewritten from the same
 // cards (up to ITEM_REWRITES times), told what was wrong.
 export async function regenerateCardItem(input: {
@@ -889,5 +846,117 @@ ${items
   });
   return new Map<string, RetakeVariant>(
     out.items.map((v) => [v.key, { stem: v.stem.trim(), repeat_stem: items.find((i) => i.key === v.key)?.wantsRepeat ? (v.repeat_stem?.trim() ?? null) : null }]),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Extra cards (src/lib/extra-workflow.ts): the items planned from the office's
+// approved extra workflows. A process card's situational item gets a realistic
+// trigger and fake patient (its answer key is the card's steps, set by the
+// builder); multiple choice and info questions are written from the card.
+// Every item quotes the card.
+// ---------------------------------------------------------------------------
+
+export type ExtraItemRequest = {
+  key: string;
+  type: "situational" | "mc" | "info";
+  card: { title: string; text: string };
+  workflow: { name: string; trigger: string; steps: string[]; requires_approval: string[]; immediate_escalation: string[]; definition_of_done: string };
+  fallbackQuote: string;
+};
+export type ExtraItem = {
+  type: ItemType;
+  stem: string;
+  options: string[] | null;
+  answer: string | null;
+  key_points: string[] | null;
+  source_quote: string;
+};
+
+const ExtraSchema = z.object({
+  items: z.array(
+    z.object({
+      key: z.string(),
+      type: z.enum(["situational", "mc", "describe"]),
+      stem: z.string(),
+      options: z.array(z.string()).nullable(),
+      answer: z.string().nullable().describe("A, B, C or D for multiple choice"),
+      key_points: z.array(z.string()).nullable().describe("For describe: the key points a good answer covers, from the card"),
+      source_quote: z.string().describe("The card's exact words the item is based on (copied, under 300 characters)"),
+    }),
+  ),
+});
+
+export async function writeExtraItems(input: { day: string; items: ExtraItemRequest[]; rules: DayRules }): Promise<Map<string, ExtraItem>> {
+  if (!input.items.length) return new Map();
+  if (mock()) {
+    return new Map<string, ExtraItem>(
+      input.items.map((i): [string, ExtraItem] => {
+        const base = { source_quote: i.fallbackQuote, options: null, answer: null, key_points: null };
+        if (i.type === "situational") {
+          return [i.key, { ...base, type: "situational" as const, stem: `Sam (a fake patient) needs help: ${i.workflow.trigger || i.workflow.name}. What do you do?` }];
+        }
+        if (i.type === "mc") return [i.key, { ...base, type: "mc" as const, stem: `${i.card.title}: what does the office do?`, options: MOCK_OPTIONS, answer: "A" }];
+        const points = i.card.text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 3);
+        return [i.key, { ...base, type: "describe" as const, stem: `In your own words, what does "${i.card.title}" tell you?`, key_points: points.length ? points : [i.card.title] }];
+      }),
+    );
+  }
+  const text = `Write one training item per request below, for training day ${input.day}, from this office's own extra cards.
+- situational: a task scenario with a realistic trigger (what just happened) and a made-up patient, ending with what the VA
+  does now. The VA answers in boxes: Steps / Say / Document-Escalate. Don't give away the steps. options, answer and
+  key_points are null.
+- mc: one multiple choice question about the card's process: 4 options, exactly one right per the card, answer the letter.
+- info: either "mc" (as above) or "describe" (a short question answered in the VA's own words, with key_points from the
+  card) about the card's information, whichever fits it better.
+Every item quotes the card's exact words in source_quote. Keep each key.
+
+${rulesPrompt(input.day, input.rules, input.items.map((i) => i.card.title))}
+
+${input.items
+  .map(
+    (i) =>
+      `## ${i.key} (${i.type}) from "${i.card.title}"
+Workflow: ${i.workflow.name}${i.workflow.trigger ? `. Starts when: ${i.workflow.trigger}` : ""}
+${i.workflow.steps.length ? `Steps: ${i.workflow.steps.join(" | ")}` : ""}
+${i.workflow.requires_approval.length ? `Needs approval: ${i.workflow.requires_approval.join("; ")}` : ""}
+${i.workflow.immediate_escalation.length ? `Escalate at once: ${i.workflow.immediate_escalation.join("; ")}` : ""}
+<card_text>
+${i.card.text.slice(0, 6000)}
+</card_text>`,
+  )
+  .join("\n\n")}`;
+  const out = await ask(ExtraSchema, text, (o) => {
+    for (const i of input.items) {
+      const v = o.items.find((x) => x.key === i.key);
+      if (!v || !v.stem.trim()) return `missing ${i.key}`;
+      if (hasPlaceholder(v.stem)) return `${i.key}: placeholder left`;
+      const want = i.type === "info" ? ["mc", "describe"] : [i.type];
+      if (!want.includes(v.type)) return `${i.key}: must be ${want.join(" or ")}`;
+      if (v.type === "mc") {
+        const problem = checkMc(v.options, v.answer);
+        if (problem) return `${i.key}: ${problem}`;
+      }
+      if (v.type === "describe" && !v.key_points?.some((p) => p.trim())) return `${i.key}: key_points missing`;
+    }
+    return null;
+  });
+  return new Map(
+    input.items.map((i) => {
+      const v = out.items.find((x) => x.key === i.key)!;
+      const quote = v.source_quote.trim();
+      return [
+        i.key,
+        {
+          type: v.type,
+          stem: v.stem.trim(),
+          options: v.type === "mc" ? (v.options ?? []).map((o) => o.trim()) : null,
+          answer: v.type === "mc" ? (v.answer ?? "").trim().toUpperCase() : null,
+          key_points: v.type === "describe" ? (v.key_points ?? []).map((p) => p.trim()).filter(Boolean) : null,
+          // A quote that isn't on the card: the workflow's own quote instead.
+          source_quote: quote && squashText(i.card.text).includes(squashText(quote)) ? quote.slice(0, 300) : i.fallbackQuote,
+        },
+      ];
+    }),
   );
 }

@@ -12,20 +12,22 @@ import "server-only";
 // office's rules. A day with no card that a topic marked "We don't have this
 // card" feeds uses the master bank with VFDA's standards instead (the office's
 // own values only where VFDA has no standard, e.g. its EHR's name), labeled
-// "VFDA standard – office has no card". The gray card day is written from the gray cards (1-2 items
-// each). Every build is a new build_version of the day's office_scenarios, as
+// "VFDA standard – office has no card". The gray card day is written from the office's extra cards:
+// each one's workflow (src/lib/extra-workflows.ts), once VFDA approved it, gets
+// a situational item (process cards: the card's steps are the answer) or a
+// question (info only cards), within the day's item count; a phone-call
+// process goes to W2D1 or W2D2 instead. Every build is a new build_version of the day's office_scenarios, as
 // drafts for VFDA to review; older versions are never changed, so a day can be
 // rebuilt after VAs have taken it (they keep their version; new attempts get
 // the version VFDA approves next). Skipped days (extra phone drills,
 // settings.skipped_day_rule) don't follow the day rules.
 
 import { aiErrorMessage } from "@/lib/ai";
-import { GRAY_DAY, GRAY_ITEM_CAP, grayPlan, isMustAsk, NO_CARD_SOURCE, topicDays } from "@/lib/card-map";
+import { GRAY_DAY, GRAY_ITEM_CAP, isMustAsk, NO_CARD_SOURCE, topicDays } from "@/lib/card-map";
 import { asDayType, checkBuiltItem, checkDayItem, dayPool, isSource, parseDayRules, ruleFor, type DayRules } from "@/lib/day-rules";
 import {
   buildOptions,
   writeCardDay,
-  writeCardGrayItems,
   writeGrayItems,
   writePhoneDrills,
   writeVariants,
@@ -53,6 +55,8 @@ import {
   type MasterScenario,
   type RuleForBuild,
 } from "@/lib/scenario-build";
+import { phoneDay, planExtraDay, planPhoneItems, type LeftOut } from "@/lib/extra-workflow";
+import { extractExtraWorkflows, extraDrafts, loadExtraWorkflows } from "@/lib/extra-workflows";
 import { createAdminClient } from "@/lib/supabase/server";
 import { officeProfile } from "@/lib/va-flow";
 
@@ -72,7 +76,7 @@ const settingOf = (rows: { key: string; value: unknown }[], key: string) => rows
 
 // What every build needs about an office: its days and how it gets each.
 export async function loadOfficeBuild(db: Db, officeId: string) {
-  const [office, days, settings] = await Promise.all([
+  const [office, days, settings, extraCards] = await Promise.all([
     db
       .from("offices")
       .select("id, name, status, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
@@ -83,12 +87,20 @@ export async function loadOfficeBuild(db: Db, officeId: string) {
       .from("settings")
       .select("key, value")
       .in("key", ["sequence", "conditions", "derived_placeholders", "gray_formulas", "gray_split", "gray_fill_rule", "skipped_day_rule", "day_rules"]),
+    // Extra cards mapped to the gray card day make it the gray card day for the office.
+    db
+      .from("office_documents")
+      .select("id", { count: "exact", head: true })
+      .eq("office_id", officeId)
+      .eq("kind", "card")
+      .eq("skip", false)
+      .contains("schedule_days", [GRAY_DAY]),
   ]);
   const officeRow = must(office);
   if (!officeRow) return null;
   const settingRows = must(settings) ?? [];
   const conditions = (settingOf(settingRows, "conditions") ?? {}) as Record<string, string>;
-  const profile = officeProfile(officeRow);
+  const profile = { ...officeProfile(officeRow), ...(extraCards.count ? { HAS_GRAY_CARDS: "yes" } : {}) };
   return {
     office: officeRow,
     settings: settingRows,
@@ -417,6 +429,7 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
     for (const m of src.dropped) log({ item: `master ${m.code}`, field: "day_rules", value: m.code, reason: `not used: ${m.reason}` });
 
     let drafts: DraftScenario[];
+    let leftOut: LeftOut[] = [];
     if (entry.kind === "standard") {
       if (cards.length) {
         // Card-first: the master items are the pattern, the cards the source.
@@ -451,24 +464,32 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
         const extra = await writeCardDay({ day: entry.day, slots: short, pool, cards, workflows, standards, boxes, rules, existing: drafts.map((d) => d.stem), log });
         drafts = [...drafts, ...cardDrafts(extra, short, [])];
       }
+      // The office's extra cards whose process is a phone call: trained with the calls.
+      const phone = planPhoneItems(await loadExtraWorkflows(db, officeId), dayCode);
+      if (phone.length) drafts = [...drafts, ...(await extraDrafts({ day: dayCode, planned: phone, rules, prefix: "X", startAt: drafts.length }))];
       // The office has no card for this day's topics: say so on every question.
       if (src.vfdaOnly) {
         log({ item: "day", field: "source_card", value: src.noCard.join(", "), reason: `no card for ${src.noCard.join(", ")}: written from the VFDA master bank and standards` });
         drafts = drafts.map((d) => ({ ...d, source_card: NO_CARD_SOURCE, source_quote: d.source_quote ?? d.code }));
       }
     } else if (entry.kind === "gray" && cards.length) {
-      // Gray cards: 1-2 items each, patient-facing or risky cards first.
-      const cap = slots.length || GRAY_ITEM_CAP;
-      const plan = grayPlan(cards.map((c) => ({ ...c, tags: c.tags ?? [] })), cap);
-      const items = await writeCardGrayItems({ day: dayCode, cards: plan.map((p) => ({ ...p.card, count: p.count })), standards, rules, log });
-      const grayWorkflow = new Map(grayCards.map((g) => [g.code, g.id]));
-      drafts = items.map((item, n) => ({
-        ...cardDrafts([item], [])[0],
-        office_workflow_id: grayWorkflow.get(item.workflow) ?? null,
-        part: "G",
-        code: `G${n + 1}`,
-        position: n,
-      }));
+      // Extra cards: each needs its workflow, read and approved by VFDA.
+      await extractExtraWorkflows(officeId);
+      const extra = await loadExtraWorkflows(db, officeId);
+      // Not approved yet (phone processes belong to W2D1 / W2D2, not here).
+      const waiting = extra.filter((w) => !w.approved_at && !phoneDay(w));
+      if (!extra.some((w) => w.approved_at)) {
+        throw new Error(
+          extra.length
+            ? `Approve the extra cards' workflows first (Cards & rules page): ${waiting.map((w) => w.code).join(", ")}.`
+            : "The extra cards' workflows couldn't be read. Try again from the Cards & rules page.",
+        );
+      }
+      // The day's item count, patient-facing and risky process cards first.
+      const plan = planExtraDay(extra, slots.length || GRAY_ITEM_CAP);
+      leftOut = [...plan.leftOut, ...waiting.map((w) => ({ code: w.code, name: w.name, reason: "not approved yet" }))];
+      drafts = await extraDrafts({ day: dayCode, planned: plan.items, rules, prefix: "G", startAt: 0 });
+      for (const l of leftOut) log({ item: l.code, field: "extra card", value: l.name, reason: `left out of ${dayCode}: ${l.reason}` });
     } else if (entry.kind === "gray") {
       const cards: GrayCard[] = grayCards.map((c) => ({
         id: c.id,
@@ -508,6 +529,8 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
     const version = await nextVersion(db, officeId, dayCode);
     await insertVersion(db, toRows(officeId, dayCode, version, drafts, variants));
     await finishBuild(db, officeId, dayCode, version);
+    // Extra cards that didn't fit (shown on the day's review page).
+    await db.from("office_days").update({ left_out: leftOut }).eq("office_id", officeId).eq("schedule_day", dayCode);
     await logCheckFailures(db, officeId, dayCode, failures);
   } catch (e) {
     await logCheckFailures(db, officeId, dayCode, failures);
