@@ -3,8 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { ByLine } from "@/components/setup/by-line";
-import { addCardDocument, removeCardDocument } from "@/lib/card-actions";
-import { CARD_CHECKLIST, type DocumentRow } from "@/lib/doctor-flow";
+import { addCardDocument, removeCardDocument, setCardMissing } from "@/lib/card-actions";
+import { CARD_CHECKLIST, type DocumentRow, type MissingCard } from "@/lib/doctor-flow";
 import { MAX_UPLOAD_BYTES } from "@/lib/interview";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
@@ -27,8 +27,9 @@ export function NoPatientInfoWarning() {
   );
 }
 
-// The card checklist: one row per Trello card, each with its uploaded PDFs.
-export function CardUpload({ officeId, documents }: { officeId: string; documents: DocumentRow[] }) {
+// The card checklist: one row per Trello card, each with its uploaded PDFs,
+// or "We don't have this card" (that topic then uses VFDA's standards).
+export function CardUpload({ officeId, documents, missing = [] }: { officeId: string; documents: DocumentRow[]; missing?: MissingCard[] }) {
   return (
     <ul className="flex flex-col divide-y divide-foreground/10 rounded-lg border border-foreground/15">
       {CARD_CHECKLIST.map((card) => (
@@ -38,6 +39,7 @@ export function CardUpload({ officeId, documents }: { officeId: string; document
           name={card.name}
           note={card.note}
           documents={documents.filter((d) => d.card_name === card.name)}
+          missing={missing.find((m) => m.card_name === card.name) ?? null}
         />
       ))}
     </ul>
@@ -49,11 +51,13 @@ function CardRow({
   name,
   note,
   documents,
+  missing,
 }: {
   officeId: string;
   name: string;
   note: string;
   documents: DocumentRow[];
+  missing: MissingCard | null;
 }) {
   const router = useRouter();
   const inputId = useId();
@@ -94,6 +98,15 @@ function CardRow({
     router.refresh();
   }
 
+  async function markMissing(value: boolean) {
+    setError(null);
+    setBusy(true);
+    const result = await setCardMissing(officeId, name, value);
+    if (!result.ok) setError(result.error);
+    setBusy(false);
+    router.refresh();
+  }
+
   async function remove(id: string) {
     setError(null);
     const result = await removeCardDocument(officeId, id);
@@ -106,14 +119,33 @@ function CardRow({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="font-medium">
           <span
-            className={`mr-2 inline-block w-4 ${documents.length ? "text-green-700 dark:text-green-400" : "text-foreground/30"}`}
-            aria-label={documents.length ? "Uploaded" : "Not uploaded"}
+            className={`mr-2 inline-block w-4 ${documents.length || missing ? "text-green-700 dark:text-green-400" : "text-foreground/30"}`}
+            aria-label={documents.length ? "Uploaded" : missing ? "No card" : "Not uploaded"}
           >
-            {documents.length ? "✓" : "○"}
+            {documents.length || missing ? "✓" : "○"}
           </span>
           {name}
           {note && <span className="ml-2 text-sm font-normal text-foreground/60">({note})</span>}
         </p>
+        {missing ? (
+          <span className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-foreground/70">We don&apos;t have this card: VFDA standards are used</span>
+            <button type="button" disabled={busy} onClick={() => markMissing(false)} className="underline disabled:opacity-60">
+              Undo
+            </button>
+          </span>
+        ) : (
+          !documents.length && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => markMissing(true)}
+              className="rounded-lg px-3 py-1.5 text-sm text-foreground/70 underline hover:text-foreground disabled:opacity-60"
+            >
+              We don&apos;t have this card
+            </button>
+          )
+        )}
         <label
           htmlFor={inputId}
           className={`cursor-pointer rounded-lg border border-foreground/25 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5 ${
@@ -151,6 +183,11 @@ function CardRow({
             </li>
           ))}
         </ul>
+      )}
+      {missing && (
+        <p className="ml-6">
+          <ByLine verb="Marked" name={missing.marked_by_name} at={missing.marked_at} />
+        </p>
       )}
       {error && <p className="ml-6 text-sm text-red-700 dark:text-red-400">{error}</p>}
     </li>

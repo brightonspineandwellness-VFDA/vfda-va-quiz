@@ -41,14 +41,15 @@ async function UploadStep() {
         <h2 className="text-xl font-semibold">Step 2 · Upload your cards</h2>
         <p className="text-foreground/70">
           Export each Trello card as a PDF and upload it next to its name. We read the rules your VA needs from
-          them, so you only answer what the cards don&apos;t cover. Skip any card your office doesn&apos;t have.
+          them, so you only answer what the cards don&apos;t cover. No card for a topic? Press &ldquo;We don&apos;t have
+          this card&rdquo;: your VA then learns VFDA&apos;s standard way for it.
         </p>
       </div>
       <NoPatientInfoWarning />
-      <CardUpload officeId={officeId} documents={documents} />
+      <CardUpload officeId={officeId} documents={documents} missing={setup.missingCards} />
 
       <div className="flex flex-wrap items-center gap-3">
-        {pending > 0 ? (
+        {pending > 0 || (!state.cardsUploadedAt && documents.length === 0 && flow.uncoveredTopics.length === 0) ? (
           <ActionButton
             action={finishUploading.bind(null, officeId)}
             label={state.cardsUploadedAt ? `Done uploading (${pending} new)` : "Done uploading"}
@@ -63,6 +64,11 @@ async function UploadStep() {
           <p className="text-sm text-foreground/70">Upload at least one card to continue.</p>
         )}
       </div>
+      {flow.uncoveredTopics.length > 0 && (
+        <p className="text-sm text-foreground/70">
+          Still to do: {flow.uncoveredTopics.join(", ")}. Upload the card, or mark &ldquo;We don&apos;t have this card&rdquo;.
+        </p>
+      )}
       {state.cardsUploadedAt && pending === 0 && (
         <p className="text-sm text-foreground/70">
           Found another card later? Upload it here and press Done uploading again. We&apos;ll only ask about rules

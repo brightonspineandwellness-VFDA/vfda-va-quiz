@@ -19,6 +19,7 @@ import {
 import { writeRecheckVariants } from "@/lib/scenario-ai";
 import { createAdminClient } from "@/lib/supabase/server";
 import { percentOf, withOverride } from "@/lib/va-flow";
+import { dayInScope, normalizeScope, scopeText, workflowInScope } from "@/lib/va-scope";
 import { officeRulesFor } from "@/lib/va-training";
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -127,9 +128,11 @@ const certFor = (certs: CertRow[], w: OfficeWorkflow) =>
 
 export async function recalculateCertifications(vaId: string): Promise<void> {
   const db = createAdminClient();
-  const profile = must(await db.from("profiles").select("office_id").eq("id", vaId).maybeSingle());
+  const profile = must(await db.from("profiles").select("office_id, va_scope").eq("id", vaId).maybeSingle());
   if (!profile?.office_id) return;
   const officeId = profile.office_id as string;
+  // Only the VA's roles count (src/lib/va-scope.ts).
+  const scope = normalizeScope(profile.va_scope);
 
   const [{ workflows, scenarios }, attemptsRes, certsRes, settings] = await Promise.all([
     officeWorkflows(db, officeId),
@@ -202,8 +205,11 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
   const now = new Date();
 
   for (const w of workflows) {
-    if (!w.days.length) continue;
-    const lastDay = w.days[w.days.length - 1];
+    if (!workflowInScope(scope, w.code)) continue;
+    // The workflow's days in the VA's roles (and any they already took).
+    const wDays = w.days.filter((d) => dayInScope(scope, d) || dayAttempts.some((a) => a.schedule_day === d));
+    if (!wDays.length) continue;
+    const lastDay = wDays[wDays.length - 1];
     let cert = certFor(certs, w);
     // Due once the VA has finished the workflow's last scheduled day.
     if (!cert) {
@@ -229,7 +235,7 @@ export async function recalculateCertifications(vaId: string): Promise<void> {
     // the workflow's days (the latest one that isn't archived).
     const current = certStatus(cert.status);
     const recheck = latestBy(attempts.filter((a) => a.certification_id === cert!.id && a.kind === "recheck"));
-    const dayIds = w.days.map((d) => latestBy(dayAttempts.filter((a) => a.schedule_day === d))?.id);
+    const dayIds = wDays.map((d) => latestBy(dayAttempts.filter((a) => a.schedule_day === d))?.id);
     const evidence = recheck ? evidenceOf([recheck.id], w.code) : evidenceOf(dayIds.filter((x): x is string => !!x), w.code);
     const { status } = evaluateWorkflow({
       items: evidence,
@@ -322,14 +328,15 @@ export async function openDueRechecks(today: string, limit = 5) {
 
 async function openRecheck(db: Db, cert: CertRow) {
   // Only while the VA is active and still at the office the certification is for.
-  const profile = must(await db.from("profiles").select("office_id, deactivated_at").eq("id", cert.va_id).maybeSingle());
+  const profile = must(await db.from("profiles").select("office_id, deactivated_at, va_scope").eq("id", cert.va_id).maybeSingle());
   if (profile?.office_id !== cert.office_id || profile.deactivated_at) return false;
   const officeId = cert.office_id;
   let code = cert.workflow;
   if (!code && cert.office_workflow_id) {
     code = (must(await db.from("office_workflows").select("code").eq("id", cert.office_workflow_id).maybeSingle()) as { code: string } | null)?.code ?? null;
   }
-  if (!code) return false;
+  // No longer one of the VA's roles: no recheck.
+  if (!code || !workflowInScope(normalizeScope(profile.va_scope), code)) return false;
   let pool =
     must(
       await db
@@ -473,6 +480,8 @@ export type GridRow = {
   email: string;
   officeId: string | null;
   officeName: string;
+  // What the VA does ("All roles", or e.g. "Scheduling, Phones").
+  scope: string;
   // The office's Primary doctor, shown on the certificate.
   primaryDoctor: string | null;
   cells: GridCell[];
@@ -482,7 +491,7 @@ export type GridRow = {
 // `db` decides what's visible: the admin's or doctor's session (row-level
 // security), or the service role for a VA's own row.
 export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?: string }) {
-  let vaQuery = db.from("profiles").select("id, full_name, email, office_id").eq("role", "va").is("deactivated_at", null).order("full_name");
+  let vaQuery = db.from("profiles").select("id, full_name, email, office_id, va_scope").eq("role", "va").is("deactivated_at", null).order("full_name");
   if (filter.vaIds) vaQuery = vaQuery.in("id", filter.vaIds.length ? filter.vaIds : ["00000000-0000-0000-0000-000000000000"]);
   if (filter.officeId) vaQuery = vaQuery.eq("office_id", filter.officeId);
   const [vas, offices, standard] = await Promise.all([
@@ -490,7 +499,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
     db.from("offices").select("id, name, primary_doctor_id"),
     db.from("workflows").select("code, name").order("code"),
   ]);
-  const vaRows = (must(vas) ?? []) as { id: string; full_name: string | null; email: string; office_id: string | null }[];
+  const vaRows = (must(vas) ?? []) as { id: string; full_name: string | null; email: string; office_id: string | null; va_scope: string[] | null }[];
   const vaIds = vaRows.map((v) => v.id);
   const officeIds = [...new Set(vaRows.map((v) => v.office_id).filter((x): x is string => !!x))];
   const [perOffice, certsRes, drillsRes, retakesRes] = await Promise.all([
@@ -540,12 +549,14 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
 
   const rows: GridRow[] = vaRows.map((va) => {
     const list = va.office_id ? (workflowsOf.get(va.office_id) ?? []) : [];
+    const scope = normalizeScope(va.va_scope);
     const cell = (w: { code: string; name: string }, ow: OfficeWorkflow | undefined): GridCell => {
       const c = ow ? certs.find((x) => x.va_id === va.id && x.office_id === va.office_id && (ow.grayId ? x.office_workflow_id === ow.grayId : x.workflow === ow.code)) : undefined;
       return {
         code: w.code,
         name: w.name,
-        applies: !!ow?.days.length,
+        // Outside the VA's roles: n/a, and not on the certificate.
+        applies: !!ow?.days.length && workflowInScope(scope, w.code),
         certificationId: c?.id ?? null,
         status: c ? certStatus(c.status) : null,
         sopStatus: c?.sop_status ?? null,
@@ -569,6 +580,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
       email: va.email,
       officeId: va.office_id,
       officeName: va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office",
+      scope: scopeText(scope),
       primaryDoctor: primaryOf(va.office_id),
       cells,
       allCertified: applicable.length > 0 && applicable.every((x) => x.status === "certified"),

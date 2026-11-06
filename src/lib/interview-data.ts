@@ -6,6 +6,7 @@ import {
   type DocumentRow,
   type FlowInput,
   type GapRow,
+  type MissingCard,
   type OfficeState,
   type RuleRow,
   type Step,
@@ -154,6 +155,7 @@ function flowInput(
   office: OfficeState,
   documents: DocumentRow[],
   gaps: GapRow[],
+  missingCards: MissingCard[] = [],
 ): FlowInput {
   return {
     slots: bank.questions,
@@ -164,6 +166,7 @@ function flowInput(
     office,
     documents,
     gaps,
+    missingCards,
   };
 }
 
@@ -201,7 +204,7 @@ export async function loadOfficeSetup(officeId: string, client?: Supabase) {
   if (error) throw error;
   if (!office) return null;
 
-  const [bank, rules, cards, documents, gaps, people] = await Promise.all([
+  const [bank, rules, cards, documents, gaps, people, absences] = await Promise.all([
     loadBankParts(supabase),
     supabase.from("office_rules").select(RULE_COLUMNS).eq("office_id", officeId),
     supabase.from("office_workflows").select(CARD_COLUMNS).eq("office_id", officeId).order("position"),
@@ -210,6 +213,7 @@ export async function loadOfficeSetup(officeId: string, client?: Supabase) {
     supabase.from("gap_questions").select(GAP_COLUMNS).eq("office_id", officeId).order("created_at"),
     // The office's people (removed doctors too), to say who did what.
     supabase.from("profiles").select("id, full_name, email").eq("office_id", officeId),
+    supabase.from("office_card_absences").select("card_name, marked_by, marked_at").eq("office_id", officeId),
   ]);
   for (const r of [rules, cards, documents, gaps]) if (r.error) throw r.error;
   const who = whoDid((people.data ?? []) as Person[]);
@@ -234,13 +238,15 @@ export async function loadOfficeSetup(officeId: string, client?: Supabase) {
   const state = { ...toState(office as DbOffice), standardsAcceptedBy: who((office as DbOffice).standards_accepted_by) };
   const documentRows = ((documents.data ?? []) as DocumentRow[]).map((d) => ({ ...d, uploaded_by_name: who(d.uploaded_by) }));
   const gapRows = ((gaps.data ?? []) as GapRow[]).map((g) => ({ ...g, answered_by_name: who(g.answered_by) }));
-  const input = flowInput(bank, ruleRows, state, documentRows, gapRows);
+  const missingCards = ((absences.data ?? []) as MissingCard[]).map((m) => ({ ...m, marked_by_name: who(m.marked_by) }));
+  const input = flowInput(bank, ruleRows, state, documentRows, gapRows, missingCards);
   return {
     interview,
     state,
     rules: ruleRows,
     documents: documentRows,
     gaps: gapRows,
+    missingCards,
     flow: buildDoctorFlow(input),
     // What "Send to doctor" would change (meaningful for VFDA, who sees every question).
     gapPlan: planGaps(input),
@@ -260,13 +266,14 @@ export type OfficeRow = {
 // Offices list for VFDA admins, with the doctor's setup steps per office.
 export async function loadOffices(): Promise<OfficeRow[]> {
   const supabase = await createSessionClient();
-  const [offices, doctors, rules, documents, gaps, bank] = await Promise.all([
+  const [offices, doctors, rules, documents, gaps, bank, absences] = await Promise.all([
     supabase.from("offices").select(`id, name, status, created_at, ${OFFICE_STATE_COLUMNS}`).order("created_at"),
     supabase.from("profiles").select("id, office_id, full_name, email").eq("role", "doctor"),
     supabase.from("office_rules").select(RULE_COLUMNS),
     supabase.from("office_documents").select(DOCUMENT_COLUMNS).eq("kind", "card"),
     supabase.from("gap_questions").select(GAP_COLUMNS),
     loadBankParts(supabase),
+    supabase.from("office_card_absences").select("office_id, card_name, marked_at"),
   ]);
   for (const r of [offices, doctors, rules, documents, gaps]) if (r.error) throw r.error;
 
@@ -290,6 +297,7 @@ export async function loadOffices(): Promise<OfficeRow[]> {
         toState(office),
         mine(documents.data as (DocumentRow & { office_id: string })[]),
         mine(gaps.data as (GapRow & { office_id: string })[]),
+        mine(absences.data as (MissingCard & { office_id: string })[]),
         ),
       ).steps,
     };

@@ -113,6 +113,12 @@ const PHASES = [
     title: "Multiple doctors per office database changes (primary doctor)",
     after: "reports-retakes.sql",
   },
+  {
+    name: "card-gaps-va-scope",
+    starts: "20261106160000",
+    title: "Missing cards and VA scope database changes",
+    after: "multiple-doctors.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

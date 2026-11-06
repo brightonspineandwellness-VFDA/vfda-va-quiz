@@ -5,7 +5,7 @@
 // loads the data, asks Claude and sends it. No server-only imports, so tests
 // can load it.
 
-import { squashText, tokens } from "@/lib/card-map";
+import { HIGH_PRIORITY_TOPICS, squashText, tokens } from "@/lib/card-map";
 
 export type ReportQuote = { card: string; quote: string };
 
@@ -36,16 +36,20 @@ export type OfficeReportContent = {
   warning: string | null;
   // Missing or conflicting safety items, high priority (not repeated below).
   safety: GapItem[];
+  // Checklist topics the office marked "We don't have this card" (reports
+  // written before this existed have none).
+  missingCards?: GapItem[];
   missing: { workflow: string | null; name: string; items: GapItem[] }[];
   conflicts: GapItem[];
   partial: GapItem[];
   coaching: string[];
 };
 
-export type ReportCounts = { safety: number; missing: number; conflicts: number; partial: number };
+export type ReportCounts = { safety: number; missingCards: number; missing: number; conflicts: number; partial: number };
 
 export const reportCounts = (c: OfficeReportContent): ReportCounts => ({
   safety: c.safety.length,
+  missingCards: c.missingCards?.length ?? 0,
   missing: c.missing.reduce((n, g) => n + g.items.length, 0),
   conflicts: c.conflicts.length,
   partial: c.partial.length,
@@ -210,9 +214,35 @@ export function buildFindings(input: {
   };
 }
 
+// "We don't have this card": one item per topic, phones, escalation and new
+// patients first (high priority).
+export function missingCardItems(topics: { name: string; days: string[]; markedBy: string | null }[]): GapItem[] {
+  return topics
+    .map((t) => {
+      const high = t.name in HIGH_PRIORITY_TOPICS;
+      return {
+        id: `card:${t.name}`,
+        kind: "missing" as const,
+        workflow: null,
+        workflowName: "Missing cards",
+        label: `No ${t.name} card`,
+        vfda: t.days.length
+          ? `${t.days.join(", ")} ${t.days.length > 1 ? "are" : "is"} built from the VFDA master bank and standards ("VFDA standard – office has no card").`
+          : "VFDA standards are used for this topic.",
+        office: null,
+        quotes: [],
+        note: `${high ? `High priority (${HIGH_PRIORITY_TOPICS[t.name]}). ` : ""}Marked "We don't have this card"${t.markedBy ? ` by ${t.markedBy}` : ""}.`,
+        safety: high,
+      };
+    })
+    .sort((a, b) => Number(b.safety) - Number(a.safety));
+}
+
 // Coaching points without Claude (AI_MODE=mock, or Claude failed).
-export function fallbackCoaching(f: ReturnType<typeof buildFindings>): string[] {
+export function fallbackCoaching(f: ReturnType<typeof buildFindings>, missingCards: GapItem[] = []): string[] {
   const points: string[] = [];
+  const urgent = missingCards.filter((c) => c.safety);
+  if (urgent.length) points.push(`Ask the doctor to write the missing ${urgent.map((c) => c.label.replace(/^No | card$/g, "")).join(", ")} card${urgent.length > 1 ? "s" : ""}: until then the VA learns only VFDA's standard way.`);
   if (f.safety.length) {
     points.push(`Start with safety: ${f.safety.slice(0, 3).map((i) => i.label.replace(/^[^:]+: /, "")).join("; ")}. Agree how the VA handles these and add them to the cards.`);
   }
@@ -244,13 +274,16 @@ export function reportBlocks(c: OfficeReportContent): Block[] {
     },
     {
       type: "text",
-      text: `${counts.safety} safety first · ${counts.missing} missing · ${counts.conflicts} conflicts · ${counts.partial} partial`,
+      text: `${counts.safety} safety first · ${counts.missingCards} missing cards · ${counts.missing} missing · ${counts.conflicts} conflicts · ${counts.partial} partial`,
     },
   ];
   if (c.warning) b.push({ type: "muted", text: c.warning });
   b.push({ type: "heading", text: "Safety first (high priority)" });
   if (!c.safety.length) b.push({ type: "muted", text: "Nothing missing or conflicting about emergencies, red flags, patient ID, privacy or VA limits." });
   for (const item of c.safety) b.push({ type: "item", item, high: true });
+  b.push({ type: "heading", text: "Missing cards" });
+  if (!c.missingCards?.length) b.push({ type: "muted", text: "None: the office has a card for every topic (or hasn't said otherwise)." });
+  for (const item of c.missingCards ?? []) b.push({ type: "item", item, high: item.safety });
   b.push({ type: "heading", text: "Missing: what the cards don't cover" });
   if (!c.missing.length) b.push({ type: "muted", text: "Nothing." });
   for (const g of c.missing) {
@@ -284,7 +317,7 @@ const escapeHtml = (s: string) =>
 
 export function reportSubject(c: OfficeReportContent) {
   const n = reportCounts(c);
-  return `Office SOP gap report – ${c.officeName} – ${n.safety} safety, ${n.missing} missing, ${n.conflicts} conflicts, ${n.partial} partial`;
+  return `Office SOP gap report – ${c.officeName} – ${n.safety} safety, ${n.missingCards} missing cards, ${n.missing} missing, ${n.conflicts} conflicts, ${n.partial} partial`;
 }
 
 export function reportEmailHtml(c: OfficeReportContent, link: string) {
@@ -335,7 +368,7 @@ export function reportSlack(c: OfficeReportContent, link: string) {
   return {
     text: [
       `*${slackEscape(`Office SOP gap report: ${c.officeName}`)}*`,
-      `${n.safety ? ":rotating_light: " : ""}${n.safety} safety first · ${n.missing} missing · ${n.conflicts} conflicts · ${n.partial} partial`,
+      `${n.safety ? ":rotating_light: " : ""}${n.safety} safety first · ${n.missingCards} missing cards · ${n.missing} missing · ${n.conflicts} conflicts · ${n.partial} partial`,
       `<${link}|Open the report> (VFDA only)`,
     ].join("\n"),
   };

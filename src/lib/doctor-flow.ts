@@ -3,7 +3,8 @@
 // server-only imports.
 //
 //   1 Profile               the 8 profile-tier questions
-//   2 Upload your cards     card PDFs; "Done uploading" reads them
+//   2 Upload your cards     card PDFs, or "We don't have this card" for a topic;
+//                           "Done uploading" reads them
 //   3 Waiting for VFDA      reading, card mapping, VFDA review and "Send to doctor"
 //   4 Questions for you     only the 12 must-ask rules the cards don't cover,
 //                           with the VFDA suggestion to confirm or change;
@@ -71,6 +72,9 @@ export type DocumentRow = {
   uploaded_by_name?: string | null;
 };
 
+// A checklist topic the office has no card for ("We don't have this card").
+export type MissingCard = { card_name: string; marked_at: string; marked_by?: string | null; marked_by_name?: string | null };
+
 export type GapReason = "not_found" | "partial" | "conflicting" | "edge_case";
 
 export type GapRow = {
@@ -133,6 +137,7 @@ export type FlowInput = {
   office: OfficeState;
   documents: DocumentRow[];
   gaps: GapRow[];
+  missingCards?: MissingCard[];
 };
 
 // Card versions VFDA approved ('needs_doctor') or the doctor already accepted.
@@ -229,10 +234,16 @@ export function buildDoctorFlow(input: FlowInput) {
   const answered = profileSlots.filter((s) => isAnswered(s, directFor(s.key))).length;
   const profileDone = answered === profileSlots.length;
 
-  // Step 2: uploads newer than the last "Done uploading" still need it pressed.
+  // Step 2: uploads newer than the last "Done uploading" still need it pressed,
+  // and every topic needs a card or "We don't have this card" (offices already
+  // sent to the doctor before this existed count as done).
   const uploadedAt = input.office.cardsUploadedAt;
   const newDocuments = input.documents.filter((d) => !uploadedAt || Date.parse(d.created_at) > Date.parse(uploadedAt));
-  const uploadDone = uploadedAt !== null && newDocuments.length === 0;
+  const missingCards = input.missingCards ?? [];
+  const uncoveredTopics = CARD_CHECKLIST.filter(
+    (c) => !input.documents.some((d) => d.card_name === c.name) && !missingCards.some((m) => m.card_name === c.name),
+  ).map((c) => c.name);
+  const uploadDone = uploadedAt !== null && newDocuments.length === 0 && (uncoveredTopics.length === 0 || unlocked);
 
   // Step 3
   const awaitingReview = input.rules.some((r) => r.source === "card_import" && r.status === "proposed");
@@ -292,8 +303,10 @@ export function buildDoctorFlow(input: FlowInput) {
       href: "/doctor/setup/upload",
       state: uploadDone ? "done" : "todo",
       detail: uploadDone
-        ? plural(input.documents.length, "card") + " uploaded"
-        : uploadedAt && newDocuments.length
+        ? plural(input.documents.length, "card") + " uploaded" + (missingCards.length ? `, ${plural(missingCards.length, "topic")} without a card` : "")
+        : uploadedAt && !newDocuments.length && uncoveredTopics.length
+          ? `${plural(uncoveredTopics.length, "topic")} left: upload or mark "We don't have this card"`
+          : uploadedAt && newDocuments.length
           ? `${plural(newDocuments.length, "new card")}: press Done uploading`
           : input.documents.length
             ? `${plural(input.documents.length, "card")}: press Done uploading`
@@ -344,6 +357,8 @@ export function buildDoctorFlow(input: FlowInput) {
     standardsAcceptedAt: input.office.standardsAcceptedAt ?? null,
     standardsAcceptedBy: input.office.standardsAcceptedBy ?? null,
     newDocuments,
+    missingCards,
+    uncoveredTopics,
     awaitingReview,
     profileAnswered: answered,
     profileTotal: profileSlots.length,

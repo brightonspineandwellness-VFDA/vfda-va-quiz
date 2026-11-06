@@ -3,7 +3,8 @@
 // Step 2: card PDFs. The doctor (or VFDA) uploads each PDF straight to the
 // private office-documents bucket from the browser; these actions record it,
 // remove one that hasn't been read yet, and "Done uploading", which starts
-// rule extraction after the response is sent.
+// rule extraction after the response is sent. "We don't have this card"
+// marks a topic the office has no card for.
 
 import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
@@ -35,6 +36,8 @@ export async function addCardDocument(
   if (!/\.pdf$/i.test(file.name)) return fail("Upload the card as a PDF.");
   if (!CARD_NAMES.includes(file.cardName)) return fail("Unknown card.");
   const supabase = await createSessionClient();
+  // A card after all: the topic is no longer missing.
+  await supabase.from("office_card_absences").delete().eq("office_id", officeId).eq("card_name", file.cardName);
   const { error } = await supabase.from("office_documents").insert({
     office_id: officeId,
     kind: "card",
@@ -70,12 +73,14 @@ export async function finishUploading(officeId: string): Promise<ActionResult> {
   const user = await authorize(officeId);
   if (!user) return fail("You can't change this office's cards.");
   const supabase = await createSessionClient();
-  const { count } = await supabase
-    .from("office_documents")
-    .select("id", { count: "exact", head: true })
-    .eq("office_id", officeId)
-    .eq("kind", "card");
-  if (!count) return fail("Upload at least one card first.");
+  const [{ count }, { data: absences }] = await Promise.all([
+    supabase.from("office_documents").select("id", { count: "exact", head: true }).eq("office_id", officeId).eq("kind", "card"),
+    supabase.from("office_card_absences").select("card_name").eq("office_id", officeId),
+  ]);
+  // No cards at all is fine when every topic is marked "We don't have this card".
+  if (!count && !CARD_NAMES.every((n) => (absences ?? []).some((a) => a.card_name === n))) {
+    return fail("Upload at least one card first, or mark the topics you have no card for.");
+  }
 
   // Doctors can't write offices; the checks above stand in for row-level security.
   const db = createAdminClient();
@@ -85,4 +90,28 @@ export async function finishUploading(officeId: string): Promise<ActionResult> {
 
   after(() => runExtraction(officeId));
   return { ok: true, data: null };
+}
+
+// "We don't have this card" for one checklist topic, or undo it. A topic with
+// PDFs can't be marked (remove them first).
+export async function setCardMissing(officeId: string, cardName: string, missing: boolean): Promise<ActionResult> {
+  const user = await authorize(officeId);
+  if (!user) return fail("You can't change this office's cards.");
+  if (!CARD_NAMES.includes(cardName)) return fail("Unknown card.");
+  const supabase = await createSessionClient();
+  if (!missing) {
+    const { error } = await supabase.from("office_card_absences").delete().eq("office_id", officeId).eq("card_name", cardName);
+    return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+  }
+  const { count } = await supabase
+    .from("office_documents")
+    .select("id", { count: "exact", head: true })
+    .eq("office_id", officeId)
+    .eq("kind", "card")
+    .eq("card_name", cardName);
+  if (count) return fail("This topic has a card uploaded. Remove it first.");
+  const { error } = await supabase
+    .from("office_card_absences")
+    .upsert({ office_id: officeId, card_name: cardName, marked_by: user.id }, { onConflict: "office_id,card_name", ignoreDuplicates: true });
+  return error ? fail("Couldn't save. Try again.") : { ok: true, data: null };
 }

@@ -9,7 +9,10 @@ import "server-only";
 // cards, item types and topics a day may have, and which master items it may
 // follow: its own that keep the rules, plus those moved in from other days. A
 // day with no card mapped falls back to those master items filled with the
-// office's rules. The gray card day is written from the gray cards (1-2 items
+// office's rules. A day with no card that a topic marked "We don't have this
+// card" feeds uses the master bank with VFDA's standards instead (the office's
+// own values only where VFDA has no standard, e.g. its EHR's name), labeled
+// "VFDA standard – office has no card". The gray card day is written from the gray cards (1-2 items
 // each). Every build is a new build_version of the day's office_scenarios, as
 // drafts for VFDA to review; older versions are never changed, so a day can be
 // rebuilt after VAs have taken it (they keep their version; new attempts get
@@ -17,7 +20,7 @@ import "server-only";
 // settings.skipped_day_rule) don't follow the day rules.
 
 import { aiErrorMessage } from "@/lib/ai";
-import { GRAY_DAY, GRAY_ITEM_CAP, grayPlan, isMustAsk } from "@/lib/card-map";
+import { GRAY_DAY, GRAY_ITEM_CAP, grayPlan, isMustAsk, NO_CARD_SOURCE, topicDays } from "@/lib/card-map";
 import { asDayType, checkBuiltItem, checkDayItem, dayPool, isSource, parseDayRules, ruleFor, type DayRules } from "@/lib/day-rules";
 import {
   buildOptions,
@@ -255,7 +258,7 @@ export async function loadDaySources(db: Db, officeId: string, dayCode: string) 
   const ctx = await loadOfficeBuild(db, officeId);
   const entry = ctx?.days.find((d) => d.day.code === dayCode);
   if (!ctx || !entry) throw new Error("This day isn't part of the office's training.");
-  const [rules, masters, grayCards, documents, slotRows, workflowRows] = await Promise.all([
+  const [rules, masters, grayCards, documents, slotRows, workflowRows, absences] = await Promise.all([
     db
       .from("office_rules")
       .select("rule_slot_key, rule, source_document_id, source")
@@ -278,24 +281,14 @@ export async function loadDaySources(db: Db, officeId: string, dayCode: string) 
       .not("imported_at", "is", null)
       .contains("schedule_days", [dayCode])
       .order("created_at"),
-    db.from("rule_slots").select("key, tier"),
+    db.from("rule_slots").select("key, tier, suggested_answer, default_answer"),
     db
       .from("workflows")
       .select("code, name, trigger, steps, definition_of_done, va_can_decide, requires_approval, immediate_escalation, prohibited_actions")
       .order("code"),
+    db.from("office_card_absences").select("card_name").eq("office_id", officeId),
   ]);
-  const ruleRows = (must(rules) ?? []) as RuleForBuild[];
-  const values = placeholderValues(
-    ruleRows,
-    (settingOf(ctx.settings, "derived_placeholders") ?? []) as DerivedPlaceholder[],
-    officeId,
-  );
-  const ruleList = Object.entries(values).map(([key, value]) => ({ key, value }));
-  // What Claude may fall back on where the cards are silent: the VFDA
-  // standards (as this office has them) and the must-ask rules.
-  const tierOf = new Map(((must(slotRows) ?? []) as { key: string; tier: string }[]).map((s) => [s.key, s.tier]));
   const rule = ruleFor(ctx.dayRules, dayCode);
-  const standards = rule.standards === false ? [] : ruleList.filter((r) => tierOf.get(r.key) === "default" || isMustAsk(r.key));
   const mapped: CardSource[] = ((must(documents) ?? []) as {
     id: string;
     card_title: string;
@@ -321,6 +314,33 @@ export async function loadDaySources(db: Db, officeId: string, dayCode: string) 
   // Only the cards the day rules allow (W1D1: Basics and VA Onboarding).
   const cards = mapped.filter((c) => isSource(c.title, rule.sources));
 
+  // Topics the office has no card for that feed this day. With no card for
+  // the day at all, it's written from VFDA's master bank and standards.
+  const noCard = ((must(absences) ?? []) as { card_name: string }[])
+    .map((a) => a.card_name)
+    .filter((name) => topicDays(name).includes(dayCode));
+  const vfdaOnly = !cards.length && noCard.length > 0;
+
+  const slotList = (must(slotRows) ?? []) as { key: string; tier: string; suggested_answer: unknown; default_answer: unknown }[];
+  const vfdaRules: RuleForBuild[] = slotList
+    .map((s) => ({ rule_slot_key: s.key, rule: s.suggested_answer ?? s.default_answer, source_document_id: null, source: "vfda_default" }))
+    .filter((r) => r.rule !== null && r.rule !== undefined);
+  const officeRules = (must(rules) ?? []) as RuleForBuild[];
+  // VFDA-only: VFDA's standards, and the office's own values only where VFDA has none.
+  const ruleRows = vfdaOnly
+    ? [...officeRules.filter((r) => !vfdaRules.some((v) => v.rule_slot_key === r.rule_slot_key)), ...vfdaRules]
+    : officeRules;
+  const values = placeholderValues(
+    ruleRows,
+    (settingOf(ctx.settings, "derived_placeholders") ?? []) as DerivedPlaceholder[],
+    officeId,
+  );
+  const ruleList = Object.entries(values).map(([key, value]) => ({ key, value }));
+  // What Claude may fall back on where the cards are silent: the VFDA
+  // standards (as this office has them) and the must-ask rules.
+  const tierOf = new Map(slotList.map((s) => [s.key, s.tier]));
+  const standards = rule.standards === false ? [] : ruleList.filter((r) => tierOf.get(r.key) === "default" || isMustAsk(r.key));
+
   // Every standard day's master items, so items can move between days.
   const masterList = (must(masters) ?? []) as MasterScenario[];
   const byDay = new Map<string, DraftScenario[]>();
@@ -337,6 +357,8 @@ export async function loadDaySources(db: Db, officeId: string, dayCode: string) 
     ruleList,
     standards,
     cards,
+    noCard,
+    vfdaOnly,
     rules: ctx.dayRules,
     // The day's own master items, in the day's types: its item count and mix.
     slots,
@@ -428,6 +450,11 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
         });
         const extra = await writeCardDay({ day: entry.day, slots: short, pool, cards, workflows, standards, boxes, rules, existing: drafts.map((d) => d.stem), log });
         drafts = [...drafts, ...cardDrafts(extra, short, [])];
+      }
+      // The office has no card for this day's topics: say so on every question.
+      if (src.vfdaOnly) {
+        log({ item: "day", field: "source_card", value: src.noCard.join(", "), reason: `no card for ${src.noCard.join(", ")}: written from the VFDA master bank and standards` });
+        drafts = drafts.map((d) => ({ ...d, source_card: NO_CARD_SOURCE, source_quote: d.source_quote ?? d.code }));
       }
     } else if (entry.kind === "gray" && cards.length) {
       // Gray cards: 1-2 items each, patient-facing or risky cards first.

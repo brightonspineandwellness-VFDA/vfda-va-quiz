@@ -28,7 +28,8 @@ export function Certificate({ row, back }: { row: GridRow; back: ReactNode }) {
         <p className="text-sm tracking-widest text-foreground/60 uppercase">Certificate of completion</p>
         <h1 className="text-3xl font-semibold">{row.vaName}</h1>
         <p>
-          has completed VA training for <span className="font-semibold">{row.officeName}</span> and is certified on every workflow:
+          has completed VA training for <span className="font-semibold">{row.officeName}</span> and is certified on every workflow
+          of their role{row.scope !== "All roles" ? ` (${row.scope})` : ""}:
         </p>
         <table className="text-left text-sm">
           <tbody>

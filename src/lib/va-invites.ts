@@ -4,11 +4,12 @@ import "server-only";
 // (Resend), start date, move to another office, deactivate. Service role:
 // creating logins and assigning roles bypasses row-level security.
 
-import { loadCertGrid } from "@/lib/certifications";
+import { loadCertGrid, recalculateCertifications } from "@/lib/certifications";
 import { escapeHtml } from "@/lib/report";
 import { appUrl, sendEmail, tryTwice } from "@/lib/reports";
 import { createAdminClient } from "@/lib/supabase/server";
 import { showDate } from "@/lib/va-flow";
+import { normalizeScope, SCOPE_KEYS, type ScopeKey } from "@/lib/va-scope";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -28,6 +29,7 @@ export type OfficeVa = {
   startDate: string | null;
   status: VaStatus;
   lastSignIn: string | null;
+  scope: ScopeKey[];
 };
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -42,7 +44,7 @@ export async function loadOfficeVas(officeId: string): Promise<OfficeVa[]> {
   const db = createAdminClient();
   const { data, error } = await db
     .from("profiles")
-    .select("id, full_name, email, va_start_date, deactivated_at")
+    .select("id, full_name, email, va_start_date, deactivated_at, va_scope")
     .eq("role", "va")
     .eq("office_id", officeId)
     .order("full_name");
@@ -63,7 +65,7 @@ export async function loadOfficeVas(officeId: string): Promise<OfficeVa[]> {
           : grid.rows.find((r) => r.vaId === v.id)?.allCertified
             ? "certified"
             : "training";
-      return { id: v.id, name: v.full_name || v.email, email: v.email, startDate: v.va_start_date, status, lastSignIn };
+      return { id: v.id, name: v.full_name || v.email, email: v.email, startDate: v.va_start_date, status, lastSignIn, scope: normalizeScope(v.va_scope) };
     })
     .sort((a, b) => Number(a.status === "deactivated") - Number(b.status === "deactivated"));
 }
@@ -76,6 +78,8 @@ export async function inviteVa(input: {
   email: string;
   startDate: string;
   origin: string | null;
+  // What this VA does; all roles when left out.
+  scope?: ScopeKey[];
 }): Promise<{ ok: boolean; message: string }> {
   const name = input.name.trim();
   const email = input.email.trim().toLowerCase();
@@ -111,6 +115,7 @@ export async function inviteVa(input: {
       office_id: office.id,
       va_start_date: input.startDate,
       deactivated_at: null,
+      va_scope: scopeColumn(input.scope ?? SCOPE_KEYS),
     },
     { onConflict: "id" },
   );
@@ -153,6 +158,19 @@ export async function moveVa(vaId: string, officeId: string, startDate: string):
   if (va.office_id === officeId) return "The VA is already at this office.";
   const { error } = await db.from("profiles").update({ office_id: officeId, va_start_date: startDate }).eq("id", vaId).eq("role", "va");
   return error ? "Couldn't move the VA. Try again." : null;
+}
+
+// Everything is stored as null (the default), so roles added later are included.
+const scopeColumn = (scope: ScopeKey[]) => (SCOPE_KEYS.every((k) => scope.includes(k)) ? null : scope);
+
+// "What this VA does": changes which days come next. Days already started,
+// and every score, stay.
+export async function setVaScope(vaId: string, scope: ScopeKey[]): Promise<string | null> {
+  const db = createAdminClient();
+  const { data, error } = await db.from("profiles").update({ va_scope: scopeColumn(scope) }).eq("id", vaId).eq("role", "va").select("id");
+  if (error || !data?.length) return "Couldn't save. Try again.";
+  await recalculateCertifications(vaId);
+  return null;
 }
 
 // Deactivated: no access at all (the login is blocked too). Their history stays.

@@ -23,6 +23,18 @@ export const MUST_ASK_KEYS = [
 const MUST_ASK = new Set<string>(MUST_ASK_KEYS);
 export const isMustAsk = (key: string | null | undefined) => !!key && MUST_ASK.has(key);
 
+// Questions written for a topic the office has no card for: the VFDA master
+// bank and VFDA standards only.
+export const NO_CARD_SOURCE = "VFDA standard – office has no card";
+
+// Missing cards that matter most (gap report: high priority).
+export const HIGH_PRIORITY_TOPICS: Record<string, string> = {
+  "Texting & Phone Scripts": "phones",
+  "New Patient Checklist": "new patients",
+  Slack: "escalation",
+  "VA Office Rules": "escalation and VA limits",
+};
+
 export const CARD_COLORS = ["green", "orange", "yellow", "gray", "other"] as const;
 export type CardColor = (typeof CARD_COLORS)[number];
 
@@ -40,6 +52,7 @@ export function weekOfColor(color: CardColor | null | undefined): 1 | 2 | null {
 
 // The upload checklist names (src/lib/doctor-flow.ts), with the day(s) each feeds
 // when the card's own title doesn't say.
+export const topicDays = (topic: string) => CHECKLIST_DAYS[topic] ?? [];
 const CHECKLIST_DAYS: Record<string, string[]> = {
   "VA Onboarding": ["W1D1"],
   "Open & Close": ["W1D1"],

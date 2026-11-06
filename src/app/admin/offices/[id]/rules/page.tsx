@@ -92,7 +92,7 @@ async function AdminRules({ params }: { params: Promise<{ id: string }> }) {
       <section className="flex flex-col gap-3">
         <h2 className="text-xl font-semibold">1. Cards</h2>
         <NoPatientInfoWarning />
-        <CardUpload officeId={officeId} documents={documents} />
+        <CardUpload officeId={officeId} documents={documents} missing={setup.missingCards} />
         <div className="flex flex-wrap items-center gap-3">
           {flow.newDocuments.length > 0 && (
             <ActionButton

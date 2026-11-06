@@ -5,7 +5,7 @@
 // item, the master items a day may use as its pattern) and to recheck days
 // already built (src/lib/scenario-actions.ts).
 
-import { nameMatches } from "@/lib/card-map";
+import { nameMatches, NO_CARD_SOURCE } from "@/lib/card-map";
 import type { CorrectResponse } from "@/lib/scenario-build";
 import { normName } from "@/lib/source-match";
 
@@ -366,6 +366,8 @@ export function checkBuiltItem(
   if (broken) return broken;
   const rule = ruleFor(rules, day);
   const from = item.source_card || item.part_title;
+  // The office has no card for this topic: VFDA's master bank stands in.
+  if (item.source_card === NO_CARD_SOURCE) return null;
   if (rule.sources && !isSource(from, rule.sources)) {
     return { field: "source_card", value: from, reason: `${day} is written only from ${rule.sources.join(" and ")}` };
   }

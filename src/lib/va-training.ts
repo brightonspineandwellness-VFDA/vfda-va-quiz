@@ -13,6 +13,7 @@ import type { CurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import { writeRetakeVariants } from "@/lib/scenario-ai";
 import { createAdminClient } from "@/lib/supabase/server";
+import { normalizeScope } from "@/lib/va-scope";
 import {
   addTrainingDays,
   ANSWER_BOXES,
@@ -82,7 +83,7 @@ export async function loadToday(user: CurrentUser) {
   if (!user.officeId) return { kind: "no_office" as const };
   const officeId = user.officeId;
 
-  const [office, days, settings, unlocks, proofs, scenarios, officeDays] = await Promise.all([
+  const [office, days, settings, unlocks, proofs, scenarios, officeDays, me] = await Promise.all([
     db
       .from("offices")
       .select("name, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
@@ -99,6 +100,7 @@ export async function loadToday(user: CurrentUser) {
       .eq("version", "A")
       .eq("is_repeat_variant", false),
     db.from("office_days").select("schedule_day, live_version").eq("office_id", officeId).not("live_version", "is", null),
+    db.from("profiles").select("va_scope").eq("id", user.id).maybeSingle(),
   ]);
   const officeRow = must(office);
   if (!officeRow) return { kind: "no_office" as const };
@@ -110,15 +112,23 @@ export async function loadToday(user: CurrentUser) {
   const liveVersions = new Map(((must(officeDays) ?? []) as { schedule_day: string; live_version: number }[]).map((d) => [d.schedule_day, d.live_version]));
   const approved = new Set(liveVersions.keys());
 
-  const path = trainingPath({
+  const unlockRows = (must(unlocks) ?? []) as UnlockRow[];
+  const pathInput = {
     sequence: (settingValue(settingRows, "sequence") as string[] | undefined) ?? [],
     days: (must(days) ?? []) as DayRow[],
     conditions: (settingValue(settingRows, "conditions") as Record<string, string> | undefined) ?? {},
     profile: officeProfile(officeRow),
     officeScenarioDays: new Set(scenarioRows.map((s) => s.schedule_day)),
+  };
+  // Only the VA's roles; a day they already opened stays.
+  const scope = normalizeScope(must(me)?.va_scope);
+  const path = trainingPath({
+    ...pathInput,
+    scope,
+    started: new Set(unlockRows.filter((u) => u.status !== "locked").map((u) => u.schedule_day)),
   });
   const proofRows = (must(proofs) ?? []) as ProofRow[];
-  const today = buildToday({ path, unlocks: (must(unlocks) ?? []) as UnlockRow[], approved });
+  const today = buildToday({ path, unlocks: unlockRows, approved });
 
   // Open the day (once).
   if (today.kind === "open" && today.current.status !== "open") {

@@ -11,7 +11,9 @@ import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
 import { resetDay } from "@/lib/va-admin-actions";
-import { attemptLabel, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
+import { applies } from "@/lib/interview";
+import { attemptLabel, officeProfile, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
+import { dayInScope, normalizeScope, scopeText } from "@/lib/va-scope";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
 // "Send again" sends a report while you wait.
@@ -53,9 +55,9 @@ const minutes = (s: number | null) => (s === null ? "–" : `${Math.max(1, Math.
 async function Vas() {
   await requireRole("vfda_admin");
   const supabase = await createSessionClient();
-  const [vas, offices, sequence, unlocks, attempts, proofs, dayAttempts] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email, office_id, va_start_date").eq("role", "va").is("deactivated_at", null).order("full_name"),
-    supabase.from("offices").select("id, name"),
+  const [vas, offices, sequence, unlocks, attempts, proofs, dayAttempts, scheduleDays, conditions] = await Promise.all([
+    supabase.from("profiles").select("id, full_name, email, office_id, va_start_date, va_scope").eq("role", "va").is("deactivated_at", null).order("full_name"),
+    supabase.from("offices").select("id, name, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool"),
     supabase.from("settings").select("value").eq("key", "sequence").maybeSingle(),
     supabase.from("day_unlocks").select("va_id, office_id, schedule_day, status, cards_done_at, prep_notified_at"),
     supabase
@@ -75,7 +77,20 @@ async function Vas() {
       .select("id, va_id, office_id, schedule_day, build_version, submitted_at, archived_at, archived_by")
       .eq("kind", "day")
       .order("started_at"),
+    supabase.from("schedule_days").select("code, condition"),
+    supabase.from("settings").select("value").eq("key", "conditions").maybeSingle(),
   ]);
+  // The office's days left out of a VA's roles (days they already started stay theirs).
+  const outOfRole = (va: { office_id: string | null; va_scope: string[] | null }, started: string[]) => {
+    const office = (offices.data ?? []).find((o) => o.id === va.office_id);
+    if (!office) return [];
+    const scope = normalizeScope(va.va_scope);
+    const conds = (conditions.data?.value ?? {}) as Record<string, string>;
+    return ((sequence.data?.value as string[] | undefined) ?? []).filter((code) => {
+      const day = (scheduleDays.data ?? []).find((d) => d.code === code);
+      return day && applies(day.condition, conds, officeProfile(office)) && !dayInScope(scope, code) && !started.includes(code);
+    });
+  };
   const resetBy = [...new Set((dayAttempts.data ?? []).map((a) => a.archived_by).filter((x): x is string => !!x))];
   const { data: resetters } = resetBy.length ? await supabase.from("profiles").select("id, email").in("id", resetBy) : { data: [] };
   const emailOf = new Map((resetters ?? []).map((p) => [p.id, p.email as string]));
@@ -236,6 +251,10 @@ async function Vas() {
             </div>
 
             <p className="text-sm">
+              <span className="font-medium">Role: </span>
+              {scopeText(normalizeScope(va.va_scope))}
+            </p>
+            <p className="text-sm">
               <span className="font-medium">Days: </span>
               {days.length
                 ? days
@@ -251,6 +270,12 @@ async function Vas() {
                     )
                     .join(" · ")
                 : "not started"}
+              {outOfRole(va, days.filter((d) => unlockStatus(d.status) !== "locked").map((d) => d.schedule_day)).map((code) => (
+                <span key={code} className="text-foreground/60">
+                  {" · "}
+                  {code} Not in this VA&apos;s role
+                </span>
+              ))}
             </p>
 
             {mine.length > 0 && (

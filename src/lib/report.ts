@@ -41,6 +41,8 @@ export type AttemptReport = {
   sinceStart?: string;
   // The office's Primary doctor (every doctor of the office gets the report).
   primaryDoctor?: string;
+  // What the VA does ("All roles", or e.g. "Scheduling, Phones").
+  scope?: string;
   // A day's retake: its first try (the official score) question by question.
   retake?: RetakeComparison;
   items: ReportItem[];
@@ -93,6 +95,7 @@ export function reportSections(r: AttemptReport) {
       : `${alert}${r.vaName} – ${r.dayCode} – ${RESULT_LABELS[r.result]} – ${r.officeName}`,
     summary: [
       ["VA", r.vaName],
+      ...(r.scope ? [["VA's role", r.scope] as [string, string]] : []),
       ["Office", r.officeName],
       ...(r.primaryDoctor ? [["Primary doctor", r.primaryDoctor] as [string, string]] : []),
       ["Day", `${r.dayCode}: ${r.dayTitle}${rt ? " (RETAKE)" : ""}`],
@@ -212,6 +215,7 @@ export function reportSlack(r: AttemptReport, link: string): { text: string } {
     r.retake
       ? `RETAKE ${r.points}/${r.maxPoints} (${RESULT_LABELS[r.result]}) · first try ${r.retake.first.points}/${r.retake.first.max} (official) · ${minutesText(r.timeSpent)}`
       : `${RESULT_LABELS[r.result]} · first try ${r.points}/${r.maxPoints} · trend: ${slackEscape(trendText(r.trend))} · ${minutesText(r.timeSpent)}`,
+    r.scope ? `VA's role: ${slackEscape(r.scope)}` : "",
     r.retake
       ? `*First try → retake* (bold = missed the first time): ${s.retakeLines
           .map((l) => (l.missed ? `*${slackEscape(l.text)}*` : slackEscape(l.text)))

@@ -10,13 +10,14 @@ import "server-only";
 
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
-import { isMustAsk, quoteIn } from "@/lib/card-map";
+import { isMustAsk, quoteIn, topicDays } from "@/lib/card-map";
 import { directAnswer, doctorCardAnswer, slotApplies, type RuleRow } from "@/lib/doctor-flow";
 import { applies, profileFromAnswers } from "@/lib/interview";
 import { loadOfficeSetup } from "@/lib/interview-data";
 import {
   buildFindings,
   fallbackCoaching,
+  missingCardItems,
   reportCounts,
   reportEmailHtml,
   reportEmailText,
@@ -70,7 +71,7 @@ async function loadInputs(db: Db, officeId: string) {
       .not("imported_at", "is", null)
       .order("created_at"),
   ]);
-  const { interview, rules } = setup;
+  const { interview, rules, missingCards } = setup;
   const profile = profileFromAnswers(interview.answers);
   const dayConditions = Object.fromEntries(interview.quizzes.map((q) => [q.code, q.condition]));
   const flow = { dayConditions, conditions: interview.conditions, profile };
@@ -137,7 +138,17 @@ async function loadInputs(db: Db, officeId: string) {
   const cards: ReportCard[] = docs
     .filter((d) => !d.skip && (d.extracted_text ?? "").trim())
     .map((d) => ({ id: d.id, title: d.card_title || d.card_name || d.file_name, text: d.extracted_text ?? "" }));
-  return { officeName: interview.office.name, checkpoints, standards, cards, allCards: docs.map((d) => d.card_title || d.card_name || d.file_name) };
+  const onPathDays = new Set(days.filter((d) => applies(d.condition, interview.conditions, profile)).map((d) => d.code));
+  return {
+    officeName: interview.office.name,
+    checkpoints,
+    standards,
+    cards,
+    allCards: docs.map((d) => d.card_title || d.card_name || d.file_name),
+    missingCards: missingCardItems(
+      missingCards.map((m) => ({ name: m.card_name, days: topicDays(m.card_name).filter((d) => onPathDays.has(d)), markedBy: m.marked_by_name ?? null })),
+    ),
+  };
 }
 
 type Inputs = NonNullable<Awaited<ReturnType<typeof loadInputs>>>;
@@ -232,7 +243,7 @@ function compareByWords(inputs: Inputs) {
 
 const CoachingSchema = z.object({ points: z.array(z.string()).describe("3 to 5 coaching points") });
 
-async function coachingWithClaude(officeName: string, findings: ReturnType<typeof buildFindings>) {
+async function coachingWithClaude(officeName: string, findings: ReturnType<typeof buildFindings>, missingCards: { label: string; note: string }[]) {
   const line = (i: { kind: string; workflow: string | null; label: string; vfda: string; office: string | null }) =>
     `- [${i.kind}${i.workflow ? ` ${i.workflow}` : ""}] ${i.label}. VFDA: ${i.vfda}${i.office ? ` Cards: ${i.office}` : ""}`;
   const text = `Dr. Matt (VFDA) will talk with the doctor of ${officeName} about gaps between the office's cards and
@@ -242,6 +253,9 @@ the findings below.
 
 Safety first (high priority):
 ${findings.safety.map(line).join("\n") || "(none)"}
+
+Missing cards (the office has no card; VFDA standards are used):
+${missingCards.map((c) => `- ${c.label}. ${c.note}`).join("\n") || "(none)"}
 
 Missing:
 ${findings.missing.flatMap((g) => g.items).slice(0, 40).map(line).join("\n") || "(none)"}
@@ -282,10 +296,10 @@ export async function buildOfficeReport(db: Db, officeId: string): Promise<Offic
     }
   }
   const findings = buildFindings({ checkpoints: inputs.checkpoints, standards: inputs.standards, ...compared });
-  let coaching = fallbackCoaching(findings);
+  let coaching = fallbackCoaching(findings, inputs.missingCards);
   if (live) {
     try {
-      coaching = await coachingWithClaude(inputs.officeName, findings);
+      coaching = await coachingWithClaude(inputs.officeName, findings, inputs.missingCards);
     } catch (e) {
       console.error("Coaching points not written by Claude", officeId, e);
     }
@@ -298,6 +312,7 @@ export async function buildOfficeReport(db: Db, officeId: string): Promise<Offic
     method,
     warning,
     ...findings,
+    missingCards: inputs.missingCards,
     coaching,
   };
 }

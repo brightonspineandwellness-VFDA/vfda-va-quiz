@@ -6,6 +6,7 @@
 // these return.
 
 import { applies, normalizeRemoteAccess, type Profile } from "@/lib/interview";
+import { dayInScope, type ScopeKey } from "@/lib/va-scope";
 
 // "describe": one box, the VA's own words (describe items).
 export type AnswerFormat = "steps_say_doc" | "say_do_book" | "describe";
@@ -93,19 +94,24 @@ export function officeProfile(o: OfficeFlags): Profile {
 
 // The VA's days, in settings.sequence order: every day whose condition holds
 // for the office, plus any day the office has scenarios for anyway (a skipped
-// day's extra phone scenarios).
+// day's extra phone scenarios). With a scope, only the days of the VA's roles
+// (src/lib/va-scope.ts), plus any day they already started: a scope changed
+// later adds or removes only days not started yet.
 export function trainingPath(input: {
   sequence: string[];
   days: DayRow[];
   conditions: Record<string, string>;
   profile: Profile;
   officeScenarioDays: Set<string>;
+  scope?: ScopeKey[];
+  started?: Set<string>;
 }): DayRow[] {
   const byCode = new Map(input.days.map((d) => [d.code, d]));
   return input.sequence
     .map((code) => byCode.get(code))
     .filter((d): d is DayRow => !!d)
-    .filter((d) => input.officeScenarioDays.has(d.code) || applies(d.condition, input.conditions, input.profile));
+    .filter((d) => input.officeScenarioDays.has(d.code) || applies(d.condition, input.conditions, input.profile))
+    .filter((d) => !input.scope || dayInScope(input.scope, d.code) || !!input.started?.has(d.code));
 }
 
 // ---------------------------------------------------------------------------

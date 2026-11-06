@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useActionState, useState, useTransition } from "react";
 import { inputClass } from "@/components/interview/answer-inputs";
+import { ScopeCheckboxes } from "@/components/va/va-scope";
 import { inviteVaAction, moveVaAction, type InviteVaState } from "@/lib/va-invite-actions";
 
 export function InviteVaForm({ officeId, defaultStart }: { officeId: string; defaultStart: string }) {
@@ -25,6 +26,7 @@ export function InviteVaForm({ officeId, defaultStart }: { officeId: string; def
           <input name="startDate" type="date" required defaultValue={defaultStart} className={inputClass} />
         </label>
       </div>
+      <ScopeCheckboxes />
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"

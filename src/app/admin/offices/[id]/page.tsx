@@ -5,6 +5,7 @@ import { InviteDoctorForm } from "@/components/doctors/invite-doctor";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { InviteVaForm, MoveVaForm } from "@/components/va/invite-va";
+import { VaScopeForm } from "@/components/va/va-scope";
 import { StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
 import { removeDoctorAction, resendDoctorLinkAction, setPrimaryDoctorAction } from "@/lib/doctor-invite-actions";
@@ -142,6 +143,7 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
                 ) : (
                   <>
                     <StartDateForm vaId={va.id} value={va.startDate} />
+                    <VaScopeForm vaId={va.id} scope={va.scope} />
                     <MoveVaForm vaId={va.id} offices={offices ?? []} defaultStart={defaultStart} />
                     <div className="flex flex-wrap gap-2">
                       <ActionButton
