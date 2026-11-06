@@ -1,28 +1,31 @@
 import "server-only";
 
 // The office SOP gap report on the server (VFDA only; doctors never see it).
-// Written after VFDA finishes reviewing an office's card rules ("Send to
-// doctor"), again after any re-import once its rules are reviewed, and on
+// Written once the cards are read (and again after any re-import), and on
 // demand. Claude checks each workflow step against the office's cards (word
 // matching with AI_MODE=mock, or when Claude fails) and writes the coaching
-// points. Emailed, with the PDF, to VFDA_REPORT_EMAIL only, and summarized on
-// Slack; what went out is kept on the office_reports row.
+// points. The full report (with quotes) is on the admin page; the email to
+// VFDA_REPORT_EMAIL only carries the short brief with its PDF attached, and
+// Slack a 3-line summary. What went out is kept on the office_reports row.
 
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
 import { isMustAsk, quoteIn, topicDays } from "@/lib/card-map";
+import { CARD_CHECKLIST } from "@/lib/doctor-flow";
+import { applyMustAskFallbacks } from "@/lib/must-ask";
 import { directAnswer, doctorCardAnswer, slotApplies, type RuleRow } from "@/lib/doctor-flow";
 import { applies, profileFromAnswers } from "@/lib/interview";
 import { loadOfficeSetup } from "@/lib/interview-data";
 import {
+  briefLines,
+  briefReport,
+  briefSubject,
   buildFindings,
+  escapeHtml,
   fallbackCoaching,
   missingCardItems,
   reportCounts,
-  reportEmailHtml,
-  reportEmailText,
   reportSlack,
-  reportSubject,
   sameText,
   wordMatch,
   type CheckVerdict,
@@ -31,6 +34,7 @@ import {
   type ReportCard,
   type RuleVerdict,
   type StandardInput,
+  versionId,
 } from "@/lib/office-report";
 import { officeReportPdf } from "@/lib/office-report-pdf";
 import { appUrl, officeDoctors, postSlack, sendEmail, tryTwice, vfdaEmails } from "@/lib/reports";
@@ -145,6 +149,7 @@ async function loadInputs(db: Db, officeId: string) {
     standards,
     cards,
     allCards: docs.map((d) => d.card_title || d.card_name || d.file_name),
+    noCardTopics: CARD_CHECKLIST.map((t) => t.name).filter((n) => !setup.documents.some((d) => d.card_name === n)),
     missingCards: missingCardItems(
       missingCards.map((m) => ({ name: m.card_name, days: topicDays(m.card_name).filter((d) => onPathDays.has(d)), markedBy: m.marked_by_name ?? null })),
     ),
@@ -153,15 +158,15 @@ async function loadInputs(db: Db, officeId: string) {
 
 type Inputs = NonNullable<Awaited<ReturnType<typeof loadInputs>>>;
 
-// The rule versions worth comparing with the standard: one card version, or
-// only the doctor's VA Office Rules card.
-const comparable = (s: StandardInput) => {
-  if (!s.standard) return null;
-  const distinct = s.cardVersions.filter((v, i) => s.cardVersions.findIndex((x) => sameText(x.text, v.text)) === i);
-  if (distinct.length === 1) return distinct[0].text;
-  if (!distinct.length && s.doctor?.card) return s.doctor.text;
-  return null;
-};
+// The rule versions to compare with the standard: each card's own, and the
+// doctor's VA Office Rules card.
+const comparable = (s: StandardInput) =>
+  s.standard
+    ? [
+        ...s.cardVersions.map((v) => ({ id: versionId(s.key, v.card), text: v.text })),
+        ...(s.doctor?.card ? [{ id: versionId(s.key, s.doctor.card), text: s.doctor.text }] : []),
+      ]
+    : [];
 
 // ---------------------------------------------------------------------------
 // Claude: steps against the cards, rule versions against the standards
@@ -181,7 +186,7 @@ const CompareSchema = z.object({
       card_says: z.string().nullable().describe("For partial or conflict: what the card says, in short plain words"),
     }),
   ),
-  rules: z.array(z.object({ key: z.string(), verdict: z.enum(["same", "different"]) })),
+  rules: z.array(z.object({ key: z.string().describe("The rule version id, exactly as listed (KEY|card)"), verdict: z.enum(["same", "different"]) })),
 });
 
 async function compareWithClaude(inputs: Inputs) {
@@ -193,12 +198,13 @@ async function compareWithClaude(inputs: Inputs) {
       return `## ${c.title}\n${text}`;
     })
     .join("\n\n");
-  const rules = inputs.standards.map((s) => ({ s, office: comparable(s) })).filter((x) => x.office);
+  const rules = inputs.standards.flatMap((s) => comparable(s).map((v) => ({ s, v })));
   const text = `For each checkpoint (a step or immediate-escalation rule of a VFDA workflow), say whether the office's
 cards cover it: covered, partial (only part of it), missing, or conflict (a card says to do something different).
 For covered, partial and conflict, name the card and quote it. Answer every checkpoint id.
 
-Then for each rule, say whether the office's version means the same as the VFDA standard ("same": the same
+Then for each rule version (one per card; compare each with the standard only, never two cards with each other),
+say whether it means the same as the VFDA standard ("same": the same
 instruction, even in other words or with the office's own names and details filled in) or something different
 ("different": a different time, channel, limit, person or step).
 
@@ -211,7 +217,7 @@ ${inputs.checkpoints.map((c) => `- ${c.id} (${c.workflow} ${c.workflowName}): ${
 </checkpoints>
 
 <rules>
-${rules.map(({ s, office }) => `- ${s.key}: ${s.question}\n  VFDA standard: ${s.standard}\n  Office: ${office}`).join("\n") || "(none)"}
+${rules.map(({ s, v }) => `- ${v.id}: ${s.question}\n  VFDA standard: ${s.standard}\n  Card: ${v.text}`).join("\n") || "(none)"}
 </rules>`;
   const out = await askStructured(CompareSchema, { system: SYSTEM, effort: "medium", maxTokens: 64000, content: [{ type: "text", text }] });
   const byTitle = new Map(inputs.cards.map((c) => [c.title, c]));
@@ -227,17 +233,14 @@ ${rules.map(({ s, office }) => `- ${s.key}: ${s.question}\n  VFDA standard: ${s.
   for (const c of inputs.checkpoints) if (!verdicts.has(c.id)) verdicts.set(c.id, wordMatch(c, inputs.cards));
   const ruleVerdicts = new Map<string, RuleVerdict>();
   for (const r of out.rules) ruleVerdicts.set(r.key, r.verdict);
-  for (const { s, office } of rules) if (!ruleVerdicts.has(s.key)) ruleVerdicts.set(s.key, sameText(office!, s.standard!) ? "same" : "different");
+  for (const { s, v } of rules) if (!ruleVerdicts.has(v.id)) ruleVerdicts.set(v.id, sameText(v.text, s.standard!) ? "same" : "different");
   return { verdicts, ruleVerdicts };
 }
 
 function compareByWords(inputs: Inputs) {
   const verdicts = new Map(inputs.checkpoints.map((c) => [c.id, wordMatch(c, inputs.cards)] as const));
   const ruleVerdicts = new Map<string, RuleVerdict>();
-  for (const s of inputs.standards) {
-    const office = comparable(s);
-    if (office) ruleVerdicts.set(s.key, sameText(office, s.standard!) ? "same" : "different");
-  }
+  for (const s of inputs.standards) for (const v of comparable(s)) ruleVerdicts.set(v.id, sameText(v.text, s.standard!) ? "same" : "different");
   return { verdicts, ruleVerdicts };
 }
 
@@ -281,6 +284,8 @@ ${findings.partial.slice(0, 20).map(line).join("\n") || "(none)"}`;
 // ---------------------------------------------------------------------------
 
 export async function buildOfficeReport(db: Db, officeId: string): Promise<OfficeReportContent | null> {
+  // Must-ask rules no card covers use VFDA's suggestion before they're compared.
+  await applyMustAskFallbacks(officeId).catch((e) => console.error("Must-ask defaults not set", officeId, e));
   const inputs = await loadInputs(db, officeId);
   if (!inputs) return null;
   const live = aiMode() !== "mock";
@@ -313,6 +318,7 @@ export async function buildOfficeReport(db: Db, officeId: string): Promise<Offic
     warning,
     ...findings,
     missingCards: inputs.missingCards,
+    noCardTopics: inputs.noCardTopics,
     coaching,
   };
 }
@@ -353,12 +359,15 @@ export async function sendOfficeReport(reportId: string): Promise<{ emailError: 
     if (!to.length) emailError = "VFDA_REPORT_EMAIL isn't set.";
     else {
       const pdf = Buffer.from(await officeReportPdf(row.content)).toString("base64");
-      const filename = `SOP gap report - ${row.content.officeName.replace(/[^\w .-]+/g, "")}.pdf`;
+      const filename = `VFDA report - ${row.content.officeName.replace(/[^\w .-]+/g, "")}.pdf`;
+      const brief = briefReport(row.content);
+      const lines = briefLines(brief, link);
+      const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45;color:#111">${lines
+        .map((l) => (!l ? "" : /^[A-Z .]+$/.test(l) ? `<h3 style="margin:16px 0 4px;font-size:14px">${escapeHtml(l)}</h3>` : `<p style="margin:2px 0">${escapeHtml(l)}</p>`))
+        .join("")}<p style="margin-top:16px;color:#666">The PDF is attached. VFDA only: never for the doctor.</p></div>`;
       for (const address of to) {
         const error = await tryTwice(() =>
-          sendEmail(address, reportSubject(row.content), reportEmailHtml(row.content, link), reportEmailText(row.content, link), `office-report-${row.id}-${address}`, [
-            { filename, content: pdf },
-          ]),
+          sendEmail(address, briefSubject(brief), html, lines.join("\n"), `office-report-${row.id}-${address}`, [{ filename, content: pdf }]),
         );
         if (error) emailError = `${address}: ${error}`;
       }
@@ -376,22 +385,16 @@ export async function sendOfficeReport(reportId: string): Promise<{ emailError: 
   return { emailError, slackError };
 }
 
-// Called when VFDA may have finished reviewing: after "Send to doctor", after
-// each card rule reviewed, and when re-imported cards are read. Writes a
-// report once the office has been sent to the doctor, its cards are read,
-// every card rule is reviewed, and no report was written since the cards
-// were last read.
+// Called when the cards have been read (rules apply at once; nothing waits for
+// review). Writes a report when no report was written since the cards were
+// last read.
 export async function reportIfDue(officeId: string, by: string | null = null): Promise<string | null> {
   const db = createAdminClient();
   const office = must(
-    await db.from("offices").select("sent_to_doctor_at, extraction_status, extracted_at").eq("id", officeId).maybeSingle(),
-  ) as { sent_to_doctor_at: string | null; extraction_status: string; extracted_at: string | null } | null;
-  if (!office?.sent_to_doctor_at || office.extraction_status !== "done") return null;
-  const [{ count: proposed }, latest] = await Promise.all([
-    db.from("office_rules").select("id", { count: "exact", head: true }).eq("office_id", officeId).eq("source", "card_import").eq("status", "proposed"),
-    db.from("office_reports").select("created_at").eq("office_id", officeId).order("created_at", { ascending: false }).limit(1),
-  ]);
-  if (proposed) return null;
+    await db.from("offices").select("extraction_status, extracted_at").eq("id", officeId).maybeSingle(),
+  ) as { extraction_status: string; extracted_at: string | null } | null;
+  if (office?.extraction_status !== "done") return null;
+  const latest = await db.from("office_reports").select("created_at").eq("office_id", officeId).order("created_at", { ascending: false }).limit(1);
   const last = must(latest)?.[0]?.created_at as string | undefined;
   if (last && office.extracted_at && Date.parse(last) >= Date.parse(office.extracted_at)) return null;
   return generateOfficeReport(officeId, last ? "reimport" : "review", by);

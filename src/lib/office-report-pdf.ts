@@ -1,12 +1,13 @@
-// The office SOP gap report as a PDF (the page's "Download PDF" and the
-// email attachment), from the same blocks as the email (src/lib/office-report.ts).
-// Standard Helvetica only, so text is kept to the characters it can show.
+// VFDA's report as a PDF (the page's "Download PDF" and the email
+// attachment): the short brief (src/lib/office-report.ts briefReport), one
+// or two pages, bullets only, no quotes. Standard Helvetica only, so text is
+// kept to the characters it can show.
 
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
-import { itemLines, reportBlocks, type OfficeReportContent } from "@/lib/office-report";
+import { briefReport, type BriefList, type OfficeReportContent } from "@/lib/office-report";
 
 const PAGE = { width: 612, height: 792 }; // US Letter
-const MARGIN = 50;
+const MARGIN = 48;
 const WIDTH = PAGE.width - MARGIN * 2;
 
 // Helvetica's WinAnsi encoding: plain quotes, dashes and arrows; anything else dropped.
@@ -50,15 +51,13 @@ function wrap(text: string, font: PDFFont, size: number, width: number): string[
   return out;
 }
 
-type Line = { text: string; font: PDFFont; size: number; color: ReturnType<typeof rgb>; indent: number };
-
 export async function officeReportPdf(content: OfficeReportContent): Promise<Uint8Array> {
+  const b = briefReport(content);
   const doc = await PDFDocument.create();
-  doc.setTitle(pdfText(`Office SOP gap report: ${content.officeName}`));
+  doc.setTitle(pdfText(`VFDA report: ${b.officeName}`));
   doc.setAuthor("VFDA");
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const italic = await doc.embedFont(StandardFonts.HelveticaOblique);
   const ink = rgb(0.07, 0.07, 0.07);
   const muted = rgb(0.4, 0.4, 0.4);
   const red = rgb(0.72, 0.11, 0.11);
@@ -69,88 +68,58 @@ export async function officeReportPdf(content: OfficeReportContent): Promise<Uin
     page = doc.addPage([PAGE.width, PAGE.height]);
     y = PAGE.height - MARGIN;
   };
-  const lines = (text: string, font: PDFFont, size: number, color = ink, indent = 0): Line[] =>
-    wrap(text, font, size, WIDTH - indent).map((t) => ({ text: t, font, size, color, indent }));
-  const draw = (ls: Line[], gapAfter: number, box?: "high" | "normal") => {
-    const height = ls.reduce((h, l) => h + l.size * 1.35, 0);
-    // Taller than a page: line by line, across pages, without the box.
-    if (height > PAGE.height - MARGIN * 2 - 20) {
-      for (const l of ls) draw([l], 0);
-      y -= gapAfter;
-      return;
+  const text = (s: string, o: { font?: PDFFont; size?: number; color?: ReturnType<typeof rgb>; indent?: number; gap?: number } = {}) => {
+    const font = o.font ?? regular;
+    const size = o.size ?? 9.5;
+    const indent = o.indent ?? 0;
+    for (const line of wrap(s, font, size, WIDTH - indent)) {
+      if (y - size * 1.3 < MARGIN + 16) newPage();
+      y -= size * 1.3;
+      page.drawText(line, { x: MARGIN + indent, y: y + size * 0.3, size, font, color: o.color ?? ink });
     }
-    if (y - height < MARGIN + 20) newPage();
-    if (box) {
-      page.drawRectangle({
-        x: MARGIN,
-        y: y - height - 4,
-        width: WIDTH,
-        height: height + 8,
-        color: box === "high" ? rgb(0.99, 0.93, 0.93) : rgb(0.96, 0.96, 0.96),
-        borderWidth: 0,
-      });
-      page.drawRectangle({ x: MARGIN, y: y - height - 4, width: 3, height: height + 8, color: box === "high" ? red : rgb(0.75, 0.75, 0.75) });
-    }
-    for (const l of ls) {
-      y -= l.size * 1.35;
-      page.drawText(l.text, { x: MARGIN + l.indent, y: y + l.size * 0.3, size: l.size, font: l.font, color: l.color });
-    }
-    y -= gapAfter;
+    y -= o.gap ?? 1;
   };
-
   // A heading stays with what follows it.
-  const keepWithNext = (space: number) => {
-    if (y - space < MARGIN + 20) newPage();
+  const heading = (s: string, color = ink) => {
+    if (y - 50 < MARGIN + 16) newPage();
+    y -= 6;
+    text(s, { font: bold, size: 11, color, gap: 2 });
+  };
+  const bullets = (xs: string[], none: string, color = ink) => {
+    if (!xs.length) text(`- ${none}`, { color: muted, indent: 6 });
+    for (const x of xs) text(`- ${x}`, { color, indent: 6, size: 9 });
+  };
+  const more = (l: BriefList) => {
+    if (l.more) text(`+${l.more} more on the admin page`, { color: muted, indent: 6, size: 8.5 });
   };
 
-  for (const b of reportBlocks(content)) {
-    switch (b.type) {
-      case "title":
-        draw(lines(b.text, bold, 16), 6);
-        break;
-      case "heading":
-        y -= 8;
-        keepWithNext(90);
-        draw(lines(b.text, bold, 13), 4);
-        break;
-      case "subheading":
-        keepWithNext(70);
-        draw(lines(b.text, bold, 11, muted), 6);
-        break;
-      case "muted":
-        draw(lines(b.text, regular, 9.5, muted), 4);
-        break;
-      case "text":
-        draw(lines(b.text, regular, 10.5), 4);
-        break;
-      case "item": {
-        const l = itemLines(b.item, b.high);
-        const pad = 10;
-        draw(
-          [
-            ...lines(l.title, bold, 10, b.high ? red : ink, pad),
-            ...lines(l.vfda, regular, 9.5, ink, pad),
-            ...(l.office ? lines(l.office, regular, 9.5, ink, pad) : []),
-            ...l.quotes.flatMap((q) => lines(q, italic, 9, muted, pad)),
-            ...lines(l.note, regular, 9, muted, pad),
-          ],
-          10,
-          b.high ? "high" : "normal",
-        );
-        break;
-      }
-    }
-  }
+  // Header: office, doctor, date, cards uploaded, counts.
+  text(`VFDA report: ${b.officeName}`, { font: bold, size: 15, gap: 3 });
+  text(
+    [b.doctor ? `Doctor: ${b.doctor}` : null, new Date(b.date).toLocaleDateString("en-US", { dateStyle: "medium" }), "VFDA only - not for the doctor"]
+      .filter(Boolean)
+      .join("  ·  "),
+    { color: muted, size: 9 },
+  );
+  text(`Cards uploaded (${b.cards.length}): ${b.cards.join(", ") || "none"}`, { color: muted, size: 9, gap: 4 });
+  text(`Safety ${b.counts.safety}   ·   Missing ${b.counts.missing}   ·   Different ${b.counts.different}`, { font: bold, size: 10.5, gap: 2 });
+
+  heading("Safety", red);
+  bullets(b.safety, "Nothing: no card contradicts or skips red flags, the emergency script, the patient ID check or privacy.", red);
+  heading("Missing vs VFDA standard");
+  bullets(b.missing.shown, "Nothing missing.");
+  more(b.missing);
+  heading("Different from VFDA standard");
+  bullets(b.different.shown, "Nothing different.");
+  more(b.different);
+  heading("Missing cards");
+  bullets(b.missingCards, "None: the office has a card for every topic.");
+  heading("Coaching points for Dr. Matt");
+  bullets(b.coaching, "None.");
 
   const pages = doc.getPages();
   pages.forEach((p, i) =>
-    p.drawText(pdfText(`VFDA only - not for the doctors · page ${i + 1} of ${pages.length}`), {
-      x: MARGIN,
-      y: MARGIN / 2,
-      size: 8,
-      font: regular,
-      color: muted,
-    }),
+    p.drawText(pdfText(`VFDA only - not for the doctor · page ${i + 1} of ${pages.length}`), { x: MARGIN, y: MARGIN / 2, size: 8, font: regular, color: muted }),
   );
   return doc.save();
 }

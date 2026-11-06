@@ -17,9 +17,10 @@ export type GapItem = {
   workflow: string | null;
   workflowName: string;
   label: string;
-  // The VFDA standard or workflow step, and (conflict, partial) what the cards say.
+  // The VFDA standard or workflow step, and (conflict, partial) what the card says, and which card.
   vfda: string;
   office: string | null;
+  card?: string | null;
   quotes: ReportQuote[];
   note: string;
   // Emergencies, red flags, patient ID, privacy or VA limits: high priority.
@@ -39,6 +40,8 @@ export type OfficeReportContent = {
   // Checklist topics the office marked "We don't have this card" (reports
   // written before this existed have none).
   missingCards?: GapItem[];
+  // Every checklist topic with no card uploaded (marked or not).
+  noCardTopics?: string[];
   missing: { workflow: string | null; name: string; items: GapItem[] }[];
   conflicts: GapItem[];
   partial: GapItem[];
@@ -64,6 +67,7 @@ const SAFETY_KEYS = new Set([
   "RED_FLAGS",
   "URGENT_RULE",
   "PATIENT_ID_CHECK",
+  "PHI_CHANNEL_RULE",
   "VA_AUTHORITY",
   "PROHIBITED_PHRASES",
   "ESCALATION_CONTACT",
@@ -105,8 +109,10 @@ export type StandardInput = {
   doctor: { text: string; card: string | null; quote: string | null } | null;
 };
 
-// Rule versions Claude (or the word check) compared with the standard.
+// Rule versions Claude (or the word check) compared with the standard, one per
+// card (versionId).
 export type RuleVerdict = "same" | "different";
+export const versionId = (key: string, card: string) => `${key}|${card}`;
 
 export const sameText = (a: string, b: string) => squashText(a).replace(/[.\s]+$/, "") === squashText(b).replace(/[.\s]+$/, "");
 
@@ -138,48 +144,40 @@ export function buildFindings(input: {
 
   for (const s of input.standards) {
     const w = one(s);
+    const safety = isSafety(`${s.question} ${s.standard ?? ""}`, s.key);
     const base = {
       workflow: w.code,
       workflowName: w.name,
       label: `${s.mustAsk ? "Office rule" : "VFDA standard"}: ${s.question}`,
       vfda: s.standard ?? "(no VFDA standard: agree it with the doctor)",
+      safety,
     };
-    const id = `rule:${s.key}`;
-    const safety = isSafety(`${s.question} ${s.standard ?? ""}`, s.key);
-    const quotes = s.cardVersions.filter((v) => v.quote).map((v) => ({ card: v.card, quote: v.quote! }));
-    const versions = s.cardVersions.filter((v, i) => s.cardVersions.findIndex((x) => sameText(x.text, v.text)) === i);
-    const differs = input.ruleVerdicts.get(s.key) === "different";
-
-    if (versions.length > 1) {
-      items.push({ ...base, id, kind: "conflict", office: versions.map((v) => `${v.card}: ${v.text}`).join("\n"), quotes, note: "The cards say different things.", safety });
-    } else if (versions.length === 1 && s.standard && differs) {
-      items.push({ ...base, id, kind: "conflict", office: versions[0].text, quotes, note: "The card is different from the VFDA standard.", safety });
-    } else if (versions.length === 1 && s.cardVersions.every((v) => v.partial)) {
-      items.push({ ...base, id, kind: "partial", office: versions[0].text, quotes, note: "The card covers only part of this.", safety });
-    } else if (versions.length === 0 && s.doctor?.card && s.standard && differs) {
-      // The doctor's VA Office Rules card.
+    // Each card on its own against the standard: two of the office's own
+    // cards may differ (different processes), that's never flagged.
+    const versions = [
+      ...s.cardVersions.map((v) => ({ ...v, id: versionId(s.key, v.card) })),
+      ...(s.doctor?.card ? [{ text: s.doctor.text, card: s.doctor.card, quote: s.doctor.quote, partial: false, id: versionId(s.key, s.doctor.card) }] : []),
+    ];
+    for (const v of versions) {
+      const quotes = v.quote ? [{ card: v.card, quote: v.quote }] : [];
+      if (s.standard && input.ruleVerdicts.get(v.id) === "different") {
+        items.push({ ...base, id: `rule:${s.key}:${v.card}`, kind: "conflict", office: v.text, card: v.card, quotes, note: "The card is different from the VFDA standard." });
+      } else if (v.partial) {
+        items.push({ ...base, id: `rule:${s.key}:${v.card}`, kind: "partial", office: v.text, card: v.card, quotes, note: "The card covers only part of this." });
+      }
+    }
+    if (!versions.length) {
       items.push({
         ...base,
-        id,
-        kind: "conflict",
-        office: s.doctor.text,
-        quotes: s.doctor.quote ? [{ card: s.doctor.card, quote: s.doctor.quote }] : [],
-        note: "The doctor's answer is different from VFDA's suggestion.",
-        safety,
-      });
-    } else if (versions.length === 0 && !s.doctor?.card) {
-      items.push({
-        ...base,
-        id,
+        id: `rule:${s.key}`,
         kind: "missing",
         office: null,
         quotes: [],
         note: s.doctor
-          ? `Not on the cards; the doctor answered it in the app: ${s.doctor.text}`
+          ? `Not on the cards; set in the app: ${s.doctor.text}`
           : s.standard
             ? "Not on the cards; the VFDA standard applies."
-            : "Not on the cards, and no answer yet.",
-        safety,
+            : "Not on the cards, and no VFDA standard.",
       });
     }
   }
@@ -190,8 +188,8 @@ export function buildFindings(input: {
     const quotes = v.card && v.quote ? [{ card: v.card, quote: v.quote }] : [];
     const safety = c.escalation || isSafety(c.text);
     const base = { id: c.id, workflow: c.workflow, workflowName: c.workflowName, label: c.label, vfda: c.text, safety, quotes };
-    if (v.status === "conflict") items.push({ ...base, kind: "conflict", office: v.cardSays, note: `${v.card ?? "A card"} says something different.` });
-    else if (v.status === "partial") items.push({ ...base, kind: "partial", office: v.cardSays, note: `${v.card ?? "A card"} covers only part of this step.` });
+    if (v.status === "conflict") items.push({ ...base, kind: "conflict", office: v.cardSays, card: v.card, note: `${v.card ?? "A card"} says something different.` });
+    else if (v.status === "partial") items.push({ ...base, kind: "partial", office: v.cardSays, card: v.card, note: `${v.card ?? "A card"} covers only part of this step.` });
     else items.push({ ...base, kind: "missing", office: null, note: "No card covers this step." });
   }
 
@@ -306,70 +304,162 @@ export function itemLines(i: GapItem, high: boolean) {
   return {
     title: `${high ? "HIGH PRIORITY · " : ""}${KIND_LABELS[i.kind]}${i.workflow ? ` · ${i.workflow}` : ""} · ${i.label}`,
     vfda: `VFDA: ${i.vfda}`,
-    office: i.office ? `Cards: ${i.office}` : null,
+    office: i.office ? `Card${i.card ? ` (${i.card})` : ""}: ${i.office}` : null,
     quotes: i.quotes.map((q) => `${q.card}: "${q.quote}"`),
     note: i.note,
   };
 }
 
-const escapeHtml = (s: string) =>
+export const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
-export function reportSubject(c: OfficeReportContent) {
-  const n = reportCounts(c);
-  return `Office SOP gap report – ${c.officeName} – ${n.safety} safety, ${n.missingCards} missing cards, ${n.missing} missing, ${n.conflicts} conflicts, ${n.partial} partial`;
-}
-
-export function reportEmailHtml(c: OfficeReportContent, link: string) {
-  const e = escapeHtml;
-  const html = reportBlocks(c)
-    .map((b) => {
-      switch (b.type) {
-        case "title":
-          return `<h2 style="margin:0 0 6px;font-size:18px">${e(b.text)}</h2>`;
-        case "heading":
-          return `<h3 style="margin:22px 0 6px;font-size:15px">${e(b.text)}</h3>`;
-        case "subheading":
-          return `<h4 style="margin:12px 0 4px;font-size:14px;color:#333">${e(b.text)}</h4>`;
-        case "muted":
-          return `<p style="margin:4px 0;color:#666">${e(b.text)}</p>`;
-        case "text":
-          return `<p style="margin:4px 0">${e(b.text)}</p>`;
-        case "item": {
-          const l = itemLines(b.item, b.high);
-          const box = b.high ? "border-left:4px solid #b91c1c;background:#fdecec" : "border-left:4px solid #ccc";
-          const side = l.office
-            ? `<table style="border-collapse:collapse;width:100%;margin-top:4px"><tr><td style="vertical-align:top;width:50%;padding:4px 8px 4px 0">${e(l.vfda)}</td><td style="vertical-align:top;padding:4px 0">${e(l.office)}</td></tr></table>`
-            : `<p style="margin:4px 0">${e(l.vfda)}</p>`;
-          return `<div style="margin:6px 0;padding:6px 10px;${box}"><b>${e(l.title)}</b>${side}${l.quotes
-            .map((q) => `<p style="margin:2px 0;color:#444;font-style:italic">${e(q)}</p>`)
-            .join("")}<p style="margin:2px 0;color:#666">${e(l.note)}</p></div>`;
-        }
-      }
-    })
-    .join("\n");
-  return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45;color:#111">${html}
-<p style="margin-top:20px"><a href="${e(link)}">Open the report</a> (VFDA login required). The PDF is attached.</p></div>`;
-}
-
-export function reportEmailText(c: OfficeReportContent, link: string) {
-  const lines = reportBlocks(c).flatMap((b) => {
-    if (b.type !== "item") return b.type === "heading" ? ["", b.text.toUpperCase()] : [b.text];
-    const l = itemLines(b.item, b.high);
-    return [`- ${l.title}`, `    ${l.vfda}`, ...(l.office ? [`    ${l.office}`] : []), ...l.quotes.map((q) => `    ${q}`), `    ${l.note}`];
-  });
-  return `${lines.join("\n")}\n\nOpen the report (VFDA login required): ${link}`;
-}
 
 const slackEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// Slack: 3 lines (office, counts, link).
 export function reportSlack(c: OfficeReportContent, link: string) {
-  const n = reportCounts(c);
+  const b = briefReport(c);
   return {
     text: [
-      `*${slackEscape(`Office SOP gap report: ${c.officeName}`)}*`,
-      `${n.safety ? ":rotating_light: " : ""}${n.safety} safety first · ${n.missingCards} missing cards · ${n.missing} missing · ${n.conflicts} conflicts · ${n.partial} partial`,
+      `*${slackEscape(`VFDA report: ${c.officeName}`)}*${b.doctor ? ` · ${slackEscape(b.doctor)}` : ""}`,
+      `${b.counts.safety ? ":rotating_light: " : ""}Safety ${b.counts.safety} · Missing ${b.counts.missing} · Different ${b.counts.different} · ${b.missingCards.length} topic(s) without a card`,
       `<${link}|Open the report> (VFDA only)`,
     ].join("\n"),
   };
+}
+
+// ---------------------------------------------------------------------------
+// The brief: what the PDF, the email and Slack carry. Bullets only, one line
+// each, plain language, against the VFDA standard; no quotes (they stay on
+// the admin page). Each list stops at 10 with "+N more on the admin page".
+// ---------------------------------------------------------------------------
+
+const SAFETY_TOPICS: Record<string, string> = {
+  RED_FLAGS: "Red flags",
+  EMERGENCY_PROTOCOL: "Emergency script",
+  PATIENT_ID_CHECK: "Patient ID check",
+  PHI_CHANNEL_RULE: "Privacy (patient information)",
+};
+const LIMIT = 10;
+// One line on the PDF (Letter, 9 pt Helvetica).
+const LINE = 110;
+
+// One line: whitespace squashed, cut with an ellipsis.
+export const oneLine = (s: string, max = LINE) => {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+};
+const topicOf = (i: GapItem) => i.label.replace(/^[^:]+:\s*/, "").replace(/\?$/, "");
+// A rule's short name from its key: NO_SHOW_RULE -> "No-show", EOD_REPORT -> "EOD report".
+const ACRONYMS = new Set(["eod", "phi", "id", "np", "va", "rof", "ehr"]);
+export function ruleName(i: Pick<GapItem, "id" | "label">) {
+  const key = /^rule:([A-Z0-9_]+)/.exec(i.id)?.[1];
+  if (!key) return topicOf(i as GapItem);
+  const words = key.toLowerCase().replace(/_rule$/, "").split("_").map((w) => (ACRONYMS.has(w) ? w.toUpperCase() : w));
+  const name = words.join(words.length === 2 && ["no", "same", "after", "out", "follow"].includes(words[0]) ? "-" : " ");
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+const cardOf = (i: GapItem) => i.card || "A card";
+// Each part shortened on its own, so both sides of a comparison always show.
+const part = (s: string | null | undefined, max: number) => oneLine(s ?? "", max);
+
+export type BriefList = { shown: string[]; more: number; total: number };
+export type Brief = {
+  officeName: string;
+  doctor: string | null;
+  date: string;
+  cards: string[];
+  counts: { safety: number; missing: number; different: number };
+  safety: string[];
+  missing: BriefList;
+  different: BriefList;
+  missingCards: string[];
+  coaching: string[];
+};
+
+const cut = (lines: string[]): BriefList => ({ shown: lines.slice(0, LIMIT), more: Math.max(0, lines.length - LIMIT), total: lines.length });
+
+export function briefReport(c: OfficeReportContent): Brief {
+  const all = [...c.safety, ...c.missing.flatMap((g) => g.items), ...c.conflicts, ...c.partial];
+  const locked = (i: GapItem) => Object.keys(SAFETY_TOPICS).find((k) => i.id === `rule:${k}` || i.id.startsWith(`rule:${k}:`));
+
+  // Safety: the cards against the four safety standards (always VFDA's).
+  const safety = Object.entries(SAFETY_TOPICS).flatMap(([key, topic]) =>
+    all
+      .filter((i) => locked(i) === key && i.kind !== "partial")
+      .map((i) =>
+        i.kind === "missing"
+          ? oneLine(`${topic}: no card covers it – VFDA standard applies`)
+          : oneLine(`${topic}: ${part(cardOf(i), 24)} says "${part(i.office, 34)}" – VFDA standard applies`),
+      ),
+  );
+
+  // Missing, most important first: safety, office rules, VFDA standards, partly covered, then workflow steps.
+  const rank = (i: GapItem) =>
+    (i.safety ? 0 : 10) + (i.id.startsWith("rule:") ? (i.label.startsWith("Office rule") ? 0 : 1) : i.kind === "partial" ? 2 : i.id.startsWith("escalation:") ? 3 : 4);
+  const missing = all
+    .filter((i) => !locked(i) && (i.kind === "missing" || i.kind === "partial"))
+    .sort((a, b) => rank(a) - rank(b))
+    .map((i) => {
+      if (i.kind === "partial") return oneLine(`${part(i.id.startsWith("rule:") ? ruleName(i) : topicOf(i), 30)}: only partly on ${part(cardOf(i), 24)} – VFDA: ${part(i.vfda, 34)}`);
+      if (i.id.startsWith("rule:")) {
+        return i.vfda.startsWith("(no VFDA standard")
+          ? oneLine(`No ${ruleName(i).toLowerCase()} rule – no VFDA default either`)
+          : oneLine(`No ${part(ruleName(i).toLowerCase(), 30)} rule – using VFDA default: ${part(i.vfda, 50)}`);
+      }
+      return oneLine(`${part(i.workflowName, 26)}: no card covers "${part(i.vfda, 66)}"`);
+    });
+
+  const different = all
+    .filter((i) => !locked(i) && i.kind === "conflict")
+    .sort((a, b) => Number(b.safety) - Number(a.safety))
+    .map((i) => oneLine(`${part(i.id.startsWith("rule:") ? ruleName(i) : `${i.workflowName}: ${topicOf(i)}`, 26)} – Card: ${part(i.office || "(different)", 34)} · VFDA: ${part(i.vfda, 34)}`));
+
+  return {
+    officeName: c.officeName,
+    doctor: c.primaryDoctor ?? null,
+    date: c.generatedAt,
+    cards: c.cards,
+    counts: { safety: safety.length, missing: missing.length, different: different.length },
+    safety,
+    missing: cut(missing),
+    different: cut(different),
+    missingCards: (c.noCardTopics ?? (c.missingCards ?? []).map((m) => m.label.replace(/^No | card$/g, ""))).map((t) =>
+      oneLine(`${t}: no card${t in HIGH_PRIORITY_TOPICS ? ` (high priority: ${HIGH_PRIORITY_TOPICS[t]})` : ""} – VFDA standard used`),
+    ),
+    coaching: c.coaching.slice(0, 3).map((p) => oneLine(p, 200)),
+  };
+}
+
+export function briefSubject(b: Brief) {
+  return `VFDA report – ${b.officeName} – ${b.counts.safety} safety, ${b.counts.missing} missing, ${b.counts.different} different`;
+}
+
+// The brief as text lines (email), in order.
+export function briefLines(b: Brief, link: string) {
+  const more = (l: BriefList) => (l.more ? [`  +${l.more} more on the admin page`] : []);
+  const bullets = (xs: string[], none: string) => (xs.length ? xs.map((x) => `- ${x}`) : [`- ${none}`]);
+  return [
+    `${b.officeName} · ${b.doctor ? `Doctor: ${b.doctor} · ` : ""}${new Date(b.date).toDateString()}`,
+    `Cards uploaded (${b.cards.length}): ${b.cards.join(", ") || "none"}`,
+    `Safety ${b.counts.safety} · Missing ${b.counts.missing} · Different ${b.counts.different}`,
+    "",
+    "SAFETY",
+    ...bullets(b.safety, "Nothing: the cards don't contradict or skip the safety standards."),
+    "",
+    "MISSING VS VFDA STANDARD",
+    ...bullets(b.missing.shown, "Nothing missing."),
+    ...more(b.missing),
+    "",
+    "DIFFERENT FROM VFDA STANDARD",
+    ...bullets(b.different.shown, "Nothing different."),
+    ...more(b.different),
+    "",
+    "MISSING CARDS",
+    ...bullets(b.missingCards, "None."),
+    "",
+    "COACHING POINTS FOR DR. MATT",
+    ...bullets(b.coaching, "None."),
+    "",
+    `Full report with quotes (VFDA only): ${link}`,
+  ];
 }

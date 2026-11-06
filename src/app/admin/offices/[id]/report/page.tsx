@@ -98,8 +98,7 @@ async function OfficeReport({
 
       {!report ? (
         <p className="text-foreground/70">
-          No report yet. It&apos;s written when VFDA finishes reviewing the office&apos;s card rules (Send to doctor), and
-          again after new cards are read.
+          No report yet. It&apos;s written each time the office&apos;s cards are read.
         </p>
       ) : (
         <>

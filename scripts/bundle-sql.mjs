@@ -125,6 +125,12 @@ const PHASES = [
     title: "Extra card workflows database changes (WF-G workflows from extra cards, W2D5 situational)",
     after: "card-gaps-va-scope.sql",
   },
+  {
+    name: "simple-setup-bank",
+    starts: "20261106180000",
+    title: "Simpler setup (no doctor questions, no rule review) and scenario bank database changes",
+    after: "extra-card-workflows.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

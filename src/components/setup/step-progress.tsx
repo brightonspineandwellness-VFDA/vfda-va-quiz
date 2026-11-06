@@ -35,8 +35,7 @@ export function StepProgress({ steps, current, links = true }: { steps: Step[]; 
                 }`}
               >
                 {i + 1}. {step.label}
-                {step.state === "done" && !step.skipped && <span className="ml-1 text-green-700 dark:text-green-400">✓</span>}
-                {step.skipped && <span className="ml-1 text-foreground/50">(skipped)</span>}
+                {step.state === "done" && <span className="ml-1 text-green-700 dark:text-green-400">✓</span>}
                 {step.state === "locked" && (
                   <span className="ml-1" aria-label="Locked">
                     🔒

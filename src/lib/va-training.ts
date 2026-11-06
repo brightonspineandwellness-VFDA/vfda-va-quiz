@@ -13,6 +13,7 @@ import type { CurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import { writeRetakeVariants } from "@/lib/scenario-ai";
 import { createAdminClient } from "@/lib/supabase/server";
+import { LOCKED_STANDARDS } from "@/lib/card-map";
 import { normalizeScope } from "@/lib/va-scope";
 import {
   addTrainingDays,
@@ -460,8 +461,11 @@ const ruleText = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
-// The office's accepted rules for one workflow, for the grader.
-export async function officeRulesFor(db: Db, officeId: string, workflow: string) {
+// The office's accepted rules for one workflow, for the grader. Each card's
+// rules apply to the items written from that card (sourceDocumentId): other
+// cards' versions are left out, never merged. VFDA's safety standards always
+// apply; every other card rule wins over the VFDA standard.
+export async function officeRulesFor(db: Db, officeId: string, workflow: string, sourceDocumentId: string | null = null) {
   const slots = must(await db.from("rule_slots").select("key").contains("workflows", [workflow])) ?? [];
   if (!slots.length) return [];
   const rows =
@@ -476,11 +480,20 @@ export async function officeRulesFor(db: Db, officeId: string, workflow: string)
           slots.map((s) => s.key),
         ),
     ) ?? [];
-  // A direct answer (doctor or VFDA) wins over the doctor's VA Office Rules
-  // card, and that over another card's version.
-  const rank = (r: { source_document_id: string | null; source: string }) =>
-    !r.source_document_id ? 0 : r.source === "doctor_card" ? 1 : 2;
-  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
+  const rank = (r: { rule_slot_key: string; source_document_id: string | null; source: string }) =>
+    LOCKED_STANDARDS.includes(r.rule_slot_key) && r.source === "vfda_default"
+      ? -1
+      : r.source === "doctor" || r.source === "vfda"
+        ? 0
+        : r.source === "doctor_card"
+          ? 1
+          : r.source === "card_import"
+            ? r.source_document_id === sourceDocumentId
+              ? 2
+              : 3
+            : 4;
+  const usable = rows.filter((r) => r.source !== "card_import" || !sourceDocumentId || r.source_document_id === sourceDocumentId);
+  const sorted = [...usable].sort((a, b) => rank(a) - rank(b));
   const seen = new Set<string>();
   return sorted
     .filter((r) => !seen.has(r.rule_slot_key) && seen.add(r.rule_slot_key))
@@ -513,7 +526,7 @@ export async function submitAnswer(
   const shownId = phase === "first" ? scenarioId : item.repeat_scenario_id!;
   const { data: key } = await ctx.db
     .from("office_scenarios")
-    .select("type, answer_format, options, answer, correct_response, critical_fail, escalation_level, workflow, stem")
+    .select("type, answer_format, options, answer, correct_response, critical_fail, escalation_level, workflow, stem, source_document_id")
     .eq("id", shownId)
     .eq("office_id", ctx.user.officeId)
     .maybeSingle();
@@ -574,7 +587,7 @@ export async function submitAnswer(
     correctResponse: key.correct_response,
     criticalFail: key.critical_fail,
     escalationLevel: key.escalation_level,
-    officeRules: await officeRulesFor(ctx.db, ctx.user.officeId, key.workflow),
+    officeRules: await officeRulesFor(ctx.db, ctx.user.officeId, key.workflow, key.source_document_id),
     rubric: settings.rubric,
     rules: settings.gradingRules,
     navigationRule: settings.navigationRule,

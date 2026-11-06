@@ -99,19 +99,16 @@ async function Offices() {
 
 function SetupStep({ steps }: { steps: Parameters<typeof currentStep>[0] }) {
   const current = currentStep(steps);
-  // VFDA's own step, shown even when the doctor still has an earlier one open.
-  const vfda = steps.find((s) => s.key === "review" && s.state === "waiting");
   return (
     <span>
       {current ? (
         <>
           Step {current.index + 1} of {steps.length}: {current.step.label}
-          {current.step !== vfda && <span className="block text-xs text-foreground/60">{current.step.detail}</span>}
+          <span className="block text-xs text-foreground/60">{current.step.detail}</span>
         </>
       ) : (
         <span className="text-green-700 dark:text-green-400">All {steps.length} steps done ✓</span>
       )}
-      {vfda && <span className="block text-xs font-medium text-amber-700 dark:text-amber-300">Waiting on VFDA: {vfda.detail}</span>}
     </span>
   );
 }

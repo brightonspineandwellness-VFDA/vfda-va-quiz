@@ -23,6 +23,11 @@ export const MUST_ASK_KEYS = [
 const MUST_ASK = new Set<string>(MUST_ASK_KEYS);
 export const isMustAsk = (key: string | null | undefined) => !!key && MUST_ASK.has(key);
 
+// VFDA's safety standards: they apply at every office, whatever its cards say
+// (a card's version is kept only for the report). Every other card rule wins
+// over the VFDA standard.
+export const LOCKED_STANDARDS = ["RED_FLAGS", "EMERGENCY_PROTOCOL", "PATIENT_ID_CHECK", "PHI_CHANNEL_RULE"];
+
 // Questions written for a topic the office has no card for: the VFDA master
 // bank and VFDA standards only.
 export const NO_CARD_SOURCE = "VFDA standard – office has no card";

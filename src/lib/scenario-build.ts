@@ -4,6 +4,7 @@
 // with the office's accepted rules. Claude's part (src/lib/scenario-ai.ts) is
 // checked here too, so nothing malformed reaches the database.
 
+import { LOCKED_STANDARDS } from "@/lib/card-map";
 import type { ItemType } from "@/lib/day-rules";
 import { applies, checkAnswerValue, MATRIX_COLUMNS, type InterviewQuestion, type MatrixRow, type Profile } from "@/lib/interview";
 
@@ -123,8 +124,9 @@ export function placeholderValues(
   seed: string,
 ): Record<string, string> {
   const raw = new Map<string, unknown>();
+  // VFDA's safety standards always win.
   const rank = (r: RuleForBuild) =>
-    r.source === "vfda_default" ? 0 : r.source === "doctor_card" ? 2 : r.source_document_id ? 1 : 3;
+    r.source === "vfda_default" ? (LOCKED_STANDARDS.includes(r.rule_slot_key) ? 9 : 0) : r.source === "doctor_card" ? 2 : r.source_document_id ? 1 : 3;
   for (const r of [...rules].sort((a, b) => rank(a) - rank(b))) {
     raw.set(r.rule_slot_key, r.rule);
   }

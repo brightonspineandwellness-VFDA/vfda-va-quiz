@@ -115,6 +115,9 @@ answer format, the mix of multiple choice and situational items, difficulty).
   (source_card "${STANDARDS_SOURCE}", quote the standard). If there's no standard either, drop that master
   item and write a different item from what the cards do cover. Never ask the doctor; never invent office policy.
 - Every item keeps the day rules below: its allowed cards, item types and banned topics.
+- Each item follows its own card's protocol; two cards may do things differently, and that's fine. But VFDA's
+  safety standards always win, whatever a card says: RED_FLAGS, EMERGENCY_PROTOCOL, PATIENT_ID_CHECK and
+  PHI_CHANNEL_RULE as listed in the standards below.
 - Never write about exact buttons, menus or click paths. For the EHR, texting or phone system, the VA describes
   what they'd do in their own words; correct responses say what is done, not where to click.
 - Multiple choice: 4 options (text only, no A-D letters), one right (the card's way), realistic decoys, right

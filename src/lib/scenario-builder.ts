@@ -349,9 +349,22 @@ export async function loadDaySources(db: Db, officeId: string, dayCode: string) 
   );
   const ruleList = Object.entries(values).map(([key, value]) => ({ key, value }));
   // What Claude may fall back on where the cards are silent: the VFDA
-  // standards (as this office has them) and the must-ask rules.
+  // standards and the must-ask rules, without other cards' versions (each
+  // card's own protocol is in its text; two cards' rules are never merged).
   const tierOf = new Map(slotList.map((s) => [s.key, s.tier]));
-  const standards = rule.standards === false ? [] : ruleList.filter((r) => tierOf.get(r.key) === "default" || isMustAsk(r.key));
+  const fallbackValues = vfdaOnly
+    ? values
+    : placeholderValues(
+        ruleRows.filter((r) => r.source !== "card_import"),
+        (settingOf(ctx.settings, "derived_placeholders") ?? []) as DerivedPlaceholder[],
+        officeId,
+      );
+  const standards =
+    rule.standards === false
+      ? []
+      : Object.entries(fallbackValues)
+          .map(([key, value]) => ({ key, value }))
+          .filter((r) => tierOf.get(r.key) === "default" || isMustAsk(r.key));
 
   // Every standard day's master items, so items can move between days.
   const masterList = (must(masters) ?? []) as MasterScenario[];

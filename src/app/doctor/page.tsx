@@ -6,6 +6,7 @@ import { requireRole } from "@/lib/auth";
 import { currentStep } from "@/lib/doctor-flow";
 import { loadOfficeSetup } from "@/lib/interview-data";
 import { TREND_LABELS } from "@/lib/report";
+import { canReadBank } from "@/lib/scenario-bank";
 import { createSessionClient } from "@/lib/supabase/server";
 import { attemptLabel, percentOf, resultLabel, trend } from "@/lib/va-flow";
 
@@ -23,6 +24,8 @@ async function DoctorHome() {
   const user = await requireRole("doctor");
   const setup = user.officeId ? await loadOfficeSetup(user.officeId) : null;
   const next = setup && currentStep(setup.flow.steps)?.step;
+  // The scenario bank with answers, only when VFDA shared it.
+  const bankShared = !!user.officeId && (await canReadBank(user, user.officeId));
 
   return (
     <>
@@ -42,6 +45,11 @@ async function DoctorHome() {
       <Link href="/doctor/va" className="self-start underline">
         My VA: workflow certifications and Trello cards
       </Link>
+      {bankShared && (
+        <Link href="/doctor/bank" className="self-start underline">
+          Scenario bank with answers (shared by VFDA)
+        </Link>
+      )}
       <Results />
     </>
   );

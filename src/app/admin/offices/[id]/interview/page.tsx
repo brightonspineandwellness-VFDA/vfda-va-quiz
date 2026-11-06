@@ -46,7 +46,7 @@ async function AdminInterview({ params }: { params: Promise<{ id: string }> }) {
         <StepProgress steps={flow.steps} links={false} />
       </div>
       <Link href={`/admin/offices/${data.office.id}/rules`} className="self-start text-sm underline">
-        Cards: mapping, rules found on them, send to doctor →
+        Cards: mapping and the rules read from them →
       </Link>
       <p className="text-sm text-foreground/70">
         The office&apos;s profile, VFDA standards, the 12 must-ask rules and the automatic rules (the doctor never

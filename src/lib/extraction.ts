@@ -3,7 +3,8 @@ import "server-only";
 // Reading card PDFs (card-first setup): each new card is read with the Claude
 // API once, for its title, color, word-for-word text and a suggested mapping
 // to training day(s) and a workflow, plus any VFDA standard or must-ask rule
-// it states (proposed office rules with the exact quote, for VFDA to review).
+// it states (office rules with the exact quote; they apply at once, VFDA can
+// correct a misread). Must-ask rules no card covers then use VFDA's suggestion.
 // The text is what scenarios are later written from. The VA Office Rules card
 // is the doctor's own answers to the must-ask rules: saved as accepted rules
 // (source doctor_card), no VFDA review, and not a scenario source.
@@ -27,6 +28,7 @@ import {
   type Workflow,
 } from "@/lib/extraction-parse";
 import { profileFromAnswers, type Answer, type InterviewQuestion } from "@/lib/interview";
+import { applyMustAskFallbacks } from "@/lib/must-ask";
 import { extractExtraWorkflows } from "@/lib/extra-workflows";
 import { reportIfDue } from "@/lib/office-reports";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -194,9 +196,9 @@ export async function runExtraction(officeId: string) {
           found.map((r) => ({
             ...r,
             office_id: officeId,
-            // The doctor wrote the VA Office Rules card: their answers are confirmed.
+            // Card rules apply at once; the doctor wrote the VA Office Rules card.
             source: officeRules ? "doctor_card" : "card_import",
-            status: officeRules ? "accepted" : "proposed",
+            status: "accepted",
             workflows: slotWorkflows.get(r.rule_slot_key) ?? [],
             vfda_reviewed_by: null,
             vfda_reviewed_at: null,
@@ -224,6 +226,8 @@ export async function runExtraction(officeId: string) {
       .from("offices")
       .update({ extraction_status: "done", extracted_at: new Date().toISOString(), extraction_error: null })
       .eq("id", officeId);
+    // Must-ask rules no card covers: VFDA's suggestion (never asked of the doctor).
+    await applyMustAskFallbacks(officeId).catch((e) => console.error("Must-ask defaults not set", officeId, e));
     // Extra cards (mapped to the gray card day): their workflows, for VFDA to approve.
     await extractExtraWorkflows(officeId).catch((e) => console.error("Extra card workflows not read", officeId, e));
     // A re-import with nothing for VFDA to review: the gap report is due now.
@@ -236,3 +240,4 @@ export async function runExtraction(officeId: string) {
       .eq("id", officeId);
   }
 }
+

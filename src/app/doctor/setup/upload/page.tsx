@@ -57,8 +57,8 @@ async function UploadStep() {
             primary
           />
         ) : state.cardsUploadedAt ? (
-          <Link href="/doctor/setup/review" className={nextButton}>
-            Next: Waiting for VFDA review →
+          <Link href="/doctor/setup/standards" className={nextButton}>
+            Next: VFDA standards →
           </Link>
         ) : (
           <p className="text-sm text-foreground/70">Upload at least one card to continue.</p>
