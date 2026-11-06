@@ -28,6 +28,7 @@ export type GapItem = {
 
 export type OfficeReportContent = {
   officeName: string;
+  primaryDoctor?: string | null;
   generatedAt: string;
   cards: string[];
   // How the steps were checked against the cards.
@@ -237,7 +238,10 @@ export function reportBlocks(c: OfficeReportContent): Block[] {
   const counts = reportCounts(c);
   const b: Block[] = [
     { type: "title", text: `Office SOP gap report: ${c.officeName}` },
-    { type: "muted", text: `VFDA only, not for the doctor. ${new Date(c.generatedAt).toUTCString()}. Cards compared: ${c.cards.join(", ") || "none"}.` },
+    {
+      type: "muted",
+      text: `VFDA only, not for the doctors. ${c.primaryDoctor ? `Primary doctor: ${c.primaryDoctor}. ` : ""}${new Date(c.generatedAt).toUTCString()}. Cards compared: ${c.cards.join(", ") || "none"}.`,
+    },
     {
       type: "text",
       text: `${counts.safety} safety first · ${counts.missing} missing · ${counts.conflicts} conflicts · ${counts.partial} partial`,

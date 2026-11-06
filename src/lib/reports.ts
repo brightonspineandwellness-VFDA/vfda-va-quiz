@@ -1,8 +1,8 @@
 import "server-only";
 
 // Sends the results report after every attempt: an email (Resend, from
-// REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL) and to the
-// office's doctor, and a Slack post to VFDA (SLACK_WEBHOOK_URL). A critical
+// REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL) and to
+// every doctor of the office, and a Slack post to VFDA (SLACK_WEBHOOK_URL). A critical
 // error is also sent at once, while the VA keeps going. One notifications row
 // per recipient is written before sending, so running this again only sends
 // what hasn't gone out yet. Each send is tried twice.
@@ -47,6 +47,23 @@ export function appUrl() {
 
 export const attemptLink = (attemptId: string, area: "admin" | "doctor") => `${appUrl()}/${area}/attempts/${attemptId}`;
 
+// Every doctor of the office gets the reports and alerts (VFDA's addresses
+// aren't repeated); the Primary doctor's name is shown on them.
+export async function officeDoctors(db: Db, officeId: string | null) {
+  if (!officeId) return { emails: [] as string[], primary: null as string | null };
+  const [office, doctors] = await Promise.all([
+    db.from("offices").select("primary_doctor_id").eq("id", officeId).maybeSingle(),
+    db.from("profiles").select("id, full_name, email").eq("office_id", officeId).eq("role", "doctor").is("deactivated_at", null),
+  ]);
+  const rows = (must(doctors) ?? []) as { id: string; full_name: string | null; email: string | null }[];
+  const vfda = vfdaEmails().map((e) => e.toLowerCase());
+  const primary = rows.find((d) => d.id === must(office)?.primary_doctor_id);
+  return {
+    emails: [...new Set(rows.map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter((e) => !vfda.includes(e)),
+    primary: primary ? primary.full_name?.trim() || primary.email : null,
+  };
+}
+
 type Feedback = { missed_steps?: string[] } | null;
 
 export async function loadAttemptReport(db: Db, attemptId: string) {
@@ -64,7 +81,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     db.from("profiles").select("full_name, email, va_start_date").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("schedule_days").select("title").eq("code", attempt.schedule_day).maybeSingle(),
-    db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
+    officeDoctors(db, attempt.office_id),
     db
       .from("attempts")
       .select("id, kind, first_try_points, max_points, submitted_at")
@@ -169,6 +186,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     fastFinish: attempt.fast_finish,
     pastes: Array.isArray(attempt.paste_log) ? attempt.paste_log.length : 0,
     sinceStart: sinceStartText(must(va)?.va_start_date, todayIn(TIME_ZONE, new Date(attempt.submitted_at))),
+    primaryDoctor: doctors.primary ?? undefined,
     ...(retake ? { retake } : {}),
     items: mine,
     workflows: dayWorkflows.map((code) => ({
@@ -181,8 +199,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       ),
     })),
   };
-  const doctorEmails = (must(doctors) ?? []).map((d) => d.email).filter(Boolean) as string[];
-  return { report, doctorEmails };
+  return { report, doctorEmails: doctors.emails };
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +362,7 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
   const { report, doctorEmails } = loaded;
   const subject = reportSections(report).subject;
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const doctors = [...new Set(doctorEmails.map((e) => e.toLowerCase()))].filter((e) => !vfda.includes(e));
+  const doctors = doctorEmails;
 
   // VFDA's link opens the admin review page, the doctor's the read-only one.
   const email = (to: string, area: "admin" | "doctor"): Target => {
@@ -364,7 +381,7 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
 }
 
 // ---------------------------------------------------------------------------
-// A critical error: sent at once to VFDA and the office's doctor, with the
+// A critical error: sent at once to VFDA and every doctor of the office, with the
 // VA's exact words. The VA keeps going.
 // ---------------------------------------------------------------------------
 
@@ -390,7 +407,7 @@ export async function sendCriticalAlert(itemId: string, phase: "first" | "repeat
     db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
     db.from("office_scenarios").select("code, workflow, stem").eq("id", shownId).maybeSingle(),
-    db.from("profiles").select("email").eq("office_id", attempt.office_id).eq("role", "doctor"),
+    officeDoctors(db, attempt.office_id),
   ]);
   const s = must(scenario);
   const { subject, lines } = criticalAlertText({
@@ -402,11 +419,10 @@ export async function sendCriticalAlert(itemId: string, phase: "first" | "repeat
     repeat: phase === "repeat",
     stem: s?.stem ?? "",
     quote: item.critical_quote,
+    primaryDoctor: doctors.primary,
   });
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const doctorEmails = [...new Set(((must(doctors) ?? []) as { email: string | null }[]).map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter(
-    (e) => !vfda.includes(e),
-  );
+  const doctorEmails = doctors.emails;
   const event = `critical-${phase}:${item.id}`;
   const email = (to: string, area: "admin" | "doctor"): Target => {
     const link = attemptLink(attempt.id, area);
@@ -511,7 +527,7 @@ export async function sendSopNotice(certificationId: string, event: SopEvent): P
     cert.office_workflow_id
       ? db.from("office_workflows").select("code, name, card_answers").eq("id", cert.office_workflow_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
-    officeId ? db.from("profiles").select("email").eq("office_id", officeId).eq("role", "doctor") : Promise.resolve({ data: [], error: null }),
+    officeDoctors(db, officeId),
   ]);
   const g = must(gray) as { code: string; name: string | null; card_answers: Record<string, unknown> | null } | null;
   const wf = must(workflow) as { code: string; name: string } | null;
@@ -525,10 +541,13 @@ export async function sendSopNotice(certificationId: string, event: SopEvent): P
   const when = event === "submitted" ? cert.sop_submitted_at : cert.sop_confirmed_at;
   const eventKey = `sop-${event}:${when ?? ""}`;
 
+  // Every SOP notice goes to every doctor of the office too.
   const lines = (audience: "vfda" | "doctor") => [
     audience === "doctor"
-      ? `${vaName} updated your office's Trello card for ${code} ${name}. Please review it on Trello and approve it there, or comment on the card with what to change. VFDA confirms your approval in the app.`
-      : `${vaName} (${officeName}): ${code} ${name}. ${SOP_EVENT_TEXT[event]}.`,
+      ? event === "submitted"
+        ? `${vaName} updated your office's Trello card for ${code} ${name}. Please review it on Trello and approve it there, or comment on the card with what to change. VFDA confirms your approval in the app.`
+        : `${vaName}'s Trello card for ${code} ${name}: ${SOP_EVENT_TEXT[event]} (confirmed by VFDA).`
+      : `${vaName} (${officeName}${doctors.primary ? `, Primary doctor ${doctors.primary}` : ""}): ${code} ${name}. ${SOP_EVENT_TEXT[event]}.`,
     ...links.map((l) => `Trello card: ${l}`),
     ...(note && event !== "submitted" ? [`Note: ${note}`] : []),
   ];
@@ -542,9 +561,7 @@ export async function sendSopNotice(certificationId: string, event: SopEvent): P
   const text = (audience: "vfda" | "doctor", link: string) => `${lines(audience).join("\n\n")}\n\nOpen in the app (login required): ${link}`;
 
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const doctorEmails = event === "submitted"
-    ? [...new Set(((must(doctors) ?? []) as { email: string | null }[]).map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter((e) => !vfda.includes(e))
-    : [];
+  const doctorEmails = doctors.emails;
   const adminLink = `${appUrl()}/admin/sops`;
   const doctorLink = `${appUrl()}/doctor/va`;
   const email = (to: string, audience: "vfda" | "doctor"): Target => {

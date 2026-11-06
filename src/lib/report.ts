@@ -39,6 +39,8 @@ export type AttemptReport = {
   pastes: number;
   // Days from the VA's start date to this attempt (reports only).
   sinceStart?: string;
+  // The office's Primary doctor (every doctor of the office gets the report).
+  primaryDoctor?: string;
   // A day's retake: its first try (the official score) question by question.
   retake?: RetakeComparison;
   items: ReportItem[];
@@ -92,6 +94,7 @@ export function reportSections(r: AttemptReport) {
     summary: [
       ["VA", r.vaName],
       ["Office", r.officeName],
+      ...(r.primaryDoctor ? [["Primary doctor", r.primaryDoctor] as [string, string]] : []),
       ["Day", `${r.dayCode}: ${r.dayTitle}${rt ? " (RETAKE)" : ""}`],
       ...((rt
         ? [
@@ -273,13 +276,14 @@ export type CriticalAlert = {
   repeat: boolean;
   stem: string;
   quote: string;
+  primaryDoctor?: string | null;
 };
 
 export function criticalAlertText(a: CriticalAlert) {
   return {
     subject: `ALERT: critical error – ${a.vaName} – ${a.dayCode} ${a.code} – ${a.officeName}`,
     lines: [
-      `${a.vaName} (${a.officeName}) made a critical error on ${a.dayCode} ${a.code} (${a.workflow})${a.repeat ? ", on the repeat" : ""}. They keep going with their training; please coach them.`,
+      `${a.vaName} (${a.officeName}${a.primaryDoctor ? `, Primary doctor ${a.primaryDoctor}` : ""}) made a critical error on ${a.dayCode} ${a.code} (${a.workflow})${a.repeat ? ", on the repeat" : ""}. They keep going with their training; please coach them.`,
       `Scenario: ${a.stem}`,
       `The VA's exact words: "${a.quote}"`,
     ],

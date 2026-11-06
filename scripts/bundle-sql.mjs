@@ -107,6 +107,12 @@ const PHASES = [
     title: "Office rules card, SOP gap reports and day retakes database changes",
     after: "build-versions.sql",
   },
+  {
+    name: "multiple-doctors",
+    starts: "20261106150000",
+    title: "Multiple doctors per office database changes (primary doctor)",
+    after: "reports-retakes.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

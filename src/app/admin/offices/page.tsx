@@ -45,7 +45,7 @@ async function Offices() {
               <tr>
                 <th className="py-2 pr-4 font-medium">Office</th>
                 <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 pr-4 font-medium">Doctor</th>
+                <th className="py-2 pr-4 font-medium">Doctors</th>
                 <th className="py-2 pr-4 font-medium">Doctor setup step</th>
                 <th className="py-2 pr-4 font-medium">Open</th>
               </tr>
@@ -64,6 +64,7 @@ async function Offices() {
                       ? office.doctors.map((d) => (
                           <span key={d.email} className="block">
                             {d.name || d.email}
+                            {d.primary && office.doctors.length > 1 && <span className="ml-1 text-xs text-green-700 dark:text-green-400">Primary</span>}
                             {d.name && <span className="block text-xs text-foreground/50">{d.email}</span>}
                           </span>
                         ))

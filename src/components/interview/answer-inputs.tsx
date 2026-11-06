@@ -226,7 +226,7 @@ function SubLabel({ text, children }: { text: string; children: React.ReactNode 
 }
 
 // Uploads go straight from the browser to the private bucket, under the
-// office's folder; storage policies only allow this office's doctor and VFDA.
+// office's folder; storage policies only allow this office's doctors and VFDA.
 export function FileUploads({
   officeId,
   folder,

@@ -37,6 +37,7 @@ import {
   YES_NO,
 } from "./answer-inputs";
 import { GrayCards } from "./gray-cards";
+import { ByLine } from "@/components/setup/by-line";
 import { SaveBadge } from "./save-badge";
 import { ToolsAnswer } from "./tools-answer";
 import { useAutosave } from "./use-autosave";
@@ -271,6 +272,7 @@ export function InterviewForm({
                 <div className="mb-2 flex items-start justify-between gap-3">
                   <div>
                     <p className="font-medium">{q.question}</p>
+                    {done && <ByLine verb="Answered" name={data.sources[q.key]?.by} at={data.sources[q.key]?.at} />}
                     {isAdmin && (
                       <p className="mt-0.5 text-xs text-foreground/50">
                         <span className="font-mono">{q.key}</span> · {TIER_LABELS[q.tier]}

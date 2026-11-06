@@ -35,7 +35,8 @@ export type InterviewData = {
   conditions: Record<string, string>;
   grayCardQuestions: GrayCardQuestion[];
   answers: Record<string, Answer>;
-  sources: Record<string, { source: RuleRow["source"]; status: RuleRow["status"] }>;
+  // by: who answered it (any doctor of the office, or VFDA), and when.
+  sources: Record<string, { source: RuleRow["source"]; status: RuleRow["status"]; by?: string | null; at?: string | null }>;
   grayCards: GrayCard[];
   fileUrls: Record<string, string>;
 };
@@ -91,11 +92,12 @@ type DbRule = Omit<RuleRow, "document_name"> & { office_id: string; office_docum
 
 const RULE_COLUMNS =
   "id, office_id, rule_slot_key, rule, attachments, source, source_document_id, source_quote, status, partial, " +
-  "doctor_approved_at, office_documents(file_name)";
-const OFFICE_STATE_COLUMNS = "cards_uploaded_at, extraction_status, extraction_error, sent_to_doctor_at, standards_accepted_at";
+  "doctor_approved_at, doctor_approved_by, office_documents(file_name)";
+const OFFICE_STATE_COLUMNS =
+  "cards_uploaded_at, extraction_status, extraction_error, sent_to_doctor_at, standards_accepted_at, standards_accepted_by, primary_doctor_id";
 const DOCUMENT_COLUMNS =
-  "id, office_id, file_name, card_name, file_path, imported_at, created_at, card_title, card_color, schedule_days, workflow, skip, tags, mapped_at";
-const GAP_COLUMNS = "id, office_id, rule_slot_key, workflow, question, reason, answer, answered_at, released_at";
+  "id, office_id, file_name, card_name, file_path, imported_at, created_at, card_title, card_color, schedule_days, workflow, skip, tags, mapped_at, uploaded_by";
+const GAP_COLUMNS = "id, office_id, rule_slot_key, workflow, question, reason, answer, answered_at, answered_by, released_at";
 
 type DbOffice = {
   cards_uploaded_at: string | null;
@@ -103,6 +105,7 @@ type DbOffice = {
   extraction_error: string | null;
   sent_to_doctor_at: string | null;
   standards_accepted_at: string | null;
+  standards_accepted_by?: string | null;
 };
 const toState = (o: DbOffice): OfficeState => ({
   cardsUploadedAt: o.cards_uploaded_at,
@@ -110,6 +113,7 @@ const toState = (o: DbOffice): OfficeState => ({
   sentToDoctorAt: o.sent_to_doctor_at,
   extractionError: o.extraction_error,
   standardsAcceptedAt: o.standards_accepted_at,
+  standardsAcceptedBy: o.standards_accepted_by ?? null,
 });
 
 const toRule = (r: DbRule): RuleRow => ({
@@ -123,6 +127,7 @@ const toRule = (r: DbRule): RuleRow => ({
   status: r.status,
   partial: r.partial ?? false,
   doctor_approved_at: r.doctor_approved_at,
+  doctor_approved_by: r.doctor_approved_by ?? null,
   document_name: r.office_documents?.file_name ?? null,
 });
 
@@ -173,6 +178,16 @@ async function signedUrls(supabase: Supabase, rules: RuleRow[]) {
   return fileUrls;
 }
 
+type Person = { id: string; full_name: string | null; email: string };
+
+// A user id as a name: the office's doctors by name; anyone else (a VFDA
+// admin, whom doctors can't look up) as "VFDA".
+const whoDid = (doctors: Person[]) => (id: string | null | undefined) => {
+  if (!id) return null;
+  const d = doctors.find((p) => p.id === id);
+  return d ? d.full_name?.trim() || d.email : "VFDA";
+};
+
 // Everything about one office: setup data plus the doctor's flow. As the
 // signed-in user, or with the client given (the service role, for work done
 // after a response, e.g. the SOP gap report).
@@ -186,15 +201,18 @@ export async function loadOfficeSetup(officeId: string, client?: Supabase) {
   if (error) throw error;
   if (!office) return null;
 
-  const [bank, rules, cards, documents, gaps] = await Promise.all([
+  const [bank, rules, cards, documents, gaps, people] = await Promise.all([
     loadBankParts(supabase),
     supabase.from("office_rules").select(RULE_COLUMNS).eq("office_id", officeId),
     supabase.from("office_workflows").select(CARD_COLUMNS).eq("office_id", officeId).order("position"),
     supabase.from("office_documents").select(DOCUMENT_COLUMNS).eq("office_id", officeId).eq("kind", "card").order("created_at"),
     // Doctors only see released questions (row-level security); VFDA sees all.
     supabase.from("gap_questions").select(GAP_COLUMNS).eq("office_id", officeId).order("created_at"),
+    // The office's people (removed doctors too), to say who did what.
+    supabase.from("profiles").select("id, full_name, email").eq("office_id", officeId),
   ]);
   for (const r of [rules, cards, documents, gaps]) if (r.error) throw r.error;
+  const who = whoDid((people.data ?? []) as Person[]);
 
   const ruleRows = ((rules.data ?? []) as unknown as DbRule[]).map(toRule);
   const grayCards = ((cards.data ?? []) as CardRow[]).map(toCard);
@@ -205,14 +223,17 @@ export async function loadOfficeSetup(officeId: string, client?: Supabase) {
     sources: Object.fromEntries(
       ruleRows
         .filter((r) => r.source_document_id === null)
-        .map((r) => [r.rule_slot_key, { source: r.source, status: r.status }]),
+        .map((r) => [
+          r.rule_slot_key,
+          { source: r.source, status: r.status, by: who(r.doctor_approved_by), at: r.doctor_approved_by ? r.doctor_approved_at : null },
+        ]),
     ),
     grayCards,
     fileUrls: await signedUrls(supabase, ruleRows),
   };
-  const state = toState(office as DbOffice);
-  const documentRows = (documents.data ?? []) as DocumentRow[];
-  const gapRows = (gaps.data ?? []) as GapRow[];
+  const state = { ...toState(office as DbOffice), standardsAcceptedBy: who((office as DbOffice).standards_accepted_by) };
+  const documentRows = ((documents.data ?? []) as DocumentRow[]).map((d) => ({ ...d, uploaded_by_name: who(d.uploaded_by) }));
+  const gapRows = ((gaps.data ?? []) as GapRow[]).map((g) => ({ ...g, answered_by_name: who(g.answered_by) }));
   const input = flowInput(bank, ruleRows, state, documentRows, gapRows);
   return {
     interview,
@@ -231,7 +252,8 @@ export type OfficeRow = {
   name: string;
   status: string;
   createdAt: string;
-  doctors: { name: string; email: string }[];
+  // Primary doctor first.
+  doctors: { name: string; email: string; primary: boolean }[];
   steps: Step[];
 };
 
@@ -240,7 +262,7 @@ export async function loadOffices(): Promise<OfficeRow[]> {
   const supabase = await createSessionClient();
   const [offices, doctors, rules, documents, gaps, bank] = await Promise.all([
     supabase.from("offices").select(`id, name, status, created_at, ${OFFICE_STATE_COLUMNS}`).order("created_at"),
-    supabase.from("profiles").select("office_id, full_name, email").eq("role", "doctor"),
+    supabase.from("profiles").select("id, office_id, full_name, email").eq("role", "doctor"),
     supabase.from("office_rules").select(RULE_COLUMNS),
     supabase.from("office_documents").select(DOCUMENT_COLUMNS).eq("kind", "card"),
     supabase.from("gap_questions").select(GAP_COLUMNS),
@@ -259,7 +281,8 @@ export async function loadOffices(): Promise<OfficeRow[]> {
       createdAt: office.created_at,
       doctors: (doctors.data ?? [])
         .filter((d) => d.office_id === office.id)
-        .map((d) => ({ name: d.full_name, email: d.email })),
+        .map((d) => ({ name: d.full_name, email: d.email, primary: d.id === office.primary_doctor_id }))
+        .sort((a, b) => Number(b.primary) - Number(a.primary)),
       steps: buildDoctorFlow(
         flowInput(
         bank,

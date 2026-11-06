@@ -44,7 +44,10 @@ export function Certificate({ row, back }: { row: GridRow; back: ReactNode }) {
             ))}
           </tbody>
         </table>
-        <p className="text-sm text-foreground/70">Issued {issued ? showDate(issued.slice(0, 10)) : ""} · VFDA</p>
+        <p className="text-sm text-foreground/70">
+          Issued {issued ? showDate(issued.slice(0, 10)) : ""}
+          {row.primaryDoctor && ` · ${row.primaryDoctor}, ${row.officeName}`} · VFDA
+        </p>
       </article>
     </>
   );

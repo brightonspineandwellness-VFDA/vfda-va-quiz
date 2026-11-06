@@ -27,7 +27,7 @@ async function doctorFlow() {
 // after the checks above.
 export async function setStandardsAccepted(accepted: boolean): Promise<ActionResult> {
   const ctx = await doctorFlow();
-  if (!ctx) return fail("Only the office's doctor can accept the standards.");
+  if (!ctx) return fail("Only a doctor of this office can accept the standards.");
   if (!ctx.flow.unlocked) return fail(LOCKED);
   const user = await getCurrentUser();
   const { error } = await createAdminClient()
@@ -45,7 +45,7 @@ export async function setStandardsAccepted(accepted: boolean): Promise<ActionRes
 // slot it also becomes the office's accepted rule (source doctor).
 export async function answerGapQuestion(gapId: string, value: unknown): Promise<ActionResult> {
   const ctx = await doctorFlow();
-  if (!ctx) return fail("Only the office's doctor can answer.");
+  if (!ctx) return fail("Only a doctor of this office can answer.");
   if (!ctx.flow.unlocked) return fail(LOCKED);
   const item = ctx.flow.questions.find((q) => q.gap.id === gapId);
   if (!item) return fail("That question isn't open any more.");

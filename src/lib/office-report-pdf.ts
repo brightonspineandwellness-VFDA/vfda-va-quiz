@@ -144,7 +144,7 @@ export async function officeReportPdf(content: OfficeReportContent): Promise<Uin
 
   const pages = doc.getPages();
   pages.forEach((p, i) =>
-    p.drawText(pdfText(`VFDA only - not for the doctor · page ${i + 1} of ${pages.length}`), {
+    p.drawText(pdfText(`VFDA only - not for the doctors · page ${i + 1} of ${pages.length}`), {
       x: MARGIN,
       y: MARGIN / 2,
       size: 8,

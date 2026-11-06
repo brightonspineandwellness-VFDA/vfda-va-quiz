@@ -35,6 +35,7 @@ export type RuleRow = {
   status: "proposed" | "accepted" | "needs_doctor" | "rejected";
   partial: boolean;
   doctor_approved_at: string | null;
+  doctor_approved_by?: string | null;
   document_name: string | null;
 };
 
@@ -46,6 +47,8 @@ export type OfficeState = {
   sentToDoctorAt: string | null;
   extractionError?: string | null;
   standardsAcceptedAt?: string | null;
+  // Who ticked "VFDA standards" (any doctor of the office).
+  standardsAcceptedBy?: string | null;
 };
 
 export type DocumentRow = {
@@ -63,6 +66,9 @@ export type DocumentRow = {
   skip?: boolean;
   tags?: string[];
   mapped_at?: string | null;
+  // Who uploaded it: a doctor of the office (by name) or "VFDA".
+  uploaded_by?: string | null;
+  uploaded_by_name?: string | null;
 };
 
 export type GapReason = "not_found" | "partial" | "conflicting" | "edge_case";
@@ -76,6 +82,8 @@ export type GapRow = {
   answer: AnswerValue;
   answered_at: string | null;
   released_at: string | null;
+  answered_by?: string | null;
+  answered_by_name?: string | null;
 };
 
 // VFDA's form card: each must-ask rule's question with the doctor's "Our
@@ -333,6 +341,8 @@ export function buildDoctorFlow(input: FlowInput) {
     questionsSkipped,
     standards,
     standardsAccepted,
+    standardsAcceptedAt: input.office.standardsAcceptedAt ?? null,
+    standardsAcceptedBy: input.office.standardsAcceptedBy ?? null,
     newDocuments,
     awaitingReview,
     profileAnswered: answered,

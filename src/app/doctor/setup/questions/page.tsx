@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { LockedStep, nextButton } from "@/components/setup/locked-step";
+import { ByLine } from "@/components/setup/by-line";
 import { RuleEditor } from "@/components/setup/rule-editor";
 import { RuleSource } from "@/components/setup/rule-source";
 import { RuleValue } from "@/components/setup/rule-value";
@@ -144,7 +145,7 @@ function Question({
           <div className="text-sm">
             <RuleValue slot={slot} value={gap.answer} />
           </div>
-          <p className="text-xs text-foreground/60">Your answer</p>
+          <ByLine verb="Answered" name={gap.answered_by_name ?? "your office"} at={gap.answered_at} />
         </>
       ) : (
         <>

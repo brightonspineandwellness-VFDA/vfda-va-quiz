@@ -75,6 +75,8 @@ export async function addOffice(_prev: AddOfficeState, form: FormData): Promise<
     await undoOffice();
     return { ok: false, message: "Invite sent, but giving doctor access failed. Try adding the office again." };
   }
+  // The first doctor is the Primary doctor; more can be invited on the office page.
+  await admin.from("offices").update({ primary_doctor_id: userId }).eq("id", office.id);
 
   refresh();
   return { ok: true, message };

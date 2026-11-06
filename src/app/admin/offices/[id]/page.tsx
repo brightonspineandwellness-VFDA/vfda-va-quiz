@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { InviteDoctorForm } from "@/components/doctors/invite-doctor";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { InviteVaForm, MoveVaForm } from "@/components/va/invite-va";
 import { StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
+import { removeDoctorAction, resendDoctorLinkAction, setPrimaryDoctorAction } from "@/lib/doctor-invite-actions";
+import { loadOfficeDoctors } from "@/lib/doctor-invites";
 import { createSessionClient } from "@/lib/supabase/server";
 import { showDate } from "@/lib/va-flow";
 import { resendVaLinkAction, setVaActiveAction } from "@/lib/va-invite-actions";
@@ -39,13 +42,13 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
   const { id } = await params;
   if (!UUID.test(id)) notFound();
   const supabase = await createSessionClient();
-  const [{ data: office }, { data: doctors }, { data: offices }] = await Promise.all([
+  const [{ data: office }, { data: offices }] = await Promise.all([
     supabase.from("offices").select("id, name").eq("id", id).maybeSingle(),
-    supabase.from("profiles").select("full_name, email").eq("role", "doctor").eq("office_id", id),
     supabase.from("offices").select("id, name").neq("id", id).order("name"),
   ]);
   if (!office) notFound();
-  const vas = await loadOfficeVas(id);
+  const [vas, doctors] = await Promise.all([loadOfficeVas(id), loadOfficeDoctors(id)]);
+  const primary = doctors.find((d) => d.primary);
   const defaultStart = nextTrainingDay();
 
   return (
@@ -53,7 +56,8 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
       <div>
         <h1 className="text-2xl font-semibold">{office.name}</h1>
         <p className="text-sm text-foreground/60">
-          Doctor: {doctors?.length ? doctors.map((d) => d.full_name || d.email).join(", ") : "—"}
+          Primary doctor: {primary?.name ?? "—"}
+          {doctors.length > 1 && ` · ${doctors.length} doctors`}
         </p>
         <p className="mt-1 flex flex-wrap gap-x-4 text-sm">
           <Link href={`/admin/offices/${id}/rules`} className="underline">
@@ -70,6 +74,42 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
           </Link>
         </p>
       </div>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Doctors</h2>
+        <p className="text-sm text-foreground/60">
+          Every doctor has their own login and sees the same office: setup, VAs, results and certifications. Reports and
+          alerts go to all of them. The Primary doctor is shown on the office, certificates and reports.
+        </p>
+        {doctors.length === 0 ? (
+          <p className="text-sm text-foreground/70">No doctors yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {doctors.map((d) => (
+              <li key={d.id} className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-4 py-3">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="font-medium">{d.name}</span>
+                  <span className="text-sm text-foreground/60">{d.email}</span>
+                  {d.primary && (
+                    <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">
+                      Primary
+                    </span>
+                  )}
+                  <span className="text-xs text-foreground/60">
+                    {d.lastSignIn ? `last signed in ${showDate(d.lastSignIn.slice(0, 10))}` : "hasn't signed in yet"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {!d.primary && <ActionButton action={setPrimaryDoctorAction.bind(null, id, d.id)} label="Make primary" />}
+                  <ActionButton action={resendDoctorLinkAction.bind(null, id, d.id)} label="Send sign-in link" pendingLabel="Sending…" />
+                  {doctors.length > 1 && <ActionButton action={removeDoctorAction.bind(null, id, d.id)} label="Remove from office" pendingLabel="Removing…" />}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <InviteDoctorForm officeId={id} />
+      </section>
 
       <section className="flex flex-col gap-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -92,7 +132,7 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
                   <span className="text-sm text-foreground/60">{va.email}</span>
                   <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${TONE[va.status]}`}>{VA_STATUS_LABELS[va.status]}</span>
                   <span className="text-xs text-foreground/60">
-                    {va.lastSignIn ? `last signed in ${showDate(va.lastSignIn)}` : "hasn't signed in yet"}
+                    {va.lastSignIn ? `last signed in ${showDate(va.lastSignIn.slice(0, 10))}` : "hasn't signed in yet"}
                   </span>
                 </div>
                 {va.status === "deactivated" ? (

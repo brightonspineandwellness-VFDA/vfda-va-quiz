@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { LockedStep } from "@/components/setup/locked-step";
 import { StandardsCheckbox } from "@/components/setup/standards-checkbox";
+import { ByLine } from "@/components/setup/by-line";
 import { StepProgress } from "@/components/setup/step-progress";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { loadDoctorSetup } from "../load";
@@ -43,7 +44,12 @@ async function StandardsStep() {
               View
             </Link>
           </p>
-          {flow.standardsAccepted && <p className="text-green-700 dark:text-green-400">Setup done. Thank you! ✓</p>}
+          {flow.standardsAccepted && (
+            <>
+              <ByLine verb="Accepted" name={flow.standardsAcceptedBy} at={flow.standardsAcceptedAt} />
+              <p className="text-green-700 dark:text-green-400">Setup done. Thank you! ✓</p>
+            </>
+          )}
         </div>
       )}
     </>

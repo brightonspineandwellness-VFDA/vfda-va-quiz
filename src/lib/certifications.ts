@@ -473,6 +473,8 @@ export type GridRow = {
   email: string;
   officeId: string | null;
   officeName: string;
+  // The office's Primary doctor, shown on the certificate.
+  primaryDoctor: string | null;
   cells: GridCell[];
   allCertified: boolean;
 };
@@ -485,7 +487,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
   if (filter.officeId) vaQuery = vaQuery.eq("office_id", filter.officeId);
   const [vas, offices, standard] = await Promise.all([
     vaQuery,
-    db.from("offices").select("id, name"),
+    db.from("offices").select("id, name, primary_doctor_id"),
     db.from("workflows").select("code, name").order("code"),
   ]);
   const vaRows = (must(vas) ?? []) as { id: string; full_name: string | null; email: string; office_id: string | null }[];
@@ -524,7 +526,16 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
   const workflowsOf = new Map(perOffice);
   const certs = (must(certsRes) ?? []) as CertRow[];
   const drills = (must(drillsRes) ?? []) as { va_id: string; kind: "recheck"; certification_id: string }[];
-  const officeName = new Map(((must(offices) ?? []) as { id: string; name: string }[]).map((o) => [o.id, o.name]));
+  const officeRows = (must(offices) ?? []) as { id: string; name: string; primary_doctor_id: string | null }[];
+  const officeName = new Map(officeRows.map((o) => [o.id, o.name]));
+  const primaryIds = [...new Set(officeRows.filter((o) => officeIds.includes(o.id)).map((o) => o.primary_doctor_id).filter((x): x is string => !!x))];
+  const primaryRows = primaryIds.length
+    ? ((must(await db.from("profiles").select("id, full_name, email").in("id", primaryIds)) ?? []) as { id: string; full_name: string | null; email: string }[])
+    : [];
+  const primaryOf = (officeId: string | null) => {
+    const p = primaryRows.find((d) => d.id === officeRows.find((o) => o.id === officeId)?.primary_doctor_id);
+    return p ? p.full_name?.trim() || p.email : null;
+  };
   const columns = ((must(standard) ?? []) as { code: string; name: string }[]).map((w) => ({ code: w.code, name: w.name }));
 
   const rows: GridRow[] = vaRows.map((va) => {
@@ -558,6 +569,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
       email: va.email,
       officeId: va.office_id,
       officeName: va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office",
+      primaryDoctor: primaryOf(va.office_id),
       cells,
       allCertified: applicable.length > 0 && applicable.every((x) => x.status === "certified"),
     };

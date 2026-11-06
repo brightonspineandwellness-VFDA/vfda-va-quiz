@@ -1,0 +1,51 @@
+-- More than one doctor per office.
+--
+-- Every doctor is a profile with role 'doctor' and the office's office_id, so
+-- row-level security (private.is_doctor_of_office) already gives each of them
+-- the same office and nothing else. One of them is the Primary doctor, shown
+-- on the office, certificates and reports; offices.doctor_name (the
+-- DOCTOR_NAME rule in scenarios) follows the primary's name. Existing offices
+-- keep their current doctor (the first one) as Primary.
+--
+-- Safe to run more than once.
+
+alter table public.offices add column if not exists primary_doctor_id uuid references public.profiles (id) on delete set null;
+
+update public.offices o
+   set primary_doctor_id = (
+         select p.id from public.profiles p
+          where p.office_id = o.id and p.role = 'doctor'
+          order by p.created_at, p.id
+          limit 1)
+ where o.primary_doctor_id is null;
+
+-- The primary must be a doctor of this office.
+create or replace function private.check_primary_doctor()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_name text;
+begin
+  if new.primary_doctor_id is null then
+    return new;
+  end if;
+  select coalesce(nullif(btrim(p.full_name), ''), p.email) into v_name
+    from public.profiles p
+   where p.id = new.primary_doctor_id and p.role = 'doctor' and p.office_id = new.id;
+  if v_name is null then
+    raise exception 'The primary doctor must be a doctor of this office.' using errcode = '23514';
+  end if;
+  -- DOCTOR_NAME follows the primary doctor.
+  if tg_op = 'INSERT' or new.primary_doctor_id is distinct from old.primary_doctor_id then
+    new.doctor_name := v_name;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists check_primary_doctor on public.offices;
+create trigger check_primary_doctor
+  before insert or update of primary_doctor_id on public.offices
+  for each row execute function private.check_primary_doctor();

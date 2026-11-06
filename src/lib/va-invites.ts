@@ -175,7 +175,7 @@ export async function setVaActive(vaId: string, active: boolean): Promise<string
 
 // A one-time sign-in link that lands on /auth/callback (token hash, so it
 // works without the browser that asked for it). Supabase sends nothing.
-async function signInLink(
+export async function signInLink(
   db: Db,
   email: string,
   type: "invite" | "magiclink",

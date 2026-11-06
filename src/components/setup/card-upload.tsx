@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
+import { ByLine } from "@/components/setup/by-line";
 import { addCardDocument, removeCardDocument } from "@/lib/card-actions";
 import { CARD_CHECKLIST, type DocumentRow } from "@/lib/doctor-flow";
 import { MAX_UPLOAD_BYTES } from "@/lib/interview";
@@ -139,6 +140,7 @@ function CardRow({
           {documents.map((d) => (
             <li key={d.id} className="flex flex-wrap items-center gap-2">
               <span className="truncate">{d.file_name}</span>
+              <ByLine verb="Uploaded" name={d.uploaded_by_name} at={d.created_at} />
               {d.imported_at ? (
                 <span className="text-xs text-foreground/50">read</span>
               ) : (

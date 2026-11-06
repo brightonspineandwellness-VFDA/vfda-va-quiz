@@ -32,7 +32,7 @@ import {
   type StandardInput,
 } from "@/lib/office-report";
 import { officeReportPdf } from "@/lib/office-report-pdf";
-import { appUrl, postSlack, sendEmail, tryTwice, vfdaEmails } from "@/lib/reports";
+import { appUrl, officeDoctors, postSlack, sendEmail, tryTwice, vfdaEmails } from "@/lib/reports";
 import { placeholderValues, ruleText, type DerivedPlaceholder } from "@/lib/scenario-build";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -292,6 +292,7 @@ export async function buildOfficeReport(db: Db, officeId: string): Promise<Offic
   }
   return {
     officeName: inputs.officeName,
+    primaryDoctor: (await officeDoctors(db, officeId)).primary,
     generatedAt: new Date().toISOString(),
     cards: inputs.allCards,
     method,
