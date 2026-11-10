@@ -11,7 +11,7 @@ import "server-only";
 
 import { passPercent } from "@/lib/certification";
 import { reportFileName, type Leads4LifePayload } from "@/lib/quiz-report";
-import { ensureQuizReport, sampleQuizReportLink, type StoredQuizReport } from "@/lib/quiz-reports";
+import { makeQuizReport, sampleQuizReportLink, type StoredQuizReport } from "@/lib/quiz-reports";
 import { loadRetakeComparison } from "@/lib/retake";
 import {
   criticalAlertText,
@@ -23,6 +23,9 @@ import {
   slackEscape,
   criticalCount,
   flagsText,
+  repeatStats,
+  trendShort,
+  type DayHistory,
   workflowStatus,
   type AttemptReport,
   type ReportItem,
@@ -105,7 +108,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     officeDoctors(db, attempt.office_id),
     db
       .from("attempts")
-      .select("id, kind, first_try_points, max_points, submitted_at")
+      .select("id, kind, schedule_day, parent_attempt_id, first_try_points, max_points, result, submitted_at")
       .eq("va_id", attempt.va_id)
       .eq("office_id", attempt.office_id)
       .not("submitted_at", "is", null)
@@ -193,6 +196,27 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     .filter((i) => !retakeIds.has(i.attempt_id))
     .map(toItem)
     .filter((i): i is ReportItem => !!i);
+  // The trend: every training day taken up to this attempt, its retake beside it.
+  const upTo = attemptRows.filter((a) => a.submitted_at! <= attempt.submitted_at!);
+  const labelOf = (r: string | null) => (r && r in RESULT_LABELS ? (r as ResultLabel) : null);
+  const history: DayHistory[] = upTo
+    .filter((a) => a.kind === "day")
+    .map((a) => {
+      const rt = upTo.filter((x) => x.kind === "retake" && x.parent_attempt_id === a.id).at(-1);
+      return {
+        day: a.schedule_day,
+        percent: percentOf(a.first_try_points, a.max_points),
+        label: labelOf(a.result),
+        retakePercent: rt ? percentOf(rt.first_try_points, rt.max_points) : null,
+        retakeLabel: rt ? labelOf(rt.result) : null,
+        current: a.id === attempt.id || rt?.id === attempt.id,
+      };
+    });
+  const soFarIds = new Set(upTo.filter((a) => a.kind !== "retake").map((a) => a.id));
+  const soFarItems = allItems
+    .filter((i) => soFarIds.has(i.attempt_id))
+    .map(toItem)
+    .filter((i): i is ReportItem => !!i);
 
   const report: AttemptReport = {
     vaName: must(va)?.full_name || must(va)?.email || "VA",
@@ -210,6 +234,10 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     ...(await attemptTimes(db, attemptId)),
     sinceStart: sinceStartText(must(va)?.va_start_date, todayIn(TIME_ZONE, new Date(attempt.submitted_at))),
     primaryDoctor: doctors.primary ?? undefined,
+    // Primary first.
+    doctors: [...doctors.list.map((d) => d.name)].sort((a, b) => Number(b === doctors.primary) - Number(a === doctors.primary)),
+    history,
+    repeats: { quiz: repeatStats(mine), soFar: repeatStats(soFarItems) },
     scope: scopeText(normalizeScope(must(va)?.va_scope)),
     ...(retake ? { retake } : {}),
     items: mine,
@@ -370,6 +398,7 @@ export async function sendTestLeads4Life(): Promise<{ status: number | null; tex
         // Matches the sample PDF.
         critical_errors: 1,
         flags: "fast finish, 3 pasted answers",
+        trend: "improving, +12 pts",
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -432,11 +461,11 @@ export async function deliver(
   return { sent, failed };
 }
 
-// The attempt's PDF, made (and stored) once. Null when it couldn't be made:
+// The attempt's PDF, made again for every send. Null when it couldn't be made:
 // the VFDA email and Slack still go out, and Leads4Life waits for "Resend".
-async function attemptPdf(db: Db, attemptId: string, report: AttemptReport, regenerate = false) {
+async function attemptPdf(db: Db, attemptId: string, report: AttemptReport) {
   try {
-    return { pdf: await ensureQuizReport(db, attemptId, report, regenerate), error: null };
+    return { pdf: await makeQuizReport(db, attemptId, report), error: null };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     console.error("Quiz report PDF not made", attemptId, error);
@@ -444,20 +473,17 @@ async function attemptPdf(db: Db, attemptId: string, report: AttemptReport, rege
   }
 }
 
-// `regenerate`: make the PDF again (an attempt that already has one).
-// `again`: "Send report" on the admin attempt page; everything is sent again
-// as a new send (event again:<time>), whatever went out before.
-export async function sendAttemptReport(
-  attemptId: string,
-  opts: { regenerate?: boolean; again?: string } = {},
-): Promise<{ sent: number; failed: number }> {
+// The PDF is made again on every call. `again`: "Send report" on the admin
+// attempt page; everything is sent again as a new send (event again:<time>),
+// whatever went out before.
+export async function sendAttemptReport(attemptId: string, opts: { again?: string } = {}): Promise<{ sent: number; failed: number }> {
   const db = createAdminClient();
   const loaded = await loadAttemptReport(db, attemptId);
   if (!loaded) return { sent: 0, failed: 0 };
   const { report, doctors } = loaded;
   const subject = reportSections(report).subject;
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report, !!opts.regenerate);
+  const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report);
   // Each send gets its own idempotency key, so Resend and Leads4Life don't drop it as a repeat.
   const keySuffix = opts.again ? `-again-${opts.again}` : "";
   const link = attemptLink(attemptId, "admin");
@@ -486,7 +512,7 @@ export async function sendAttemptReport(
     recipient: d.email,
     send: async () => {
       // Made again here when it failed before, so "Resend" can fix it.
-      const stored = pdf ?? (await ensureQuizReport(db, attemptId, report));
+      const stored = pdf ?? (await makeQuizReport(db, attemptId, report));
       await postLeads4Life(
         {
           doctor_email: d.email,
@@ -501,6 +527,7 @@ export async function sendAttemptReport(
           report_link: stored.link,
           critical_errors: criticalCount(report),
           flags: flagsText(report),
+          trend: trendShort(report.history ?? []),
         },
         `attempt-${attemptId}-${d.email}${keySuffix}`,
       );

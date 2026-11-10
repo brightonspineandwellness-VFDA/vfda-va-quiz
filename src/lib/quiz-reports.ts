@@ -3,9 +3,12 @@ import "server-only";
 // The quiz report PDF of a finished attempt (src/lib/quiz-report.ts): the
 // items below full points with coaching and Trello card tips from Claude
 // (or the mock tips with AI_MODE=mock), what the VA did well, drawn by
-// src/lib/quiz-report-pdf.ts. Stored privately in Supabase Storage
-// (quiz-reports/<office>/<va>/<attempt>.pdf) with a signed link valid for
-// 30 days. Made once per attempt; a retake is its own attempt with its own PDF.
+// src/lib/quiz-report-pdf.ts. This is the one report generator: "Download
+// report PDF" (admin and doctor), "Send report", and the automatic send after
+// each attempt all call makeQuizReport, which makes the PDF from the current
+// data every time and replaces the stored copy (quiz-reports/<office>/<va>/
+// <attempt>.pdf) and its 30-day signed link. A retake is its own attempt with
+// its own PDF.
 
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
@@ -13,6 +16,7 @@ import {
   alertFlags,
   buildQuizReport,
   checkTips,
+  quizTrend,
   correctSteps,
   mockTips,
   type DoneWellItem,
@@ -32,8 +36,6 @@ export const QUIZ_REPORT_BUCKET = "quiz-reports";
 export const LINK_SECONDS = 30 * 24 * 60 * 60;
 // Matches the default settings.grading.low_confidence_below.
 const LOW_CONFIDENCE = 0.7;
-// A stored link is signed again when it has less than a day left.
-const RESIGN_MS = 24 * 60 * 60 * 1000;
 
 function must<T>(r: { data: T; error: { message: string } | null }): T {
   if (r.error) throw new Error(r.error.message);
@@ -237,10 +239,11 @@ export async function buildQuizReportContent(db: Db, attemptId: string, r: Attem
     {
       vaName: r.vaName,
       officeName: r.officeName,
-      doctor: r.primaryDoctor ?? null,
+      doctors: r.doctors?.length ? r.doctors : r.primaryDoctor ? [r.primaryDoctor] : [],
       dayCode: r.dayCode,
       topic: r.dayTitle,
       date: submittedAt,
+      trend: quizTrend(r.history ?? [], r.repeats),
       points: r.points,
       maxPoints: r.maxPoints,
       resultLabel: RESULT_LABELS[r.result],
@@ -256,45 +259,31 @@ export async function buildQuizReportContent(db: Db, attemptId: string, r: Attem
 
 export type StoredQuizReport = { path: string; bytes: Uint8Array; link: string };
 
-// The attempt's PDF: made and stored the first time, then read back.
-// `force` makes it again (after VFDA changed a score).
-export async function ensureQuizReport(db: Db, attemptId: string, r: AttemptReport, force = false): Promise<StoredQuizReport> {
-  const [attemptRow, storedRow] = await Promise.all([
-    db.from("attempts").select("va_id, office_id, submitted_at").eq("id", attemptId).single(),
-    db.from("attempt_reports").select("pdf_path, link, link_expires_at").eq("attempt_id", attemptId).maybeSingle(),
-  ]);
-  const attempt = must(attemptRow) as { va_id: string; office_id: string; submitted_at: string };
-  const stored = must(storedRow) as { pdf_path: string; link: string; link_expires_at: string } | null;
+// The attempt's PDF, made from the current data, stored (replacing the old
+// copy) with a new 30-day signed link.
+export async function makeQuizReport(db: Db, attemptId: string, r: AttemptReport): Promise<StoredQuizReport> {
+  const attempt = must(await db.from("attempts").select("va_id, office_id, submitted_at").eq("id", attemptId).single()) as {
+    va_id: string;
+    office_id: string;
+    submitted_at: string;
+  };
+  const bytes = await quizReportPdf(await buildQuizReportContent(db, attemptId, r, attempt.submitted_at));
+  const path = `${attempt.office_id}/${attempt.va_id}/${attemptId}.pdf`;
   const storage = db.storage.from(QUIZ_REPORT_BUCKET);
-  let path = stored?.pdf_path ?? null;
-  let bytes: Uint8Array | null = null;
-  if (path && !force) {
-    const { data, error } = await storage.download(path);
-    if (!error && data) bytes = new Uint8Array(await data.arrayBuffer());
-  }
-  if (!bytes) {
-    bytes = await quizReportPdf(await buildQuizReportContent(db, attemptId, r, attempt.submitted_at));
-    path = `${attempt.office_id}/${attempt.va_id}/${attemptId}.pdf`;
-    const { error } = await storage.upload(path, bytes, { contentType: "application/pdf", upsert: true });
-    if (error) throw new Error(`The report PDF couldn't be stored: ${error.message}`);
-  }
-  let link = stored?.link ?? null;
-  const fresh = !force && stored && new Date(stored.link_expires_at).getTime() - Date.now() > RESIGN_MS;
-  if (!link || !fresh || path !== stored?.pdf_path) {
-    const { data, error } = await storage.createSignedUrl(path!, LINK_SECONDS);
-    if (error || !data) throw new Error(`The report link couldn't be made: ${error?.message ?? "no link"}`);
-    link = data.signedUrl;
-    must(
-      await db
-        .from("attempt_reports")
-        .upsert(
-          { attempt_id: attemptId, pdf_path: path, link, link_expires_at: new Date(Date.now() + LINK_SECONDS * 1000).toISOString() },
-          { onConflict: "attempt_id" },
-        )
-        .select("attempt_id"),
-    );
-  }
-  return { path: path!, bytes, link };
+  const { error } = await storage.upload(path, bytes, { contentType: "application/pdf", upsert: true });
+  if (error) throw new Error(`The report PDF couldn't be stored: ${error.message}`);
+  const { data, error: signError } = await storage.createSignedUrl(path, LINK_SECONDS);
+  if (signError || !data) throw new Error(`The report link couldn't be made: ${signError?.message ?? "no link"}`);
+  must(
+    await db
+      .from("attempt_reports")
+      .upsert(
+        { attempt_id: attemptId, pdf_path: path, link: data.signedUrl, link_expires_at: new Date(Date.now() + LINK_SECONDS * 1000).toISOString() },
+        { onConflict: "attempt_id" },
+      )
+      .select("attempt_id"),
+  );
+  return { path, bytes, link: data.signedUrl };
 }
 
 // ---------------------------------------------------------------------------
@@ -350,10 +339,19 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
     {
       vaName: "Test VA",
       officeName: "Test Office",
-      doctor: "Dr. Test",
+      doctors: ["Dr. Test"],
       dayCode: "W1D1",
       topic: "Basics & VA Onboarding",
       date: new Date().toISOString(),
+      trend: {
+        rows: [
+          { day: "W1D1", percent: 60, label: "Needs coaching", retakePercent: 85, retakeLabel: "Strong", current: false },
+          { day: "W1D2", percent: 72, label: "Needs coaching", retakePercent: null, retakeLabel: null, current: true },
+        ],
+        direction: "improving",
+        change: 12,
+        repeats: { quiz: { right: 2, total: 3 }, soFar: { right: 5, total: 7 } },
+      },
       points: 13,
       maxPoints: 18,
       resultLabel: "Needs coaching",

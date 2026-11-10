@@ -65,8 +65,8 @@ export async function setStartDate(vaId: string, date: string): Promise<ActionRe
 export async function resendAttemptReport(attemptId: string): Promise<ActionResult> {
   if (!(await admin())) return fail("VFDA admins only.");
   if (!UUID.test(attemptId)) return fail("Invalid request.");
-  // An existing PDF is made again, so it has the latest scores and alerts.
-  const { failed } = await sendAttemptReport(attemptId, { regenerate: true });
+  // The PDF is made again, so it has the latest scores and alerts.
+  const { failed } = await sendAttemptReport(attemptId);
   return failed ? fail(`${failed} couldn't be sent. See the error beside the report.`) : { ok: true, data: null };
 }
 
@@ -75,7 +75,7 @@ export async function resendAttemptReport(attemptId: string): Promise<ActionResu
 export async function sendReportAgain(attemptId: string): Promise<ActionResult> {
   if (!(await admin())) return fail("VFDA admins only.");
   if (!UUID.test(attemptId)) return fail("Invalid request.");
-  const { sent, failed } = await sendAttemptReport(attemptId, { regenerate: true, again: new Date().toISOString() });
+  const { sent, failed } = await sendAttemptReport(attemptId, { again: new Date().toISOString() });
   if (!sent && !failed) return fail("This attempt isn't finished yet.");
   return failed ? fail(`${failed} couldn't be sent. See the errors under "Sent again".`) : { ok: true, data: null };
 }

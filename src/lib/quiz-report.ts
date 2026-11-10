@@ -4,6 +4,8 @@
 // asks Claude and stores the PDF; src/lib/quiz-report-pdf.ts draws it.
 
 import { requiredSteps } from "@/lib/mock-grade";
+import { trendSummary, type DayHistory, type RepeatStats } from "@/lib/report";
+import { resultLabel } from "@/lib/va-flow";
 
 // The doctor's line when the card was fine and only the VA needs coaching.
 export const CARD_IS_CLEAR = "Card is clear – VA coaching only";
@@ -40,10 +42,43 @@ export type Tips = {
   strengths: { workflow: string; bullets: string[] }[];
 };
 
+export type TrendRow = {
+  day: string;
+  percent: number; // first try
+  label: string;
+  retakePercent: number | null;
+  retakeLabel: string | null;
+  current: boolean;
+};
+
+export type QuizTrend = {
+  rows: TrendRow[];
+  direction: "improving" | "steady" | "declining" | null; // null: the first day, no trend yet
+  change: number | null; // percentage points since the first day
+  repeats: { quiz: { right: number; total: number }; soFar: { right: number; total: number } };
+};
+
+export function quizTrend(history: DayHistory[], repeats: { quiz: RepeatStats; soFar: RepeatStats } | undefined): QuizTrend {
+  const { direction, change } = trendSummary(history);
+  return {
+    rows: history.map((h) => ({
+      day: h.day,
+      percent: h.percent,
+      label: resultLabel(h.label),
+      retakePercent: h.retakePercent,
+      retakeLabel: h.retakeLabel ? resultLabel(h.retakeLabel) : null,
+      current: h.current,
+    })),
+    direction,
+    change,
+    repeats: repeats ?? { quiz: { right: 0, total: 0 }, soFar: { right: 0, total: 0 } },
+  };
+}
+
 export type QuizReport = {
   vaName: string;
   officeName: string;
-  doctor: string | null;
+  doctors: string[]; // Primary first
   dayCode: string;
   topic: string;
   date: string; // ISO
@@ -52,6 +87,7 @@ export type QuizReport = {
   resultLabel: string;
   retake: boolean;
   timeSpent: number | null; // seconds
+  trend: QuizTrend;
   needsWork: (NeedsWorkItem & { coaching: string; cardTip: string })[];
   strengths: { workflow: string; name: string; bullets: string[] }[];
   // The Alerts box under the header: every critical error, then the flags.
@@ -218,6 +254,7 @@ export type Leads4LifePayload = {
   report_link: string;
   critical_errors: number;
   flags: string; // short, e.g. "fast finish, 3 pasted answers"; "none" when there are none
+  trend: string; // e.g. "improving, +12 pts"; "first day" before there's a trend
 };
 
 export const reportFileName = (r: Pick<QuizReport, "vaName" | "dayCode" | "retake">) =>

@@ -4,7 +4,7 @@
 // loads the data and sends it.
 
 import { retakeLineText, type RetakeComparison } from "@/lib/retake";
-import { RESULT_LABELS, type ResultLabel, type Trend } from "@/lib/va-flow";
+import { RESULT_LABELS, trend, type ResultLabel, type Trend } from "@/lib/va-flow";
 
 export type ReportItem = {
   code: string;
@@ -43,8 +43,12 @@ export type AttemptReport = {
   typicalTime?: number | null;
   // Days from the VA's start date to this attempt (reports only).
   sinceStart?: string;
-  // The office's Primary doctor (every doctor of the office gets the report).
+  // The office's Primary doctor (every doctor of the office gets the report), and every doctor's name, Primary first.
   primaryDoctor?: string;
+  doctors?: string[];
+  // Each training day taken up to this attempt (first try, retake beside it), and repeat success.
+  history?: DayHistory[];
+  repeats?: { quiz: RepeatStats; soFar: RepeatStats };
   // What the VA does ("All roles", or e.g. "Scheduling, Phones").
   scope?: string;
   // A day's retake: its first try (the official score) question by question.
@@ -54,6 +58,44 @@ export type AttemptReport = {
 };
 
 export const TREND_LABELS: Record<Trend, string> = { improving: "Improving", flat: "Flat", declining: "Declining" };
+
+export type DayHistory = {
+  day: string;
+  percent: number; // first try
+  label: ResultLabel | null;
+  retakePercent: number | null;
+  retakeLabel: ResultLabel | null;
+  current: boolean; // this attempt (or its retake)
+};
+
+// Missed questions answered right on the repeat, of all the repeats.
+export type RepeatStats = { right: number; total: number };
+
+export function repeatStats(items: Pick<ReportItem, "repeated" | "repeat_score" | "type" | "points">[]): RepeatStats {
+  const repeated = items.filter((i) => i.repeated);
+  return {
+    right: repeated.filter((i) => i.repeat_score !== null && i.repeat_score >= (i.type === "mc" ? i.points : 2)).length,
+    total: repeated.length,
+  };
+}
+
+// The trend over the first tries so far: improving / steady / declining, and
+// the change in points (percentage points) since the first day.
+export function trendSummary(history: Pick<DayHistory, "percent">[]) {
+  const percents = history.map((h) => h.percent);
+  const t = trend(percents);
+  return {
+    direction: t === null ? null : t === "flat" ? ("steady" as const) : t,
+    change: percents.length >= 2 ? percents[percents.length - 1] - percents[0] : null,
+  };
+}
+
+// Short, for Leads4Life: "improving, +12 pts"; "first day" before there's a trend.
+export function trendShort(history: Pick<DayHistory, "percent">[]): string {
+  const { direction, change } = trendSummary(history);
+  if (!direction || change === null) return "first day";
+  return `${direction}, ${change > 0 ? "+" : ""}${change} pts`;
+}
 
 // Critical errors on the first try (after VFDA's overrides).
 export const criticalCount = (r: Pick<AttemptReport, "items">) => r.items.filter((i) => i.critical_error).length;

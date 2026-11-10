@@ -1,12 +1,13 @@
 import "server-only";
 
 // "Download report PDF" (the admin attempt page, the doctor's attempt page
-// and My VA): the attempt's stored quiz report PDF, made now if it wasn't yet.
+// and My VA): the quiz report PDF, made now from the current data (replacing
+// the stored copy and its link).
 // VFDA, or a doctor of the attempt's office; never a VA.
 
 import type { CurrentUser } from "@/lib/auth";
 import { reportFileName } from "@/lib/quiz-report";
-import { ensureQuizReport } from "@/lib/quiz-reports";
+import { makeQuizReport } from "@/lib/quiz-reports";
 import { loadAttemptReport } from "@/lib/reports";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -22,7 +23,7 @@ export async function quizReportDownload(user: CurrentUser | null, attemptId: st
   const loaded = await loadAttemptReport(db, attemptId);
   // Not finished yet.
   if (!loaded) return new Response("Not found.", { status: 404 });
-  const { bytes } = await ensureQuizReport(db, attemptId, loaded.report);
+  const { bytes } = await makeQuizReport(db, attemptId, loaded.report);
   const name = reportFileName({ ...loaded.report, retake: !!loaded.report.retake }).replace(/[^\w .()-]+/g, "");
   return new Response(Buffer.from(bytes), {
     headers: {
@@ -37,5 +38,5 @@ export async function quizReportDownload(user: CurrentUser | null, attemptId: st
 export async function refreshQuizReport(attemptId: string) {
   const db = createAdminClient();
   const loaded = await loadAttemptReport(db, attemptId);
-  if (loaded) await ensureQuizReport(db, attemptId, loaded.report, true);
+  if (loaded) await makeQuizReport(db, attemptId, loaded.report);
 }

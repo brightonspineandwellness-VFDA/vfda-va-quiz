@@ -38,6 +38,8 @@ async function draw(r: QuizReport, shown: number) {
   const muted = rgb(0.4, 0.4, 0.4);
   const red = rgb(0.72, 0.11, 0.11);
   const blue = rgb(0.12, 0.23, 0.54);
+  const green = rgb(0.16, 0.55, 0.27);
+  const amber = rgb(0.85, 0.6, 0.1);
 
   let page: PDFPage = doc.addPage([PAGE.width, PAGE.height]);
   let y = PAGE.height - MARGIN;
@@ -70,10 +72,56 @@ async function draw(r: QuizReport, shown: number) {
     text(s, { font: bold, size: 12, color, gap: 3 });
   };
 
+  // Trend: a bar per day taken (first try, retake beside it), the label,
+  // improving / steady / declining with the change since the first day, and
+  // how often a missed question was right on the second try.
+  function drawTrend() {
+    heading("Trend");
+    const t = r.trend;
+    const rowH = 15;
+    const barX = MARGIN + 52;
+    const barW = 200;
+    const tone = (label: string) => (/strong/i.test(label) ? green : /risk/i.test(label) ? red : amber);
+    if (y - rowH * Math.min(t.rows.length, 6) < MARGIN + 16) newPage();
+    for (const row of t.rows) {
+      if (y - rowH < MARGIN + 16) newPage();
+      y -= rowH;
+      const base = y + 3;
+      page.drawText(pdfText(row.day), { x: MARGIN + 6, y: base + 1, size: 9, font: row.current ? bold : regular, color: ink });
+      page.drawRectangle({ x: barX, y: base, width: barW, height: 9, color: rgb(0.93, 0.93, 0.93) });
+      page.drawRectangle({ x: barX, y: base, width: Math.max(1, (barW * Math.min(100, row.percent)) / 100), height: 9, color: tone(row.label) });
+      // The retake: a thin dark tick at its score.
+      if (row.retakePercent !== null) {
+        page.drawRectangle({ x: barX + (barW * Math.min(100, row.retakePercent)) / 100 - 1, y: base - 2, width: 2, height: 13, color: blue });
+      }
+      const after = `${row.percent}% ${row.label}${row.retakePercent !== null ? `   ·   retake ${row.retakePercent}%${row.retakeLabel ? ` ${row.retakeLabel}` : ""}` : ""}${row.current ? "   (this report)" : ""}`;
+      page.drawText(pdfText(after), { x: barX + barW + 8, y: base + 1, size: 9, font: row.current ? bold : regular, color: ink });
+    }
+    if (!t.rows.length) text("No training day taken yet.", { color: muted, indent: 6 });
+    y -= 4;
+    const first = t.rows[0];
+    text(
+      t.direction && t.change !== null && first
+        ? `${t.direction.charAt(0).toUpperCase()}${t.direction.slice(1)}: ${t.change > 0 ? "+" : ""}${t.change} pts since the first day (${first.day} ${first.percent}% -> ${t.rows[t.rows.length - 1].percent}%).`
+        : "First day: no trend yet.",
+      { font: bold, size: 9.5, indent: 6, gap: 1 },
+    );
+    const rate = (s: { right: number; total: number }) => `${s.right} of ${s.total}${s.total ? ` (${Math.round((s.right * 100) / s.total)}%)` : ""}`;
+    text(
+      `Repeat success: ${t.repeats.quiz.total ? `${rate(t.repeats.quiz)} missed questions right on the second try in this quiz` : "no repeats in this quiz"}; ${rate(t.repeats.soFar)} so far.`,
+      { size: 9, indent: 6, gap: 1 },
+    );
+    text("Bars: first-try score per day (green Strong, amber Needs coaching, red At risk); blue tick: retake score.", { size: 8, indent: 6, color: muted });
+  }
+
   // Header.
   text(`Quiz report: ${r.vaName}${r.retake ? "  ·  RETAKE" : ""}`, { font: bold, size: 15, gap: 3, color: r.retake ? blue : ink });
   text(
-    [`Office: ${r.officeName}`, r.doctor ? `Doctor: ${r.doctor}` : null, new Date(r.date).toLocaleDateString("en-US", { dateStyle: "medium" })]
+    [
+      `Office: ${r.officeName}`,
+      r.doctors.length ? `${r.doctors.length > 1 ? "Doctors" : "Doctor"}: ${r.doctors.join(", ")}` : null,
+      new Date(r.date).toLocaleDateString("en-US", { dateStyle: "medium" }),
+    ]
       .filter(Boolean)
       .join("  ·  "),
     { color: muted, size: 9 },
@@ -123,6 +171,8 @@ async function draw(r: QuizReport, shown: number) {
     // A red bar down the left edge when there's anything in it.
     if (any) page.drawRectangle({ x: MARGIN, y, width: 4, height: boxTop - y, color: red });
   }
+
+  drawTrend();
 
   heading("Needs work");
   if (!r.needsWork.length) text("Nothing: every item got full points.", { color: muted, indent: 6 });
