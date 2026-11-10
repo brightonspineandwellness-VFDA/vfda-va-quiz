@@ -213,8 +213,8 @@ export type Leads4LifePayload = {
   day: string;
   topic: string;
   result: string;
-  first_try_score: number; // percent
-  is_retake: boolean;
+  first_try_score: string; // "72%"
+  is_retake: "yes" | "no";
   report_link: string;
   critical_errors: number;
   flags: string; // short, e.g. "fast finish, 3 pasted answers"; "none" when there are none
