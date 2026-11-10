@@ -5,7 +5,7 @@ import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { aiMode } from "@/lib/ai";
 import { requireRole } from "@/lib/auth";
 import { appUrl, reportFrom, vfdaEmails } from "@/lib/reports";
-import { testEmail, testSlack } from "@/lib/va-admin-actions";
+import { testEmail, testLeads4Life, testSlack } from "@/lib/va-admin-actions";
 
 // A test send can take two tries.
 export const maxDuration = 60;
@@ -57,6 +57,11 @@ async function Settings() {
         <h2 className="text-lg font-semibold">Test sends</h2>
         <TestButton action={testEmail} label="Send a test email to VFDA" />
         <TestButton action={testSlack} label="Post a test message to Slack" />
+        <TestButton action={testLeads4Life} label="Send test to Leads4Life" />
+        <p className="text-xs text-foreground/60">
+          The Leads4Life test sends a sample report (Dr. Test, brightonspineandwellness+doctortest@gmail.com) with a real 30-day
+          link to a sample PDF, and shows Leads4Life&apos;s answer.
+        </p>
       </section>
     </>
   );

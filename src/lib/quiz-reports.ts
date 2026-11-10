@@ -268,3 +268,57 @@ export async function ensureQuizReport(db: Db, attemptId: string, r: AttemptRepo
   }
   return { path: path!, bytes, link };
 }
+
+// ---------------------------------------------------------------------------
+// "Send test to Leads4Life" (/admin/settings): a sample report with fake
+// content, stored at test/sample-quiz-report.pdf, and its 30-day signed link.
+// ---------------------------------------------------------------------------
+
+export async function sampleQuizReportLink(db: Db): Promise<string> {
+  const needsWork: NeedsWorkItem[] = [
+    {
+      key: "0",
+      code: "W1D1-A2",
+      workflow: "WF04",
+      workflowName: "Phone handling",
+      type: "situational",
+      points: 2,
+      score: 1,
+      scenario: "Maria Test (FAKE) calls to move tomorrow's 9 a.m. visit and asks to be put on hold.",
+      answer: "Steps: Moved the appointment.\nSay: Please hold.",
+      reason: "Moved the visit but put the caller on hold without asking and didn't verify her date of birth.",
+      missed: ["Verify the caller's name and date of birth", "Ask before putting the caller on hold"],
+      critical: false,
+      criticalQuote: null,
+      sourceCard: "HOW TO: Phone Scripts",
+      sourceQuote: null,
+      correct: ["Verify the caller's name and date of birth", "Ask before putting the caller on hold"],
+    },
+  ];
+  const doneWell: DoneWellItem[] = [{ workflow: "WF01", workflowName: "Scheduling", partTitle: "Booking a new patient", correct: [] }];
+  const report = buildQuizReport(
+    {
+      vaName: "Test VA",
+      officeName: "Test Office",
+      doctor: "Dr. Test",
+      dayCode: "W1D1",
+      topic: "Basics & VA Onboarding",
+      date: new Date().toISOString(),
+      points: 13,
+      maxPoints: 18,
+      resultLabel: "Needs coaching",
+      retake: false,
+      timeSpent: 1500,
+    },
+    needsWork,
+    doneWell,
+    mockTips(needsWork, doneWell),
+  );
+  const path = "test/sample-quiz-report.pdf";
+  const storage = db.storage.from(QUIZ_REPORT_BUCKET);
+  const { error } = await storage.upload(path, await quizReportPdf(report), { contentType: "application/pdf", upsert: true });
+  if (error) throw new Error(`The sample PDF couldn't be stored: ${error.message}`);
+  const { data, error: signError } = await storage.createSignedUrl(path, LINK_SECONDS);
+  if (signError || !data) throw new Error(`The sample link couldn't be made: ${signError?.message ?? "no link"}`);
+  return data.signedUrl;
+}

@@ -11,7 +11,7 @@ import "server-only";
 
 import { passPercent } from "@/lib/certification";
 import { reportFileName, type Leads4LifePayload } from "@/lib/quiz-report";
-import { ensureQuizReport, type StoredQuizReport } from "@/lib/quiz-reports";
+import { ensureQuizReport, sampleQuizReportLink, type StoredQuizReport } from "@/lib/quiz-reports";
 import { loadRetakeComparison } from "@/lib/retake";
 import {
   criticalAlertText,
@@ -327,6 +327,41 @@ export async function sendTestEmail(): Promise<{ sentTo: string[]; error: string
     sentTo.push(address);
   }
   return { sentTo, error: null };
+}
+
+// A sample payload, as Leads4Life will get it, with a real signed link to a
+// sample PDF. Sent once (no retry), so the answer shown is Leads4Life's own.
+export async function sendTestLeads4Life(): Promise<{ status: number | null; text: string; error: string | null }> {
+  const url = process.env.LEADS4LIFE_WEBHOOK_URL?.trim();
+  if (!url) return { status: null, text: "", error: "LEADS4LIFE_WEBHOOK_URL isn't set." };
+  let link: string;
+  try {
+    link = await sampleQuizReportLink(createAdminClient());
+  } catch (e) {
+    return { status: null, text: "", error: e instanceof Error ? e.message : String(e) };
+  }
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": `test-${Date.now()}` },
+      body: JSON.stringify({
+        doctor_email: "brightonspineandwellness+doctortest@gmail.com",
+        doctor_name: "Dr. Test",
+        office: "Test Office",
+        va_name: "Test VA",
+        day: "W1D1",
+        topic: "Basics & VA Onboarding",
+        result: "Needs coaching",
+        first_try_score: "72%",
+        is_retake: "no",
+        report_link: link,
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    return { status: res.status, text: `${res.status} ${res.statusText}`.trim() + `: ${(await res.text().catch(() => "")).slice(0, 200)}`, error: null };
+  } catch (e) {
+    return { status: null, text: "", error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export const sendTestSlack = () =>

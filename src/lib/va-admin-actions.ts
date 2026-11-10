@@ -12,7 +12,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
 import { refreshQuizReport } from "@/lib/quiz-report-download";
-import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestSlack } from "@/lib/reports";
+import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestLeads4Life, sendTestSlack } from "@/lib/reports";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
 const DAY_CODE = /^W\dD\d$/;
@@ -126,6 +126,14 @@ export async function testEmail(): Promise<ActionResult<string>> {
   if (!(await admin())) return fail("VFDA admins only.");
   const { sentTo, error } = await sendTestEmail();
   return error ? fail(error) : { ok: true, data: `Sent to ${sentTo.join(", ")}.` };
+}
+
+// Shows Leads4Life's answer: its status code (and the start of its reply).
+export async function testLeads4Life(): Promise<ActionResult<string>> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  const r = await sendTestLeads4Life();
+  if (r.error) return fail(r.error);
+  return r.status !== null && r.status >= 200 && r.status < 300 ? { ok: true, data: `Leads4Life answered ${r.text}` } : fail(`Leads4Life answered ${r.text}`);
 }
 
 export async function testSlack(): Promise<ActionResult<string>> {
