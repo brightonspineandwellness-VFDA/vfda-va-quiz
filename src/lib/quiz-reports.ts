@@ -10,11 +10,13 @@ import "server-only";
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
 import {
+  alertFlags,
   buildQuizReport,
   checkTips,
   correctSteps,
   mockTips,
   type DoneWellItem,
+  type FlagInput,
   type NeedsWorkItem,
   type QuizReport,
   type Tips,
@@ -28,6 +30,8 @@ type Db = ReturnType<typeof createAdminClient>;
 
 export const QUIZ_REPORT_BUCKET = "quiz-reports";
 export const LINK_SECONDS = 30 * 24 * 60 * 60;
+// Matches the default settings.grading.low_confidence_below.
+const LOW_CONFIDENCE = 0.7;
 // A stored link is signed again when it has less than a day left.
 const RESIGN_MS = 24 * 60 * 60 * 1000;
 
@@ -50,6 +54,7 @@ type Scenario = {
   source_quote: string | null;
   part_title: string | null;
   answer_format: AnswerFormat | null;
+  critical_fail: string | null;
 };
 
 type Feedback = { reason?: string; missed_steps?: string[] } | null;
@@ -75,7 +80,7 @@ async function loadItems(db: Db, attemptId: string) {
   const scenarios = (must(
     await db
       .from("office_scenarios")
-      .select("id, code, workflow, type, points, stem, options, answer, correct_response, source_card, source_quote, part_title, answer_format")
+      .select("id, code, workflow, type, points, stem, options, answer, correct_response, source_card, source_quote, part_title, answer_format, critical_fail")
       .in("id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
   ) ?? []) as Scenario[];
   const scenarioOf = new Map(scenarios.map((s) => [s.id, s]));
@@ -84,6 +89,9 @@ async function loadItems(db: Db, attemptId: string) {
   const dayFormat = ((must(day)?.answer_format as AnswerFormat | undefined) ?? "steps_say_doc") as AnswerFormat;
 
   const needsWork: NeedsWorkItem[] = [];
+  // For the Alerts box: grades waiting for VFDA, and VFDA's score changes.
+  const awaiting: string[] = [];
+  const overrides: FlagInput["overrides"] = [];
   const doneWell: DoneWellItem[] = [];
   for (const row of items) {
     const s = scenarioOf.get(row.office_scenario_id);
@@ -100,6 +108,12 @@ async function loadItems(db: Db, attemptId: string) {
     );
     const workflowName = names.get(s.workflow) ?? s.workflow;
     const correct = s.type === "mc" ? [] : correctSteps(s.correct_response);
+    const o = row.vfda_override as { first_score?: number; note?: string } | null;
+    if (o && typeof o.first_score === "number") {
+      overrides.push({ code: s.code, from: row.first_score, to: o.first_score, points: s.points, note: String(o.note ?? "").trim() });
+    } else if (s.type !== "mc" && row.first_answer && (row.first_score === null || (row.ai_confidence !== null && Number(row.ai_confidence) < LOW_CONFIDENCE))) {
+      awaiting.push(s.code);
+    }
     if (i.first_score !== null && i.first_score >= s.points && !i.critical_error) {
       doneWell.push({ workflow: s.workflow, workflowName, partTitle: s.part_title ?? "", correct });
       continue;
@@ -132,12 +146,14 @@ async function loadItems(db: Db, attemptId: string) {
       missed: s.type === "mc" ? [] : (feedback?.missed_steps ?? []).map(String),
       critical: i.critical_error,
       criticalQuote: row.critical_quote,
+      partTitle: s.part_title ?? "",
+      criticalFail: s.critical_fail,
       sourceCard: s.source_card,
       sourceQuote: s.source_quote,
       correct: s.type === "mc" ? (right ? [right] : []) : correct,
     });
   }
-  return { needsWork, doneWell };
+  return { needsWork, doneWell, awaiting, overrides, totalAnswers: items.filter((r) => r.first_answer).length };
 }
 
 // ---------------------------------------------------------------------------
@@ -204,8 +220,19 @@ ${doneWell.map((d) => `- ${d.workflow} ${d.workflowName}: ${d.partTitle || d.cor
 // ---------------------------------------------------------------------------
 
 export async function buildQuizReportContent(db: Db, attemptId: string, r: AttemptReport, submittedAt: string): Promise<QuizReport> {
-  const { needsWork, doneWell } = await loadItems(db, attemptId);
+  const { needsWork, doneWell, awaiting, overrides, totalAnswers } = await loadItems(db, attemptId);
   const tips = await quizTips(needsWork, doneWell);
+  const flags = alertFlags({
+    retake: !!r.retake,
+    fastFinish: r.fastFinish,
+    timeSpent: r.timeSpent,
+    answerTime: r.answerTime ?? null,
+    typicalTime: r.typicalTime ?? null,
+    pastedAnswers: r.pastedAnswers ?? 0,
+    totalAnswers,
+    awaiting,
+    overrides,
+  });
   return buildQuizReport(
     {
       vaName: r.vaName,
@@ -223,6 +250,7 @@ export async function buildQuizReportContent(db: Db, attemptId: string, r: Attem
     needsWork,
     doneWell,
     tips,
+    flags,
   );
 }
 
@@ -290,9 +318,31 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
       missed: ["Verify the caller's name and date of birth", "Ask before putting the caller on hold"],
       critical: false,
       criticalQuote: null,
+      partTitle: "Rescheduling by phone",
+      criticalFail: null,
       sourceCard: "HOW TO: Phone Scripts",
       sourceQuote: null,
       correct: ["Verify the caller's name and date of birth", "Ask before putting the caller on hold"],
+    },
+    {
+      key: "1",
+      code: "W1D1-A5",
+      workflow: "WF09",
+      workflowName: "Patient escalation",
+      type: "situational",
+      points: 2,
+      score: 0,
+      scenario: "A caller (FAKE) says their father has chest pain and is short of breath, and asks for the first appointment.",
+      answer: "Say: We have an opening at 10 a.m. tomorrow, see you then.",
+      reason: "Booked an appointment instead of using the emergency script.",
+      missed: ["Tell the caller to call 911 or go to the ER now", "Tell the doctor right away"],
+      critical: true,
+      criticalQuote: "We have an opening at 10 a.m. tomorrow",
+      partTitle: "Emergency call",
+      criticalFail: "Books or advises instead of directing a possible emergency to 911 / the ER.",
+      sourceCard: "Open & Close",
+      sourceQuote: "Emergencies: tell the caller to call 911",
+      correct: ["Tell the caller to call 911 or go to the ER now", "Tell the doctor right away"],
     },
   ];
   const doneWell: DoneWellItem[] = [{ workflow: "WF01", workflowName: "Scheduling", partTitle: "Booking a new patient", correct: [] }];
@@ -313,6 +363,17 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
     needsWork,
     doneWell,
     mockTips(needsWork, doneWell),
+    alertFlags({
+      retake: false,
+      fastFinish: true,
+      timeSpent: 480,
+      answerTime: 420,
+      typicalTime: 1500,
+      pastedAnswers: 3,
+      totalAnswers: 9,
+      awaiting: [],
+      overrides: [],
+    }),
   );
   const path = "test/sample-quiz-report.pdf";
   const storage = db.storage.from(QUIZ_REPORT_BUCKET);

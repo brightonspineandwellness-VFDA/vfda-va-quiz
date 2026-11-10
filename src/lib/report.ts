@@ -37,6 +37,10 @@ export type AttemptReport = {
   timeSpent: number | null; // seconds
   fastFinish: boolean;
   pastes: number;
+  // Answers with pasted text, and (when known) the time spent answering vs. the typical time, in seconds.
+  pastedAnswers?: number;
+  answerTime?: number | null;
+  typicalTime?: number | null;
   // Days from the VA's start date to this attempt (reports only).
   sinceStart?: string;
   // The office's Primary doctor (every doctor of the office gets the report).
@@ -50,6 +54,31 @@ export type AttemptReport = {
 };
 
 export const TREND_LABELS: Record<Trend, string> = { improving: "Improving", flat: "Flat", declining: "Declining" };
+
+// Critical errors on the first try (after VFDA's overrides).
+export const criticalCount = (r: Pick<AttemptReport, "items">) => r.items.filter((i) => i.critical_error).length;
+
+// Grades waiting for VFDA: low-confidence or ungraded answers VFDA hasn't overridden.
+export const awaitingReview = (r: Pick<AttemptReport, "items">) =>
+  r.items.filter((i) => i.type !== "mc" && !i.overridden && (i.low_confidence || i.first_score === null));
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+// The flags in short ("fast finish, 3 pasted answers"), for Leads4Life and the
+// VFDA email; the PDF's Alerts box says the same at length.
+export function shortFlags(r: AttemptReport): string[] {
+  const awaiting = awaitingReview(r).length;
+  const overridden = r.items.filter((i) => i.overridden).length;
+  return [
+    r.fastFinish && "fast finish",
+    !!r.pastedAnswers && plural(r.pastedAnswers, "pasted answer"),
+    awaiting > 0 && `${plural(awaiting, "grade")} awaiting VFDA review`,
+    overridden > 0 && `${plural(overridden, "score")} changed by VFDA`,
+    !!r.retake && "retake",
+  ].filter((f): f is string => !!f);
+}
+
+export const flagsText = (r: AttemptReport) => shortFlags(r).join(", ") || "none";
 
 export function trendText(t: AttemptReport["trend"]) {
   if (!t.direction) return "first day, no trend yet";
@@ -109,6 +138,8 @@ export function reportSections(r: AttemptReport) {
             ["Result", RESULT_LABELS[r.result]],
             ["First-try score", `${r.points}/${r.maxPoints} (${percent}%)`],
           ]) as [string, string][]),
+      ["Critical errors", String(criticalCount(r))],
+      ["Flags", flagsText(r)],
       ["Trend", trendText(r.trend)],
       ["Time spent", minutesText(r.timeSpent)],
       ...(r.sinceStart ? [["Since start", r.sinceStart] as [string, string]] : []),

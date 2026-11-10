@@ -780,6 +780,13 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
       feedback_released_at: now.toISOString(),
     })
     .eq("id", attempt.id);
+  // For the quiz report's "fast finish" (time vs. typical). Separate, so a
+  // database without these columns yet still finishes the quiz.
+  const { error: timesError } = await db
+    .from("attempts")
+    .update({ answer_time: spentTotal, typical_time: Math.round(normalTotal) })
+    .eq("id", attempt.id);
+  if (timesError) console.error("Answer times not saved:", timesError.message);
 
   // The day is done whatever the score; the next one can open.
   if (!ctx.drill) {

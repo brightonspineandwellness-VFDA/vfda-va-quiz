@@ -7,7 +7,7 @@ import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
 import { minutesText } from "@/lib/report";
 import type { RetakeComparison } from "@/lib/retake";
-import { resendAttemptReport } from "@/lib/va-admin-actions";
+import { resendAttemptReport, sendReportAgain } from "@/lib/va-admin-actions";
 import { attemptLabel, percentOf, resultLabel } from "@/lib/va-flow";
 
 const LABEL_TONE: Record<string, string> = {
@@ -155,6 +155,7 @@ function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
       {admin && (
         <div className="flex flex-col gap-1">
           <ReportStatus attemptId={attempt.id} rows={data.notifications.filter((n) => n.event === "")} />
+          {attempt.submitted_at && <SendAgain attemptId={attempt.id} rows={data.notifications.filter((n) => n.event.startsWith("again:"))} />}
           {alerts.length > 0 && (
             <p className="text-sm">Critical error alert sent to {[...new Set(alerts.map((n) => n.recipient))].join(", ")}</p>
           )}
@@ -260,6 +261,33 @@ function Badge({ tone, children }: { tone: "red" | "amber"; children: ReactNode 
 }
 
 type NoteRow = AttemptReviewData["notifications"][number];
+
+// "Send report": the PDF made again and everything sent again; the last such send's outcome.
+function SendAgain({ attemptId, rows }: { attemptId: string; rows: Pick<NoteRow, "channel" | "recipient" | "status" | "error" | "event">[] }) {
+  const last = rows.map((r) => r.event).sort().at(-1);
+  const mine = rows.filter((r) => r.event === last);
+  const sent = mine.filter((r) => r.status === "sent");
+  const failed = mine.filter((r) => r.status === "failed");
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <ActionButton action={sendReportAgain.bind(null, attemptId)} label="Send report" pendingLabel="Sending…" />
+        <span className="text-foreground/60">Makes the PDF again and sends it to VFDA, Slack and Leads4Life.</span>
+      </div>
+      {last && (
+        <span>
+          Sent again {new Date(last.slice("again:".length)).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
+          {sent.length > 0 && ` to ${sent.map(where).join(", ")}`}
+        </span>
+      )}
+      {failed.map((r) => (
+        <span key={`${r.channel}:${r.recipient}`} className="text-red-700 dark:text-red-400">
+          {where(r)}: {r.error ?? "not sent"}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // "Download report PDF": the attempt's quiz report (made the first time it's asked for).
 export function ReportPdfLink({ attemptId, area }: { attemptId: string; area: "admin" | "doctor" }) {

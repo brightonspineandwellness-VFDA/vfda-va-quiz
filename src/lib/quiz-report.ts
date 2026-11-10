@@ -24,6 +24,9 @@ export type NeedsWorkItem = {
   missed: string[];
   critical: boolean;
   criticalQuote: string | null;
+  // The question's topic, and why an answer is critical (the scenario's critical fail).
+  partTitle: string;
+  criticalFail: string | null;
   // What the card says about it (null: the card is silent), for the doctor's tip.
   sourceCard: string | null;
   sourceQuote: string | null;
@@ -51,7 +54,42 @@ export type QuizReport = {
   timeSpent: number | null; // seconds
   needsWork: (NeedsWorkItem & { coaching: string; cardTip: string })[];
   strengths: { workflow: string; name: string; bullets: string[] }[];
+  // The Alerts box under the header: every critical error, then the flags.
+  alerts: { critical: CriticalAlert[]; flags: string[] };
 };
+
+export type CriticalAlert = { code: string; topic: string; quote: string; why: string; coaching: string };
+
+export type FlagInput = {
+  retake: boolean;
+  fastFinish: boolean;
+  timeSpent: number | null; // seconds, start to finish
+  answerTime: number | null; // seconds answering, and what's typical for these items
+  typicalTime: number | null;
+  pastedAnswers: number;
+  totalAnswers: number;
+  awaiting: string[]; // codes of low-confidence or ungraded answers VFDA hasn't reviewed
+  overrides: { code: string; from: number | null; to: number; points: number; note: string }[];
+};
+
+const mins = (s: number) => `${Math.max(1, Math.round(s / 60))} min`;
+
+// The flags at length, for the PDF's Alerts box.
+export function alertFlags(f: FlagInput): string[] {
+  return [
+    f.retake && "RETAKE: the first try stays the official score.",
+    f.fastFinish &&
+      (f.answerTime && f.typicalTime
+        ? `Unusually fast finish: ${mins(f.answerTime)} answering vs. about ${mins(f.typicalTime)} typical for these questions.`
+        : `Unusually fast finish${f.timeSpent ? ` (${mins(f.timeSpent)} in all)` : ""}: well under the typical time for these questions.`),
+    f.pastedAnswers > 0 && `Pasting: ${f.pastedAnswers} of ${f.totalAnswers} answers had pasted text.`,
+    f.awaiting.length > 0 &&
+      `${f.awaiting.length} AI grade${f.awaiting.length === 1 ? "" : "s"} waiting for VFDA review (low confidence): ${f.awaiting.join(", ")}.`,
+    ...f.overrides.map(
+      (o) => `VFDA changed the score on ${o.code}: ${o.from === null ? "ungraded" : `${o.from}/${o.points}`} -> ${o.to}/${o.points}${o.note ? ` ("${o.note}")` : ""}.`,
+    ),
+  ].filter((x): x is string => !!x);
+}
 
 const MAX_COACHING = 240;
 const MAX_CARD_TIP = 180;
@@ -125,18 +163,32 @@ export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneW
 }
 
 export function buildQuizReport(
-  head: Omit<QuizReport, "needsWork" | "strengths">,
+  head: Omit<QuizReport, "needsWork" | "strengths" | "alerts">,
   needsWork: NeedsWorkItem[],
   doneWell: DoneWellItem[],
   tips: Tips,
+  flags: string[] = [],
 ): QuizReport {
   const names = new Map([...needsWork, ...doneWell].map((i) => [i.workflow, i.workflowName]));
+  const ordered = orderNeedsWork(needsWork).map((i) => {
+    const t = tips.items.find((x) => x.key === i.key);
+    return { ...i, coaching: t?.coaching ?? "", cardTip: t?.card ?? CARD_IS_CLEAR };
+  });
   return {
     ...head,
-    needsWork: orderNeedsWork(needsWork).map((i) => {
-      const t = tips.items.find((x) => x.key === i.key);
-      return { ...i, coaching: t?.coaching ?? "", cardTip: t?.card ?? CARD_IS_CLEAR };
-    }),
+    alerts: {
+      critical: ordered
+        .filter((i) => i.critical)
+        .map((i) => ({
+          code: i.code,
+          topic: i.partTitle || i.workflowName,
+          quote: i.criticalQuote ?? "",
+          why: i.criticalFail?.trim() || "The answer did something the scenario lists as a critical fail.",
+          coaching: i.coaching,
+        })),
+      flags,
+    },
+    needsWork: ordered,
     strengths: tips.strengths
       .filter((s) => s.bullets.length)
       .map((s) => ({ workflow: s.workflow, name: names.get(s.workflow) ?? s.workflow, bullets: s.bullets })),
@@ -164,6 +216,8 @@ export type Leads4LifePayload = {
   first_try_score: number; // percent
   is_retake: boolean;
   report_link: string;
+  critical_errors: number;
+  flags: string; // short, e.g. "fast finish, 3 pasted answers"; "none" when there are none
 };
 
 export const reportFileName = (r: Pick<QuizReport, "vaName" | "dayCode" | "retake">) =>

@@ -45,13 +45,13 @@ async function draw(r: QuizReport, shown: number) {
     page = doc.addPage([PAGE.width, PAGE.height]);
     y = PAGE.height - MARGIN;
   };
-  type Style = { font?: PDFFont; size?: number; color?: ReturnType<typeof rgb>; indent?: number; gap?: number };
+  type Style = { font?: PDFFont; size?: number; color?: ReturnType<typeof rgb>; indent?: number; gap?: number; right?: number };
   const lineHeight = (size: number) => size * 1.3;
   const text = (s: string, o: Style = {}) => {
     const font = o.font ?? regular;
     const size = o.size ?? 9.5;
     const indent = o.indent ?? 0;
-    for (const line of wrap(s, font, size, WIDTH - indent)) {
+    for (const line of wrap(s, font, size, WIDTH - indent - (o.right ?? 0))) {
       if (y - lineHeight(size) < MARGIN + 16) newPage();
       y -= lineHeight(size);
       page.drawText(line, { x: MARGIN + indent, y: y + size * 0.3, size, font, color: o.color ?? ink });
@@ -84,6 +84,45 @@ async function draw(r: QuizReport, shown: number) {
     `${r.retake ? "Retake score" : "First-try score"} ${r.points}/${r.maxPoints} (${percent}%)   ·   ${r.resultLabel}   ·   Time spent ${minutesText(r.timeSpent)}`,
     { font: bold, size: 10.5, gap: 2 },
   );
+
+  // Alerts: red when anything is in it.
+  const { critical, flags } = r.alerts;
+  y -= 6;
+  const boxTop = y;
+  const pad = 8;
+  const boxIndent = pad;
+  const alertsStart = doc.getPageCount();
+  y -= pad;
+  if (!critical.length && !flags.length) {
+    text("Alerts: No critical errors or flags", { font: bold, size: 10, indent: boxIndent, color: muted, gap: 2, right: pad });
+  } else {
+    text(`Alerts: ${critical.length} critical error${critical.length === 1 ? "" : "s"}${flags.length ? `, ${flags.length} flag${flags.length === 1 ? "" : "s"}` : ""}`, { font: bold, size: 10.5, indent: boxIndent, color: red, gap: 2, right: pad });
+    for (const c of critical) {
+      text(`CRITICAL · ${c.code} · ${c.topic}`, { font: bold, size: 9.5, indent: boxIndent, color: red, gap: 0, right: pad });
+      text(`VA's words: "${cut(c.quote, 300)}"`, { size: 9, indent: boxIndent + 8, color: red, gap: 0, right: pad });
+      text(`Why it's critical: ${cut(c.why, 300)}`, { size: 9, indent: boxIndent + 8, gap: 0, right: pad });
+      text(`Coaching: ${c.coaching}`, { size: 9, indent: boxIndent + 8, gap: 3, right: pad });
+    }
+    if (flags.length) {
+      text("Flags", { font: bold, size: 9.5, indent: boxIndent, gap: 0, right: pad });
+      for (const f of flags) text(`- ${f}`, { size: 9, indent: boxIndent + 8, right: pad });
+    }
+  }
+  y -= pad - 2;
+  // The box, drawn as a border after its text (on one page only: it fits unless it's very long).
+  if (doc.getPageCount() === alertsStart) {
+    const any = critical.length > 0 || flags.length > 0;
+    page.drawRectangle({
+      x: MARGIN,
+      y,
+      width: WIDTH,
+      height: boxTop - y,
+      borderColor: any ? red : rgb(0.75, 0.75, 0.75),
+      borderWidth: any ? 1.5 : 0.6,
+    });
+    // A red bar down the left edge when there's anything in it.
+    if (any) page.drawRectangle({ x: MARGIN, y, width: 4, height: boxTop - y, color: red });
+  }
 
   heading("Needs work");
   if (!r.needsWork.length) text("Nothing: every item got full points.", { color: muted, indent: 6 });

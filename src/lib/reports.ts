@@ -21,6 +21,8 @@ import {
   reportSlack,
   reportText,
   slackEscape,
+  criticalCount,
+  flagsText,
   workflowStatus,
   type AttemptReport,
   type ReportItem,
@@ -77,6 +79,14 @@ export async function officeDoctors(db: Db, officeId: string | null) {
 
 type Feedback = { missed_steps?: string[] } | null;
 
+// Time spent answering vs. the typical time (saved when the quiz is finished).
+// Null for older attempts, or before quiz-report-alerts.sql has been run.
+async function attemptTimes(db: Db, attemptId: string) {
+  const { data, error } = await db.from("attempts").select("answer_time, typical_time").eq("id", attemptId).maybeSingle();
+  if (error || !data) return { answerTime: null, typicalTime: null };
+  return { answerTime: data.answer_time as number | null, typicalTime: data.typical_time as number | null };
+}
+
 export async function loadAttemptReport(db: Db, attemptId: string) {
   const attempt = must(
     await db
@@ -119,7 +129,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       await db
         .from("attempt_items")
         .select(
-          "attempt_id, office_scenario_id, first_score, first_feedback, repeat_scenario_id, repeat_score, critical_error, critical_quote, ai_confidence, vfda_override, fast, position",
+          "attempt_id, office_scenario_id, first_score, first_feedback, repeat_scenario_id, repeat_score, critical_error, critical_quote, ai_confidence, vfda_override, fast, position, paste_log",
         )
         .in("attempt_id", attemptIds.length ? attemptIds : [attemptId]),
     ) ?? [];
@@ -196,6 +206,8 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     timeSpent: attempt.time_spent,
     fastFinish: attempt.fast_finish,
     pastes: Array.isArray(attempt.paste_log) ? attempt.paste_log.length : 0,
+    pastedAnswers: allItems.filter((i) => i.attempt_id === attemptId && Array.isArray(i.paste_log) && i.paste_log.length > 0).length,
+    ...(await attemptTimes(db, attemptId)),
     sinceStart: sinceStartText(must(va)?.va_start_date, todayIn(TIME_ZONE, new Date(attempt.submitted_at))),
     primaryDoctor: doctors.primary ?? undefined,
     scope: scopeText(normalizeScope(must(va)?.va_scope)),
@@ -355,6 +367,9 @@ export async function sendTestLeads4Life(): Promise<{ status: number | null; tex
         first_try_score: "72%",
         is_retake: "no",
         report_link: link,
+        // Matches the sample PDF.
+        critical_errors: 1,
+        flags: "fast finish, 3 pasted answers",
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -419,9 +434,9 @@ export async function deliver(
 
 // The attempt's PDF, made (and stored) once. Null when it couldn't be made:
 // the VFDA email and Slack still go out, and Leads4Life waits for "Resend".
-async function attemptPdf(db: Db, attemptId: string, report: AttemptReport) {
+async function attemptPdf(db: Db, attemptId: string, report: AttemptReport, regenerate = false) {
   try {
-    return { pdf: await ensureQuizReport(db, attemptId, report), error: null };
+    return { pdf: await ensureQuizReport(db, attemptId, report, regenerate), error: null };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);
     console.error("Quiz report PDF not made", attemptId, error);
@@ -429,14 +444,22 @@ async function attemptPdf(db: Db, attemptId: string, report: AttemptReport) {
   }
 }
 
-export async function sendAttemptReport(attemptId: string): Promise<{ sent: number; failed: number }> {
+// `regenerate`: make the PDF again (an attempt that already has one).
+// `again`: "Send report" on the admin attempt page; everything is sent again
+// as a new send (event again:<time>), whatever went out before.
+export async function sendAttemptReport(
+  attemptId: string,
+  opts: { regenerate?: boolean; again?: string } = {},
+): Promise<{ sent: number; failed: number }> {
   const db = createAdminClient();
   const loaded = await loadAttemptReport(db, attemptId);
   if (!loaded) return { sent: 0, failed: 0 };
   const { report, doctors } = loaded;
   const subject = reportSections(report).subject;
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report);
+  const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report, !!opts.regenerate);
+  // Each send gets its own idempotency key, so Resend and Leads4Life don't drop it as a repeat.
+  const keySuffix = opts.again ? `-again-${opts.again}` : "";
   const link = attemptLink(attemptId, "admin");
   const pdfNote = pdf ? "" : `The report PDF couldn't be made (${pdfError}). Download it from the attempt page.`;
   const attachments = pdf ? [{ filename: reportFileName({ ...report, retake: !!report.retake }), content: Buffer.from(pdf.bytes).toString("base64") }] : [];
@@ -452,7 +475,7 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
         subject,
         reportHtml(report, link) + (pdfNote ? `<p style="color:#9b1c1c">${escapeHtml(pdfNote)}</p>` : ""),
         reportText(report, link) + (pdfNote ? `\n\n${pdfNote}` : ""),
-        `attempt-${attemptId}-${to}`,
+        `attempt-${attemptId}-${to}${keySuffix}`,
         attachments,
       ),
   });
@@ -476,12 +499,14 @@ export async function sendAttemptReport(attemptId: string): Promise<{ sent: numb
           first_try_score: percent,
           is_retake: !!report.retake,
           report_link: stored.link,
+          critical_errors: criticalCount(report),
+          flags: flagsText(report),
         },
-        `attempt-${attemptId}-${d.email}`,
+        `attempt-${attemptId}-${d.email}${keySuffix}`,
       );
     },
   });
-  return deliver(db, { attempt_id: attemptId, event: "" }, [
+  return deliver(db, { attempt_id: attemptId, event: opts.again ? `again:${opts.again}` : "" }, [
     ...vfda.map(email),
     {
       channel: "slack",
