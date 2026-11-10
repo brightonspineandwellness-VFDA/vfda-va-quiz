@@ -11,6 +11,7 @@ import { recalculateAttempt } from "@/lib/attempt-review";
 import { getCurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
+import { refreshQuizReport } from "@/lib/quiz-report-download";
 import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestSlack } from "@/lib/reports";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
@@ -108,6 +109,9 @@ export async function overrideScore(itemId: string, input: OverrideInput): Promi
     await recalculateAttempt(supabase, item.attempt_id);
     const { data: owner } = await supabase.from("attempts").select("va_id").eq("id", item.attempt_id).single();
     if (owner) await recalculateCertifications(owner.va_id);
+    // The quiz report PDF is made again at the same path, so the link
+    // already sent to the doctor shows the new scores.
+    after(() => refreshQuizReport(item.attempt_id).catch((e) => console.error("Quiz report PDF not made again", e)));
   } catch {
     return fail("Saved, but the label couldn't be worked out again. Reload the page.");
   }

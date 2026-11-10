@@ -131,6 +131,12 @@ const PHASES = [
     title: "Simpler setup (no doctor questions, no rule review) and scenario bank database changes",
     after: "extra-card-workflows.sql",
   },
+  {
+    name: "quiz-reports-reminders",
+    starts: "20261110120000",
+    title: "Quiz report PDFs, Leads4Life delivery and reminders database changes",
+    after: "simple-setup-bank.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

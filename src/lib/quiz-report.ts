@@ -1,0 +1,170 @@
+// The quiz report PDF of one finished attempt (a day, a retake or a drill),
+// as pure functions: what goes in it, the mock coaching tips (AI_MODE=mock),
+// and the check on Claude's tips. src/lib/quiz-reports.ts loads the data,
+// asks Claude and stores the PDF; src/lib/quiz-report-pdf.ts draws it.
+
+import { requiredSteps } from "@/lib/mock-grade";
+
+// The doctor's line when the card was fine and only the VA needs coaching.
+export const CARD_IS_CLEAR = "Card is clear – VA coaching only";
+
+export type NeedsWorkItem = {
+  key: string; // the item's position, for matching Claude's tips
+  code: string;
+  workflow: string;
+  workflowName: string;
+  type: "mc" | "situational" | "describe";
+  points: number;
+  score: number | null; // null: not graded yet
+  // The question as the VA saw it, and their exact words.
+  scenario: string;
+  answer: string;
+  // From grading: why, and each step missed or wrong. Multiple choice: the right option.
+  reason: string;
+  missed: string[];
+  critical: boolean;
+  criticalQuote: string | null;
+  // What the card says about it (null: the card is silent), for the doctor's tip.
+  sourceCard: string | null;
+  sourceQuote: string | null;
+  correct: string[];
+};
+
+export type DoneWellItem = { workflow: string; workflowName: string; partTitle: string; correct: string[] };
+
+export type Tips = {
+  items: { key: string; coaching: string; card: string | null }[];
+  strengths: { workflow: string; bullets: string[] }[];
+};
+
+export type QuizReport = {
+  vaName: string;
+  officeName: string;
+  doctor: string | null;
+  dayCode: string;
+  topic: string;
+  date: string; // ISO
+  points: number;
+  maxPoints: number;
+  resultLabel: string;
+  retake: boolean;
+  timeSpent: number | null; // seconds
+  needsWork: (NeedsWorkItem & { coaching: string; cardTip: string })[];
+  strengths: { workflow: string; name: string; bullets: string[] }[];
+};
+
+const MAX_COACHING = 240;
+const MAX_CARD_TIP = 180;
+const MAX_BULLETS = 4;
+
+const clip = (s: string, n: number) => {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length <= n ? t : `${t.slice(0, n - 1).trimEnd()}…`;
+};
+
+// Critical errors first, then the lowest share of points, then quiz order.
+export function orderNeedsWork<T extends Pick<NeedsWorkItem, "critical" | "score" | "points">>(items: T[]): T[] {
+  return items
+    .map((item, i) => ({ item, i }))
+    .sort(
+      (a, b) =>
+        Number(b.item.critical) - Number(a.item.critical) ||
+        (a.item.score ?? 0) / a.item.points - (b.item.score ?? 0) / b.item.points ||
+        a.i - b.i,
+    )
+    .map((x) => x.item);
+}
+
+// AI_MODE=mock, or when Claude's answer can't be used: tips from the grading itself.
+export function mockTips(needsWork: NeedsWorkItem[], doneWell: DoneWellItem[]): Tips {
+  return {
+    items: needsWork.map((i) => {
+      const first = i.missed[0] ?? i.correct[0] ?? "the required steps";
+      const coaching = i.critical
+        ? `Stop and escalate next time: ${first}. Read the card's safety steps again before the next quiz.`
+        : i.type === "mc"
+          ? `Re-read the card on this: ${first}.`
+          : `Next time, ${first.charAt(0).toLowerCase()}${first.slice(1)}${i.missed.length > 1 ? `, and ${i.missed.length - 1} more step(s) from the card` : ""}.`;
+      // The card is silent when the scenario has no quote from it.
+      const card = i.sourceQuote?.trim()
+        ? null
+        : `${i.sourceCard || `${i.workflowName} card`}: add a clear line on "${clip(first, 80)}".`;
+      return { key: i.key, coaching, card };
+    }),
+    strengths: [...new Set(doneWell.map((d) => d.workflow))].map((workflow) => ({
+      workflow,
+      bullets: [...new Set(doneWell.filter((d) => d.workflow === workflow).map((d) => d.partTitle || d.correct[0] || "").filter(Boolean))]
+        .slice(0, MAX_BULLETS)
+        .map((t) => `Handled ${t.charAt(0).toLowerCase()}${t.slice(1)}`),
+    })),
+  };
+}
+
+// Claude's tips, kept to what the PDF needs; anything missing or unusable
+// comes from the mock tips.
+export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneWellItem[]): Tips {
+  const fallback = mockTips(needsWork, doneWell);
+  const workflows = new Set(doneWell.map((d) => d.workflow));
+  return {
+    items: fallback.items.map((f) => {
+      const t = raw.items.find((x) => x.key === f.key);
+      const coaching = t?.coaching?.trim();
+      const card = t?.card?.trim();
+      return {
+        key: f.key,
+        coaching: coaching ? clip(coaching, MAX_COACHING) : f.coaching,
+        // An empty card tip, or one that says the card is fine, means "coaching only".
+        card: !t ? f.card : card && !/^card is clear/i.test(card) ? clip(card, MAX_CARD_TIP) : null,
+      };
+    }),
+    strengths: [...workflows].map((w) => {
+      const bullets = (raw.strengths.find((s) => s.workflow === w)?.bullets ?? []).map((b) => clip(b, 140)).filter(Boolean);
+      return { workflow: w, bullets: bullets.length ? bullets.slice(0, MAX_BULLETS) : (fallback.strengths.find((s) => s.workflow === w)?.bullets ?? []) };
+    }),
+  };
+}
+
+export function buildQuizReport(
+  head: Omit<QuizReport, "needsWork" | "strengths">,
+  needsWork: NeedsWorkItem[],
+  doneWell: DoneWellItem[],
+  tips: Tips,
+): QuizReport {
+  const names = new Map([...needsWork, ...doneWell].map((i) => [i.workflow, i.workflowName]));
+  return {
+    ...head,
+    needsWork: orderNeedsWork(needsWork).map((i) => {
+      const t = tips.items.find((x) => x.key === i.key);
+      return { ...i, coaching: t?.coaching ?? "", cardTip: t?.card ?? CARD_IS_CLEAR };
+    }),
+    strengths: tips.strengths
+      .filter((s) => s.bullets.length)
+      .map((s) => ({ workflow: s.workflow, name: names.get(s.workflow) ?? s.workflow, bullets: s.bullets })),
+  };
+}
+
+// The required steps of a scenario, for the tips and the evaluation.
+export const correctSteps = (correctResponse: unknown) => requiredSteps(correctResponse);
+
+// The evaluation line: score, then what was missed or wrong.
+export function evaluationText(i: Pick<NeedsWorkItem, "score" | "points" | "reason" | "missed" | "type">) {
+  const score = i.score === null ? "Not graded yet (VFDA reviews it)" : `${i.score}/${i.points}`;
+  return [score, i.reason.trim()].filter(Boolean).join(" – ");
+}
+
+// The Leads4Life payload for one doctor.
+export type Leads4LifePayload = {
+  doctor_email: string;
+  doctor_name: string;
+  office: string;
+  va_name: string;
+  day: string;
+  topic: string;
+  result: string;
+  first_try_score: number; // percent
+  is_retake: boolean;
+  report_link: string;
+};
+
+export const reportFileName = (r: Pick<QuizReport, "vaName" | "dayCode" | "retake">) =>
+  `Quiz report - ${r.vaName} - ${r.dayCode}${r.retake ? " retake" : ""}.pdf`.replace(/[\\/:*?"<>|]+/g, " ");

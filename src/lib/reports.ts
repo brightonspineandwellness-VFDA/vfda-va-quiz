@@ -1,13 +1,17 @@
 import "server-only";
 
-// Sends the results report after every attempt: an email (Resend, from
-// REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL) and to
-// every doctor of the office, and a Slack post to VFDA (SLACK_WEBHOOK_URL). A critical
-// error is also sent at once, while the VA keeps going. One notifications row
-// per recipient is written before sending, so running this again only sends
-// what hasn't gone out yet. Each send is tried twice.
+// Sends the results report after every attempt: the quiz report PDF
+// (src/lib/quiz-reports.ts) attached to an email (Resend, from
+// REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL), a
+// Slack post to VFDA (SLACK_WEBHOOK_URL) with the links, and one Leads4Life
+// POST (LEADS4LIFE_WEBHOOK_URL) per doctor of the office, which delivers it to
+// the doctor. A critical error is also sent at once, while the VA keeps going.
+// One notifications row per recipient is written before sending, so running
+// this again only sends what hasn't gone out yet. Each send is tried twice.
 
 import { passPercent } from "@/lib/certification";
+import { reportFileName, type Leads4LifePayload } from "@/lib/quiz-report";
+import { ensureQuizReport, type StoredQuizReport } from "@/lib/quiz-reports";
 import { loadRetakeComparison } from "@/lib/retake";
 import {
   criticalAlertText,
@@ -51,7 +55,7 @@ export const attemptLink = (attemptId: string, area: "admin" | "doctor") => `${a
 // Every doctor of the office gets the reports and alerts (VFDA's addresses
 // aren't repeated); the Primary doctor's name is shown on them.
 export async function officeDoctors(db: Db, officeId: string | null) {
-  if (!officeId) return { emails: [] as string[], primary: null as string | null };
+  if (!officeId) return { emails: [] as string[], list: [] as { email: string; name: string }[], primary: null as string | null };
   const [office, doctors] = await Promise.all([
     db.from("offices").select("primary_doctor_id").eq("id", officeId).maybeSingle(),
     db.from("profiles").select("id, full_name, email").eq("office_id", officeId).eq("role", "doctor").is("deactivated_at", null),
@@ -59,8 +63,14 @@ export async function officeDoctors(db: Db, officeId: string | null) {
   const rows = (must(doctors) ?? []) as { id: string; full_name: string | null; email: string | null }[];
   const vfda = vfdaEmails().map((e) => e.toLowerCase());
   const primary = rows.find((d) => d.id === must(office)?.primary_doctor_id);
+  const emails = [...new Set(rows.map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter((e) => !vfda.includes(e));
   return {
-    emails: [...new Set(rows.map((d) => d.email?.toLowerCase()).filter((e): e is string => !!e))].filter((e) => !vfda.includes(e)),
+    emails,
+    // Each doctor's address and name.
+    list: emails.map((email) => {
+      const d = rows.find((r) => r.email?.toLowerCase() === email);
+      return { email, name: d?.full_name?.trim() || email };
+    }),
     primary: primary ? primary.full_name?.trim() || primary.email : null,
   };
 }
@@ -201,7 +211,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
       ),
     })),
   };
-  return { report, doctorEmails: doctors.emails };
+  return { report, doctorEmails: doctors.emails, doctors: doctors.list };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +248,19 @@ export async function sendEmail(
     const body = (await res.json().catch(() => null)) as { message?: string } | null;
     throw new Error(`Resend answered ${res.status}${body?.message ? `: ${body.message}` : ""}`);
   }
+}
+
+// One POST to Leads4Life, which delivers the report to the doctor.
+export async function postLeads4Life(payload: Leads4LifePayload, idempotencyKey: string) {
+  const url = process.env.LEADS4LIFE_WEBHOOK_URL?.trim();
+  if (!url) throw new Error("Leads4Life isn't set up: LEADS4LIFE_WEBHOOK_URL is needed.");
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`Leads4Life answered ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
 }
 
 export async function postSlack(payload: { text: string }) {
@@ -279,6 +302,8 @@ export const vfdaEmails = () =>
 
 // The Slack row's recipient. The webhook URL itself is a secret and is never stored.
 export const SLACK_RECIPIENT = "VFDA Slack";
+// Leads4Life rows: channel "leads4life", recipient the doctor's email.
+export const LEADS4LIFE = "leads4life";
 
 // ---------------------------------------------------------------------------
 // Test buttons (/admin/settings)
@@ -311,17 +336,17 @@ export const sendTestSlack = () =>
 // The report
 // ---------------------------------------------------------------------------
 
-type Target = { channel: "email" | "slack"; recipient: string; send: () => Promise<void> };
+export type Target = { channel: "email" | "slack" | "leads4life"; recipient: string; send: () => Promise<void> };
 
 // One notifications row per recipient, written before sending, so running
 // this again only sends what hasn't gone out yet. `key` picks the report
-// (an attempt, or a certification event).
-async function deliver(
+// (an attempt, a certification event, or a reminder to a VA).
+export async function deliver(
   db: Db,
-  key: { attempt_id: string; event: string } | { certification_id: string; event: string },
+  key: { attempt_id: string; event: string } | { certification_id: string; event: string } | { va_id: string; event: string },
   targets: Target[],
 ): Promise<{ sent: number; failed: number }> {
-  const onConflict = "attempt_id" in key ? "attempt_id,event,channel,recipient" : "certification_id,event,channel,recipient";
+  const onConflict = `${"attempt_id" in key ? "attempt_id" : "certification_id" in key ? "certification_id" : "va_id"},event,channel,recipient`;
   let sent = 0;
   let failed = 0;
   for (const t of targets) {
@@ -357,28 +382,78 @@ async function deliver(
   return { sent, failed };
 }
 
+// The attempt's PDF, made (and stored) once. Null when it couldn't be made:
+// the VFDA email and Slack still go out, and Leads4Life waits for "Resend".
+async function attemptPdf(db: Db, attemptId: string, report: AttemptReport) {
+  try {
+    return { pdf: await ensureQuizReport(db, attemptId, report), error: null };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    console.error("Quiz report PDF not made", attemptId, error);
+    return { pdf: null as StoredQuizReport | null, error };
+  }
+}
+
 export async function sendAttemptReport(attemptId: string): Promise<{ sent: number; failed: number }> {
   const db = createAdminClient();
   const loaded = await loadAttemptReport(db, attemptId);
   if (!loaded) return { sent: 0, failed: 0 };
-  const { report, doctorEmails } = loaded;
+  const { report, doctors } = loaded;
   const subject = reportSections(report).subject;
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const doctors = doctorEmails;
+  const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report);
+  const link = attemptLink(attemptId, "admin");
+  const pdfNote = pdf ? "" : `The report PDF couldn't be made (${pdfError}). Download it from the attempt page.`;
+  const attachments = pdf ? [{ filename: reportFileName({ ...report, retake: !!report.retake }), content: Buffer.from(pdf.bytes).toString("base64") }] : [];
+  const percent = report.maxPoints ? Math.round((report.points * 100) / report.maxPoints) : 0;
 
-  // VFDA's link opens the admin review page, the doctor's the read-only one.
-  const email = (to: string, area: "admin" | "doctor"): Target => {
-    const link = attemptLink(attemptId, area);
-    return {
-      channel: "email",
-      recipient: to,
-      send: () => sendEmail(to, subject, reportHtml(report, link), reportText(report, link), `attempt-${attemptId}-${to}`),
-    };
-  };
+  // VFDA: the email with the PDF attached, and Slack with both links.
+  const email = (to: string): Target => ({
+    channel: "email",
+    recipient: to,
+    send: () =>
+      sendEmail(
+        to,
+        subject,
+        reportHtml(report, link) + (pdfNote ? `<p style="color:#9b1c1c">${escapeHtml(pdfNote)}</p>` : ""),
+        reportText(report, link) + (pdfNote ? `\n\n${pdfNote}` : ""),
+        `attempt-${attemptId}-${to}`,
+        attachments,
+      ),
+  });
+  const slack = reportSlack(report, link);
+  // Each doctor: one Leads4Life POST with the PDF's 30-day link.
+  const leads4life = (d: { email: string; name: string }): Target => ({
+    channel: LEADS4LIFE,
+    recipient: d.email,
+    send: async () => {
+      // Made again here when it failed before, so "Resend" can fix it.
+      const stored = pdf ?? (await ensureQuizReport(db, attemptId, report));
+      await postLeads4Life(
+        {
+          doctor_email: d.email,
+          doctor_name: d.name,
+          office: report.officeName,
+          va_name: report.vaName,
+          day: report.dayCode,
+          topic: report.dayTitle,
+          result: RESULT_LABELS[report.result],
+          first_try_score: percent,
+          is_retake: !!report.retake,
+          report_link: stored.link,
+        },
+        `attempt-${attemptId}-${d.email}`,
+      );
+    },
+  });
   return deliver(db, { attempt_id: attemptId, event: "" }, [
-    ...vfda.map((to) => email(to, "admin")),
-    ...doctors.map((to) => email(to, "doctor")),
-    { channel: "slack", recipient: SLACK_RECIPIENT, send: () => postSlack(reportSlack(report, attemptLink(attemptId, "admin"))) },
+    ...vfda.map(email),
+    {
+      channel: "slack",
+      recipient: SLACK_RECIPIENT,
+      send: () => postSlack({ text: pdf ? `${slack.text}\n<${pdf.link}|Report PDF> (link valid 30 days)` : slack.text }),
+    },
+    ...doctors.map(leads4life),
   ]);
 }
 

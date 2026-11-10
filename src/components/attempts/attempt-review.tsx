@@ -151,6 +151,7 @@ function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
             .join(", ") || "–"}
         </dd>
       </dl>
+      {attempt.submitted_at && <ReportPdfLink attemptId={attempt.id} area={admin ? "admin" : "doctor"} />}
       {admin && (
         <div className="flex flex-col gap-1">
           <ReportStatus attemptId={attempt.id} rows={data.notifications.filter((n) => n.event === "")} />
@@ -260,24 +261,40 @@ function Badge({ tone, children }: { tone: "red" | "amber"; children: ReactNode 
 
 type NoteRow = AttemptReviewData["notifications"][number];
 
-// Where the report went; a red "report not sent" badge and "Resend" when any part didn't.
+// "Download report PDF": the attempt's quiz report (made the first time it's asked for).
+export function ReportPdfLink({ attemptId, area }: { attemptId: string; area: "admin" | "doctor" }) {
+  return (
+    <a href={`/${area}/attempts/${attemptId}/report-pdf`} className="self-start rounded-md border border-foreground/20 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5">
+      Download report PDF
+    </a>
+  );
+}
+
+const LEADS4LIFE = "leads4life";
+const where = (r: Pick<NoteRow, "channel" | "recipient">) => (r.channel === LEADS4LIFE ? `Leads4Life (${r.recipient})` : r.recipient);
+
+// Where the report went (VFDA email and Slack, Leads4Life per doctor); a red
+// "report not sent" or "Leads4Life not sent" badge and "Resend" when any part didn't.
 export function ReportStatus({ attemptId, rows }: { attemptId: string; rows: Pick<NoteRow, "channel" | "recipient" | "status" | "error">[] }) {
   const sent = rows.filter((r) => r.status === "sent");
   const failed = rows.filter((r) => r.status === "failed");
   const pending = rows.filter((r) => r.status === "pending");
+  const leadsFailed = failed.some((r) => r.channel === LEADS4LIFE);
+  const otherFailed = failed.some((r) => r.channel !== LEADS4LIFE);
   return (
     <div className="flex flex-col gap-1 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        {(failed.length > 0 || rows.length === 0) && <Badge tone="red">report not sent</Badge>}
-        {sent.length > 0 && <span>Report sent to {sent.map((r) => r.recipient).join(", ")}</span>}
-        {pending.length > 0 && <span className="text-foreground/60">sending to {pending.map((r) => r.recipient).join(", ")}…</span>}
+        {(otherFailed || rows.length === 0) && <Badge tone="red">report not sent</Badge>}
+        {leadsFailed && <Badge tone="red">Leads4Life not sent</Badge>}
+        {sent.length > 0 && <span>Report sent to {sent.map(where).join(", ")}</span>}
+        {pending.length > 0 && <span className="text-foreground/60">sending to {pending.map(where).join(", ")}…</span>}
         {(failed.length > 0 || rows.length === 0) && (
           <ActionButton action={resendAttemptReport.bind(null, attemptId)} label="Resend" pendingLabel="Sending…" />
         )}
       </div>
       {failed.map((r) => (
         <span key={`${r.channel}:${r.recipient}`} className="text-red-700 dark:text-red-400">
-          {r.recipient}: {r.error ?? "not sent"}
+          {where(r)}: {r.error ?? "not sent"}
         </span>
       ))}
     </div>

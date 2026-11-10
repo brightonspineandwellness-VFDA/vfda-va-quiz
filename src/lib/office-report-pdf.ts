@@ -25,7 +25,7 @@ export function pdfText(s: string) {
     .replace(/[^\n\x20-\x7E\xA0-\xFF]/g, "");
 }
 
-function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
+export function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
   const out: string[] = [];
   for (const para of pdfText(text).split("\n")) {
     let line = "";

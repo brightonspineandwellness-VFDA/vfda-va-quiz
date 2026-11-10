@@ -36,6 +36,7 @@ async function Settings() {
     ["REPORT_REPLY_TO", process.env.REPORT_REPLY_TO?.trim() || "not set (optional)"],
     ["VFDA_REPORT_EMAIL", vfdaEmails().join(", ") || "missing"],
     ["SLACK_WEBHOOK_URL", isSet("SLACK_WEBHOOK_URL") ? "set" : "missing"],
+    ["LEADS4LIFE_WEBHOOK_URL", isSet("LEADS4LIFE_WEBHOOK_URL") ? "set" : "missing (doctors get no quiz reports)"],
     ["Links in reports", appUrl()],
   ];
   return (

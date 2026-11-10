@@ -9,7 +9,8 @@ import { requireRole } from "@/lib/auth";
 import { daysBetween, SOP_WAIT_FLAG_DAYS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
-import { createSessionClient } from "@/lib/supabase/server";
+import { loadReminderBoard, type VaReminder } from "@/lib/reminders";
+import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 import { resetDay } from "@/lib/va-admin-actions";
 import { applies } from "@/lib/interview";
 import { attemptLabel, officeProfile, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
@@ -51,6 +52,21 @@ const HEAVY_PASTING = 5;
 const REPORT_GRACE_MS = 15 * 60 * 1000;
 
 const minutes = (s: number | null) => (s === null ? "–" : `${Math.max(1, Math.round(s / 60))} min`);
+
+// Overdue VAs first, then behind, then everyone else.
+const STATE_RANK: Record<VaReminder["state"], number> = { overdue: 0, behind: 1, ok: 2 };
+
+function activityText(r: VaReminder | undefined) {
+  if (!r) return "–";
+  const d = r.activity.daysSince;
+  return d === 0 ? "today" : `${d} day${d === 1 ? "" : "s"} ago`;
+}
+
+function remindersText(r: VaReminder | undefined) {
+  if (!r) return "–";
+  const state = r.state === "overdue" ? "overdue" : r.state === "behind" ? (r.remindedOn ? "behind, reminded" : "behind") : "";
+  return [r.remindersSent ? `${r.remindersSent} sent` : "none", state].filter(Boolean).join(" · ");
+}
 
 async function Vas() {
   await requireRole("vfda_admin");
@@ -126,11 +142,15 @@ async function Vas() {
   );
 
   if (!vas.data?.length) return <p className="text-foreground/70">No VAs yet.</p>;
-  const grid = await loadCertGrid(supabase, {});
+  const [grid, board] = await Promise.all([loadCertGrid(supabase, {}), loadReminderBoard(createAdminClient())]);
+  const reminderOf = new Map(board.map((r) => [r.vaId, r]));
+  const rank = (id: string) => STATE_RANK[reminderOf.get(id)?.state ?? "ok"];
+  // Stable: the name order stays within each group.
+  const sortedVas = [...vas.data].sort((a, b) => rank(a.id) - rank(b.id));
   const now = new Date();
 
   // One line per VA: where they are, how they score, what needs a look.
-  const progress = vas.data.map((va) => {
+  const progress = sortedVas.map((va) => {
     const days = (unlocks.data ?? [])
       .filter((u) => u.va_id === va.id && u.office_id === va.office_id)
       .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
@@ -185,6 +205,8 @@ async function Vas() {
               <th className="py-1 pr-3 font-medium">VA</th>
               <th className="py-1 pr-3 font-medium">Office</th>
               <th className="py-1 pr-3 font-medium">Current day</th>
+              <th className="py-1 pr-3 font-medium">Last activity</th>
+              <th className="py-1 pr-3 font-medium">Reminders</th>
               <th className="py-1 pr-3 font-medium">Latest label</th>
               <th className="py-1 pr-3 font-medium">First-try scores</th>
               <th className="py-1 pr-3 font-medium">Trend</th>
@@ -202,6 +224,18 @@ async function Vas() {
                 </td>
                 <td className="py-1 pr-3">{p.va.office_id ? (officeName.get(p.va.office_id) ?? "Unknown office") : "No office"}</td>
                 <td className="py-1 pr-3">{p.current}</td>
+                <td className="py-1 pr-3">{activityText(reminderOf.get(p.va.id))}</td>
+                <td
+                  className={`py-1 pr-3 ${
+                    reminderOf.get(p.va.id)?.state === "overdue"
+                      ? "font-medium text-red-700 dark:text-red-400"
+                      : reminderOf.get(p.va.id)?.state === "behind"
+                        ? "text-amber-700 dark:text-amber-300"
+                        : ""
+                  }`}
+                >
+                  {remindersText(reminderOf.get(p.va.id))}
+                </td>
                 <td className={`py-1 pr-3 font-medium ${LABEL_TONE[p.latest?.result ?? ""] ?? ""}`}>
                   {p.latest ? `${p.latest.schedule_day}: ${resultLabel(p.latest.result)}` : "–"}
                 </td>
@@ -225,7 +259,8 @@ async function Vas() {
         <CertGrid columns={grid.columns} rows={grid.rows} certificatePath={(id) => `/admin/vas/${id}/certificate`} />
       </section>
 
-      {vas.data.map((va) => {
+      {sortedVas.map((va) => {
+        const reminder = reminderOf.get(va.id);
         const days = (unlocks.data ?? [])
           .filter((u) => u.va_id === va.id && u.office_id === va.office_id)
           .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
@@ -250,6 +285,14 @@ async function Vas() {
               </p>
             </div>
 
+            {reminder && (
+              <p className="text-sm">
+                <span className="font-medium">Last activity: </span>
+                {reminder.activity.lastActivity} ({activityText(reminder)}) · <span className="font-medium">Reminders: </span>
+                {remindersText(reminder)}
+                {reminder.anchor && <span className="text-foreground/70"> ({reminder.anchor.reason})</span>}
+              </p>
+            )}
             <p className="text-sm">
               <span className="font-medium">Role: </span>
               {scopeText(normalizeScope(va.va_scope))}
