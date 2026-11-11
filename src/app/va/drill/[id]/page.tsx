@@ -3,11 +3,10 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
-import { FeedbackList, loadFeedback } from "@/components/va/attempt-feedback";
 import { RetakeCompare } from "@/components/va/retake-compare";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
-import { sendAttemptReport } from "@/lib/reports";
+import { afterAttemptGraded } from "@/lib/va-reports";
 import { loadRetakeComparison } from "@/lib/retake";
 import { createAdminClient } from "@/lib/supabase/server";
 import { loadDrillScreen, type FinishedDay } from "@/lib/va-training";
@@ -37,7 +36,7 @@ async function Drill({ params }: { params: Promise<{ id: string }> }) {
   if (screen.kind === "empty") return <p>This has no scenarios yet. Check back later.</p>;
   if (screen.kind === "finished") {
     const { attemptId, fresh } = screen.result;
-    if (fresh) after(() => sendAttemptReport(attemptId).then(() => undefined));
+    if (fresh) after(() => afterAttemptGraded(attemptId));
     return <Finished result={screen.result} />;
   }
   const { item } = screen;
@@ -45,7 +44,6 @@ async function Drill({ params }: { params: Promise<{ id: string }> }) {
 }
 
 async function Finished({ result }: { result: FinishedDay }) {
-  const items = (await loadFeedback([result.attemptId])).get(result.attemptId) ?? [];
   // Only this VA's own attempt gets here (loadDrillScreen checked it).
   const retake = result.drill === "retake" ? await loadRetakeComparison(createAdminClient(), result.attemptId) : null;
   return (
@@ -60,12 +58,15 @@ async function Finished({ result }: { result: FinishedDay }) {
           First try: <span className="font-medium">{result.points}/{result.max}</span>
         </p>
       )}
-      <div className="text-sm">
-        <FeedbackList items={items} first={result.drill === "retake" ? "on the retake" : "first try"} />
+      <p className="text-sm text-foreground/70">Your report with coaching tips will be ready in a few minutes (we&apos;ll email you).</p>
+      <div className="flex flex-wrap gap-3">
+        <Link href={`/va/results/${result.attemptId}`} className="rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+          My report
+        </Link>
+        <Link href="/va" className="rounded-lg border border-foreground/25 px-4 py-2 font-medium">
+          Back to Today
+        </Link>
       </div>
-      <Link href="/va" className="self-start rounded-lg border border-foreground/25 px-4 py-2 font-medium">
-        Back to Today
-      </Link>
     </div>
   );
 }

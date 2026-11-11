@@ -28,6 +28,7 @@ import {
 import { quizReportPdf } from "@/lib/quiz-report-pdf";
 import type { AttemptReport } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
+import type { VaTips } from "@/lib/va-report";
 import { ANSWER_BOXES, formatOf, RESULT_LABELS, withOverride, type AnswerFormat } from "@/lib/va-flow";
 
 type Db = ReturnType<typeof createAdminClient>;
@@ -62,7 +63,7 @@ type Scenario = {
 type Feedback = { reason?: string; missed_steps?: string[] } | null;
 
 // The attempt's items: the ones below full points, and the ones done well.
-async function loadItems(db: Db, attemptId: string) {
+export async function loadItems(db: Db, attemptId: string) {
   const attempt = must(await db.from("attempts").select("office_id, schedule_day").eq("id", attemptId).single()) as {
     office_id: string;
     schedule_day: string;
@@ -223,7 +224,7 @@ ${doneWell.map((d) => `- ${d.workflow} ${d.workflowName}: ${d.partTitle || d.cor
 
 export async function buildQuizReportContent(db: Db, attemptId: string, r: AttemptReport, submittedAt: string): Promise<QuizReport> {
   const { needsWork, doneWell, awaiting, overrides, totalAnswers } = await loadItems(db, attemptId);
-  const tips = await quizTips(needsWork, doneWell);
+  const [tips, vaTips] = await Promise.all([quizTips(needsWork, doneWell), storedVaTips(db, attemptId)]);
   const flags = alertFlags({
     retake: !!r.retake,
     fastFinish: r.fastFinish,
@@ -254,7 +255,17 @@ export async function buildQuizReportContent(db: Db, attemptId: string, r: Attem
     doneWell,
     tips,
     flags,
+    vaTips,
   );
+}
+
+// The coaching tips given to the VA (va_reports), for the doctor/VFDA PDF.
+// Null before they're written, or before va-reports.sql has been run.
+async function storedVaTips(db: Db, attemptId: string): Promise<VaTips | null> {
+  const { data, error } = await db.from("va_reports").select("alerts, tips, strengths").eq("attempt_id", attemptId).maybeSingle();
+  if (error || !data) return null;
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+  return { alerts: list(data.alerts), tips: list(data.tips), strengths: list(data.strengths) };
 }
 
 export type StoredQuizReport = { path: string; bytes: Uint8Array; link: string };
@@ -372,6 +383,14 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
       awaiting: [],
       overrides: [],
     }),
+    {
+      alerts: ["Didn't direct a caller with a possible emergency to 911 / the ER."],
+      tips: [
+        "Most important: a possible emergency was booked like a routine visit. Next time, tell the caller to call 911 or go to the ER now, then tell the doctor. Review: Open & Close – the emergency steps.",
+        "The caller's identity wasn't checked and they were put on hold without asking. Next time, verify name and date of birth first, and ask before any hold. Review: HOW TO: Phone Scripts – the steps for a patient who wants to reschedule.",
+      ],
+      strengths: ["You booked a new patient smoothly, with every step in order."],
+    },
   );
   const path = "test/sample-quiz-report.pdf";
   const storage = db.storage.from(QUIZ_REPORT_BUCKET);

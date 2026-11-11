@@ -92,6 +92,8 @@ export type QuizReport = {
   strengths: { workflow: string; name: string; bullets: string[] }[];
   // The Alerts box under the header: every critical error, then the flags.
   alerts: { critical: CriticalAlert[]; flags: string[] };
+  // "Coaching tips given to the VA" (va_reports); null before they're written.
+  vaTips: { alerts: string[]; tips: string[]; strengths: string[] } | null;
 };
 
 export type CriticalAlert = { code: string; topic: string; quote: string; why: string; coaching: string };
@@ -199,11 +201,12 @@ export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneW
 }
 
 export function buildQuizReport(
-  head: Omit<QuizReport, "needsWork" | "strengths" | "alerts">,
+  head: Omit<QuizReport, "needsWork" | "strengths" | "alerts" | "vaTips">,
   needsWork: NeedsWorkItem[],
   doneWell: DoneWellItem[],
   tips: Tips,
   flags: string[] = [],
+  vaTips: QuizReport["vaTips"] = null,
 ): QuizReport {
   const names = new Map([...needsWork, ...doneWell].map((i) => [i.workflow, i.workflowName]));
   const ordered = orderNeedsWork(needsWork).map((i) => {
@@ -212,6 +215,7 @@ export function buildQuizReport(
   });
   return {
     ...head,
+    vaTips,
     alerts: {
       critical: ordered
         .filter((i) => i.critical)

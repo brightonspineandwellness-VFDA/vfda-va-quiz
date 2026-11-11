@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { AttemptReview, RetakeReview } from "@/components/attempts/attempt-review";
+import { VaTips } from "@/components/attempts/va-tips";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { loadAttemptWithRetake } from "@/lib/attempt-review";
 import { requireRole } from "@/lib/auth";
@@ -32,6 +33,13 @@ async function Attempt({ params }: { params: Promise<{ id: string }> }) {
   const data = await loadAttemptWithRetake(await createSessionClient(), id);
   if (!data) notFound();
   // A day with a retake: the original and the retake side by side.
-  if (data.pair) return <RetakeReview {...data.pair} admin />;
-  return <AttemptReview data={data.main} admin />;
+  const ids = data.pair ? [data.pair.first.attempt.id, data.pair.retake.attempt.id] : [data.main.attempt.id];
+  return (
+    <>
+      {data.pair ? <RetakeReview {...data.pair} admin /> : <AttemptReview data={data.main} admin />}
+      {ids.map((attemptId) => (
+        <VaTips key={attemptId} attemptId={attemptId} admin={true} />
+      ))}
+    </>
+  );
 }

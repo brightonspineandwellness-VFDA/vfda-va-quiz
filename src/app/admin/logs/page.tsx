@@ -18,7 +18,7 @@ export default function SystemLogPage() {
         Every check a scenario failed while it was built, regenerated or rechecked: the item, the field, what Claude wrote and
         why it was rejected (and master items the day rules moved or left out). Most are fixed by the automatic rewrite; the
         rest show as &ldquo;needs review&rdquo; on the day. Also every &ldquo;Reset day (test)&rdquo;: who reset which VA&rsquo;s
-        day, and when.
+        day, and when. And every attempt Backfill VA reports skipped because it was graded in mock mode.
       </p>
       <Suspense fallback={<Loading />}>
         <DayRules />
@@ -126,7 +126,15 @@ async function Log() {
                   "–"
                 )}
               </td>
-              <td className="py-1 pr-3">{r.item ?? "–"}</td>
+              <td className="py-1 pr-3">
+                {r.kind === "va_report_mock" && r.value ? (
+                  <Link href={`/admin/attempts/${r.value}`} className="underline">
+                    {r.item ?? "Attempt"}
+                  </Link>
+                ) : (
+                  (r.item ?? "–")
+                )}
+              </td>
               <td className="py-1 pr-3 font-mono text-xs">{r.field ?? "–"}</td>
               <td className="max-w-xs py-1 pr-3 text-foreground/70">
                 <span className="line-clamp-3 break-words">{r.value || "–"}</span>

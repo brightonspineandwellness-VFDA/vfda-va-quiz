@@ -202,6 +202,23 @@ async function draw(r: QuizReport, shown: number) {
     y -= 2;
   }
 
+  // Exactly what the VA sees on My report (written for the VA, no scenarios or answers).
+  heading("Coaching tips given to the VA", blue);
+  if (!r.vaTips) text("Not written yet: they appear here once the VA's report is made.", { color: muted, indent: 6 });
+  else {
+    if (r.vaTips.alerts.length) {
+      text("Critical errors, as the VA sees them", { font: bold, size: 9.5, indent: 6, gap: 0 });
+      for (const a of r.vaTips.alerts) text(`- ${a}`, { size: 9, indent: 14, color: red });
+    }
+    text("Coaching tips", { font: bold, size: 9.5, indent: 6, gap: 0 });
+    if (!r.vaTips.tips.length) text("- None: every item got full points.", { size: 9, indent: 14, color: muted });
+    for (const t of r.vaTips.tips) text(`- ${t}`, { size: 9, indent: 14 });
+    if (r.vaTips.strengths.length) {
+      text("What they did well", { font: bold, size: 9.5, indent: 6, gap: 0 });
+      for (const t of r.vaTips.strengths) text(`- ${t}`, { size: 9, indent: 14 });
+    }
+  }
+
   const pages = doc.getPages();
   pages.forEach((p, n) =>
     p.drawText(pdfText(`${r.vaName} · ${r.dayCode}${r.retake ? " retake" : ""} · page ${n + 1} of ${pages.length}`), {

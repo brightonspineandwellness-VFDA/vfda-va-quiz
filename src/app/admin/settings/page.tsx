@@ -6,9 +6,10 @@ import { aiMode } from "@/lib/ai";
 import { requireRole } from "@/lib/auth";
 import { appUrl, reportFrom, vfdaEmails } from "@/lib/reports";
 import { testEmail, testLeads4Life, testSlack } from "@/lib/va-admin-actions";
+import { runVaReportBackfill } from "@/lib/va-report-actions";
 
-// A test send can take two tries.
-export const maxDuration = 60;
+// A test send can take two tries; Backfill VA reports asks Claude for each attempt.
+export const maxDuration = 300;
 
 export default function SettingsPage() {
   return (
@@ -52,6 +53,16 @@ async function Settings() {
             </div>
           ))}
         </dl>
+      </section>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">VA reports</h2>
+        <p className="text-sm text-foreground/70">
+          Every finished attempt without a VA report gets one: coaching tips written by Claude, shown on the VA&apos;s My results
+          at once. Then each VA gets ONE email listing all their new reports. Safe to run again: a report is never made twice
+          and a report is never emailed twice. Skips deactivated VAs, and attempts graded in mock mode (listed on the System
+          log).
+        </p>
+        <TestButton action={runVaReportBackfill} label="Backfill VA reports" pendingLabel="Writing reports… (a few minutes)" />
       </section>
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Test sends</h2>
