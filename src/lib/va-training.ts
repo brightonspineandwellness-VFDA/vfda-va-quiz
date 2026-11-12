@@ -13,7 +13,8 @@ import type { CurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import { writeRetakeVariants } from "@/lib/scenario-ai";
 import { createAdminClient } from "@/lib/supabase/server";
-import { LOCKED_STANDARDS } from "@/lib/card-map";
+import { isVfdaSourceCard } from "@/lib/rule-source";
+import { graderRank, recordRuleSource } from "@/lib/rule-sources";
 import { normalizeScope } from "@/lib/va-scope";
 import {
   addTrainingDays,
@@ -480,18 +481,7 @@ export async function officeRulesFor(db: Db, officeId: string, workflow: string,
           slots.map((s) => s.key),
         ),
     ) ?? [];
-  const rank = (r: { rule_slot_key: string; source_document_id: string | null; source: string }) =>
-    LOCKED_STANDARDS.includes(r.rule_slot_key) && r.source === "vfda_default"
-      ? -1
-      : r.source === "doctor" || r.source === "vfda"
-        ? 0
-        : r.source === "doctor_card"
-          ? 1
-          : r.source === "card_import"
-            ? r.source_document_id === sourceDocumentId
-              ? 2
-              : 3
-            : 4;
+  const rank = (r: { rule_slot_key: string; rule: unknown; source_document_id: string | null; source: string }) => graderRank(r, sourceDocumentId);
   const usable = rows.filter((r) => r.source !== "card_import" || !sourceDocumentId || r.source_document_id === sourceDocumentId);
   const sorted = [...usable].sort((a, b) => rank(a) - rank(b));
   const seen = new Set<string>();
@@ -526,7 +516,7 @@ export async function submitAnswer(
   const shownId = phase === "first" ? scenarioId : item.repeat_scenario_id!;
   const { data: key } = await ctx.db
     .from("office_scenarios")
-    .select("type, answer_format, options, answer, correct_response, critical_fail, escalation_level, workflow, stem, source_document_id")
+    .select("type, answer_format, options, answer, correct_response, critical_fail, escalation_level, workflow, stem, source_document_id, source_card")
     .eq("id", shownId)
     .eq("office_id", ctx.user.officeId)
     .maybeSingle();
@@ -554,6 +544,8 @@ export async function submitAnswer(
       .is("first_answer", null)
       .select("id");
     if (!saved?.length) return { ok: false, error: "This item was already answered. Moving on to the next one." };
+    // Where the rule it was graded against came from (the office's card or a VFDA standard).
+    await recordRuleSource(ctx.db, ctx.user.officeId!, item.id, scenarioId);
     return { ok: true, data: { feedback: null, repeat: null } };
   }
 
@@ -614,6 +606,8 @@ export async function submitAnswer(
         missedSteps: grade.score < 2 ? grade.missed_steps : [],
         repeatNext: !!repeat,
         ungraded: false,
+        score: grade.score,
+        review: isVfdaSourceCard(key.source_card) ? null : key.source_card,
       }
     : UNGRADED;
   const stamp = { reason: feedback.reason, missed_steps: feedback.missedSteps };
@@ -643,6 +637,8 @@ export async function submitAnswer(
     .update({ ...update, paste_log: [...((claimed.paste_log as unknown[]) ?? []), ...pastes] })
     .eq("id", item.id);
   if (error) return { ok: false, error: "Couldn't save your grade. Reload the page." };
+  // Where the rule it was graded against came from (the office's card or a VFDA standard).
+  if (phase === "first") await recordRuleSource(ctx.db, ctx.user.officeId!, item.id, scenarioId);
   // A critical error alerts VFDA and the doctor at once (the VA keeps going).
   const critical = grade?.critical_error ? { itemId: item.id, phase } : undefined;
 

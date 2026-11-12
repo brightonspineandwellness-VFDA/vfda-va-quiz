@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { InviteDoctorForm } from "@/components/doctors/invite-doctor";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Badge, ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge } from "@/components/ui";
 import { InviteVaForm, MoveVaForm } from "@/components/va/invite-va";
 import { VaScopeForm } from "@/components/va/va-scope";
 import { StartDateForm } from "@/components/va/proof-review";
@@ -18,19 +19,16 @@ import { nextTrainingDay } from "@/lib/va-training";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const TONE: Record<VaStatus, string> = {
-  invited: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
-  training: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  certified: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
-  deactivated: "bg-foreground/10 text-foreground/60",
+const TONE: Record<VaStatus, "info" | "primary" | "success" | "neutral"> = {
+  invited: "info",
+  training: "primary",
+  certified: "success",
+  deactivated: "neutral",
 };
 
 export default function OfficePage({ params }: PageProps<"/admin/offices/[id]">) {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin/offices" className="text-sm text-foreground/60 hover:underline">
-        ← Offices
-      </Link>
       <Suspense fallback={<Loading />}>
         <Office params={params} />
       </Suspense>
@@ -54,52 +52,50 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
 
   return (
     <>
-      <div>
-        <h1 className="text-2xl font-semibold">{office.name}</h1>
-        <p className="text-sm text-foreground/60">
-          Primary doctor: {primary?.name ?? "—"}
-          {doctors.length > 1 && ` · ${doctors.length} doctors`}
-        </p>
-        <p className="mt-1 flex flex-wrap gap-x-4 text-sm">
-          <Link href={`/admin/offices/${id}/rules`} className="underline">
-            Cards &amp; rules
-          </Link>
-          <Link href={`/admin/offices/${id}/interview`} className="underline">
-            Standards &amp; must-ask rules
-          </Link>
-          <Link href={`/admin/offices/${id}/scenarios`} className="underline">
-            Scenarios
-          </Link>
-          <Link href={`/admin/offices/${id}/bank`} className="underline">
-            Scenario bank (answers)
-          </Link>
-          <Link href={`/admin/offices/${id}/report`} className="underline">
-            SOP gap report (VFDA only)
-          </Link>
-        </p>
-      </div>
+      <PageHeader
+        title={office.name}
+        description={
+          <>
+            Primary doctor: {primary?.name ?? "—"}
+            {doctors.length > 1 && ` · ${doctors.length} doctors`}
+          </>
+        }
+        breadcrumbs={[{ label: "Offices", href: "/admin/offices" }, { label: office.name }]}
+      />
+      <nav aria-label="Office pages" className="flex flex-wrap gap-2">
+        <ButtonLink href={`/admin/offices/${id}/rules`} size="sm">
+          Cards &amp; rules
+        </ButtonLink>
+        <ButtonLink href={`/admin/offices/${id}/interview`} size="sm">
+          Standards &amp; must-ask rules
+        </ButtonLink>
+        <ButtonLink href={`/admin/offices/${id}/scenarios`} size="sm">
+          Scenarios
+        </ButtonLink>
+        <ButtonLink href={`/admin/offices/${id}/bank`} size="sm">
+          Scenario bank (answers)
+        </ButtonLink>
+        <ButtonLink href={`/admin/offices/${id}/report`} size="sm">
+          SOP gap report (VFDA only)
+        </ButtonLink>
+      </nav>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Doctors</h2>
-        <p className="text-sm text-foreground/60">
-          Every doctor has their own login and sees the same office: setup, VAs, results and certifications. Reports and
-          alerts go to all of them. The Primary doctor is shown on the office, certificates and reports.
-        </p>
+      <Card
+        number={1}
+        title="Doctors"
+        description="Every doctor has their own login and sees the same office: setup, VAs, results and certifications. Reports and alerts go to all of them. The Primary doctor is shown on the office, certificates and reports."
+      >
         {doctors.length === 0 ? (
-          <p className="text-sm text-foreground/70">No doctors yet.</p>
+          <EmptyState title="No doctors yet">Invite the office&apos;s doctor below.</EmptyState>
         ) : (
           <ul className="flex flex-col gap-3">
             {doctors.map((d) => (
-              <li key={d.id} className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-4 py-3">
+              <li key={d.id} className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-line px-4 py-3">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <span className="font-medium">{d.name}</span>
-                  <span className="text-sm text-foreground/60">{d.email}</span>
-                  {d.primary && (
-                    <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">
-                      Primary
-                    </span>
-                  )}
-                  <span className="text-xs text-foreground/60">
+                  <span className="text-sm text-muted">{d.email}</span>
+                  {d.primary && <Badge tone="success">Primary</Badge>}
+                  <span className="text-xs text-muted">
                     {d.lastSignIn ? `last signed in ${showDate(d.lastSignIn.slice(0, 10))}` : "hasn't signed in yet"}
                   </span>
                 </div>
@@ -113,29 +109,29 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
           </ul>
         )}
         <InviteDoctorForm officeId={id} />
-      </section>
+      </Card>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-lg font-semibold">VAs</h2>
-          <Link href="/admin/vas" className="text-sm underline">
+      <Card
+        number={2}
+        title="VAs"
+        description="Moving a VA starts their training again at the new office; what they did here stays with this office."
+        actions={
+          <Link href="/admin/vas" className={`${linkClass} text-sm`}>
             VA progress
           </Link>
-        </div>
-        <p className="text-sm text-foreground/60">
-          Moving a VA starts their training again at the new office; what they did here stays with this office.
-        </p>
+        }
+      >
         {vas.length === 0 ? (
-          <p className="text-sm text-foreground/70">No VAs yet.</p>
+          <EmptyState title="No VAs yet">Invite the office&apos;s VA below.</EmptyState>
         ) : (
           <ul className="flex flex-col gap-3">
             {vas.map((va) => (
-              <li key={va.id} className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-4 py-3">
+              <li key={va.id} className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-line px-4 py-3">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   <span className="font-medium">{va.name}</span>
-                  <span className="text-sm text-foreground/60">{va.email}</span>
-                  <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${TONE[va.status]}`}>{VA_STATUS_LABELS[va.status]}</span>
-                  <span className="text-xs text-foreground/60">
+                  <span className="text-sm text-muted">{va.email}</span>
+                  <StatusBadge label={VA_STATUS_LABELS[va.status]} tone={TONE[va.status]} />
+                  <span className="text-xs text-muted">
                     {va.lastSignIn ? `last signed in ${showDate(va.lastSignIn.slice(0, 10))}` : "hasn't signed in yet"}
                   </span>
                 </div>
@@ -163,7 +159,7 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
           </ul>
         )}
         <InviteVaForm officeId={id} defaultStart={defaultStart} />
-      </section>
+      </Card>
     </>
   );
 }

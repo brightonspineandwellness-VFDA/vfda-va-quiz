@@ -5,6 +5,7 @@
 
 import { requiredSteps } from "@/lib/mock-grade";
 import { trendSummary, type DayHistory, type RepeatStats } from "@/lib/report";
+import { standardsUsed, vaTipTags, type ItemRuleSource, type TipTag } from "@/lib/rule-source";
 import { resultLabel } from "@/lib/va-flow";
 
 // The doctor's line when the card was fine and only the VA needs coaching.
@@ -33,9 +34,11 @@ export type NeedsWorkItem = {
   sourceCard: string | null;
   sourceQuote: string | null;
   correct: string[];
+  // Where the rule it was graded against came from (src/lib/rule-source.ts).
+  ruleSource?: ItemRuleSource | null;
 };
 
-export type DoneWellItem = { workflow: string; workflowName: string; partTitle: string; correct: string[] };
+export type DoneWellItem = { workflow: string; workflowName: string; partTitle: string; correct: string[]; ruleSource?: ItemRuleSource | null };
 
 export type Tips = {
   items: { key: string; coaching: string; card: string | null }[];
@@ -93,7 +96,10 @@ export type QuizReport = {
   // The Alerts box under the header: every critical error, then the flags.
   alerts: { critical: CriticalAlert[]; flags: string[] };
   // "Coaching tips given to the VA" (va_reports); null before they're written.
-  vaTips: { alerts: string[]; tips: string[]; strengths: string[] } | null;
+  // tags: each tip's "VFDA standard" / "Card: ..." tag.
+  vaTips: { alerts: string[]; tips: string[]; strengths: string[]; tags?: (TipTag | null)[] } | null;
+  // The VFDA standard rules any item relied on (the notice under the Alerts box); empty: no notice.
+  standards: string[];
 };
 
 export type CriticalAlert = { code: string; topic: string; quote: string; why: string; coaching: string };
@@ -201,7 +207,7 @@ export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneW
 }
 
 export function buildQuizReport(
-  head: Omit<QuizReport, "needsWork" | "strengths" | "alerts" | "vaTips">,
+  head: Omit<QuizReport, "needsWork" | "strengths" | "alerts" | "vaTips" | "standards">,
   needsWork: NeedsWorkItem[],
   doneWell: DoneWellItem[],
   tips: Tips,
@@ -215,7 +221,8 @@ export function buildQuizReport(
   });
   return {
     ...head,
-    vaTips,
+    vaTips: vaTips && { ...vaTips, tags: vaTipTags(vaTips.tips, needsWork) },
+    standards: standardsUsed([...needsWork, ...doneWell].map((i) => i.ruleSource)),
     alerts: {
       critical: ordered
         .filter((i) => i.critical)

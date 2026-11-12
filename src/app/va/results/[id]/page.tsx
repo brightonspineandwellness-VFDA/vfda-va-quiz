@@ -1,18 +1,18 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { TipList } from "@/components/attempts/va-tips";
+import { StandardsNotice } from "@/components/reports/standards";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { ButtonAnchor, Card, EmptyState, Notice, PageHeader, StatTile, StatusBadge } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { minutesText } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
+import { toneOf } from "@/lib/theme";
 import { loadMyVaReport, trendLine } from "@/lib/va-reports";
 
 export default function MyReportPage({ params }: PageProps<"/va/results/[id]">) {
   return (
     <SignedInPage area="VA">
-      <Link href="/va/results" className="text-sm text-foreground/60 hover:underline">
-        ← My results
-      </Link>
       <Suspense fallback={<Loading />}>
         <MyReport params={params} />
       </Suspense>
@@ -20,8 +20,9 @@ export default function MyReportPage({ params }: PageProps<"/va/results/[id]">) 
   );
 }
 
-// The VA-safe report: header, alerts in general terms, trend, coaching tips.
-// Never the scenarios, answers or answer keys (src/lib/va-report.ts).
+// The VA-safe report: header, alerts in general terms, the VFDA standards
+// notice, trend, coaching tips. Never the scenarios, answers or answer keys
+// (src/lib/va-report.ts).
 async function MyReport({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireRole("va");
   const { id } = await params;
@@ -31,103 +32,98 @@ async function MyReport({ params }: { params: Promise<{ id: string }> }) {
 
   return (
     <>
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold">
-          {v.dayCode}
-          {v.topic && `: ${v.topic}`}
-          {v.retake && <span className="ml-2 rounded bg-blue-700 px-2 py-0.5 align-middle text-xs font-semibold text-white">RETAKE</span>}
-        </h1>
-        <p className="text-sm text-foreground/60">{new Date(v.date).toLocaleDateString("en-US", { dateStyle: "medium" })}</p>
-        <p className="flex flex-wrap gap-x-4 gap-y-1">
-          <span className="font-medium">
-            {v.retake ? "Retake score" : "First-try score"}: {v.percent}%
-          </span>
-          <span>{v.resultLabel}</span>
-          <span>Time spent: {minutesText(v.timeSpent)}</span>
-          {v.retakePercent !== null && <span>Retake: {v.retakePercent}%</span>}
-          {v.firstTryPercent !== null && <span>First try was {v.firstTryPercent}%</span>}
-        </p>
-        <a
-          href={`/va/results/${v.attemptId}/pdf`}
-          className="mt-2 self-start rounded-lg border border-foreground/25 px-4 py-2 text-sm font-medium hover:bg-foreground/5"
-        >
-          Download PDF
-        </a>
-      </header>
+      <PageHeader
+        breadcrumbs={[
+          { label: "Today", href: "/va" },
+          { label: "My results", href: "/va/results" },
+          { label: `${v.dayCode}${v.retake ? " retake" : ""}` },
+        ]}
+        title={`${v.dayCode}${v.topic ? `: ${v.topic}` : ""}`}
+        badge={v.retake ? <StatusBadge label="Retake" /> : undefined}
+        description={`${v.officeName} · ${new Date(v.date).toLocaleDateString("en-US", { dateStyle: "medium" })}`}
+        actions={
+          <ButtonAnchor href={`/va/results/${v.attemptId}/pdf`} variant="secondary">
+            Download PDF
+          </ButtonAnchor>
+        }
+      />
 
-      <section
-        className={`flex flex-col gap-2 rounded-lg border px-4 py-3 ${v.alerts.length ? "border-red-700/60 bg-red-50 dark:bg-red-950/30" : "border-foreground/15"}`}
-      >
-        <h2 className="text-lg font-semibold">Alerts</h2>
-        {!v.alerts.length && !v.flags.length && <p className="text-sm text-foreground/70">No critical errors or flags.</p>}
-        {v.alerts.length > 0 && (
-          <>
-            <p className="text-sm font-semibold text-red-800 dark:text-red-300">Critical errors</p>
-            <ul className="list-disc pl-5 text-sm text-red-800 dark:text-red-300">
-              {v.alerts.map((a) => (
-                <li key={a}>{a}</li>
-              ))}
-            </ul>
-          </>
-        )}
-        {v.flags.length > 0 && (
-          <>
-            <p className="text-sm font-semibold">Flags</p>
-            <ul className="list-disc pl-5 text-sm">
-              {v.flags.map((f) => (
-                <li key={f}>{f}</li>
-              ))}
-            </ul>
-          </>
-        )}
-      </section>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <StatTile label={v.retake ? "Retake score" : "First-try score"} value={`${v.percent}%`} tone="primary" />
+        <StatTile label="Result" value={<StatusBadge label={v.resultLabel} size="lg" />} />
+        <StatTile label="Time spent" value={minutesText(v.timeSpent)} />
+        {v.retakePercent !== null && <StatTile label="Retake" value={`${v.retakePercent}%`} tone="accent" />}
+        {v.firstTryPercent !== null && <StatTile label="First try was" value={`${v.firstTryPercent}%`} />}
+      </div>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Trend</h2>
-        <ul className="flex flex-col gap-1 text-sm">
+      {!v.alerts.length && !v.flags.length ? (
+        <Notice tone="neutral" title="Alerts">
+          <p className="text-muted">No critical errors or flags.</p>
+        </Notice>
+      ) : (
+        <Notice tone={v.alerts.length ? "danger" : "warning"} title="Alerts" role="alert">
+          {v.alerts.length > 0 && (
+            <>
+              <p className="font-semibold text-danger">Critical errors</p>
+              <ul className="list-disc pl-5 text-danger">
+                {v.alerts.map((a) => (
+                  <li key={a}>{a}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {v.flags.length > 0 && (
+            <>
+              <p className="font-semibold">Flags</p>
+              <ul className="list-disc pl-5">
+                {v.flags.map((f) => (
+                  <li key={f}>{f}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </Notice>
+      )}
+
+      <StandardsNotice rules={v.standards} audience="va" />
+
+      <Card title="Trend">
+        <ul className="flex flex-col gap-2 text-[0.9375rem]">
           {v.trend.rows.map((r) => (
-            <li key={r.day} className="grid grid-cols-[3.5rem_1fr_5.5rem] items-center gap-2">
+            <li key={r.day} className="grid grid-cols-[3.5rem_1fr_5.5rem] items-center gap-3">
               <span className={r.current ? "font-semibold" : ""}>{r.day}</span>
-              <span className="h-2.5 rounded bg-foreground/10">
-                <span
-                  className={`block h-2.5 rounded ${r.current ? "bg-blue-700" : "bg-green-700"}`}
-                  style={{ width: `${(Math.min(r.percent, max) * 100) / max}%` }}
-                />
+              <span className="h-2.5 overflow-hidden rounded-full bg-surface-muted">
+                <span className={`block h-2.5 rounded-full ${r.current ? "bg-primary" : "bg-success"}`} style={{ width: `${(Math.min(r.percent, max) * 100) / max}%` }} />
               </span>
-              <span className={r.current ? "font-semibold" : ""}>
+              <span className={`text-right tabular-nums ${r.current ? "font-semibold" : ""}`}>
                 {r.percent}%{r.current && " (this)"}
               </span>
             </li>
           ))}
         </ul>
-        <p className="text-sm font-medium">{trendLine(v)}</p>
-      </section>
+        <p className="font-medium">{trendLine(v)}</p>
+      </Card>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Coaching tips</h2>
+      <Card title="Coaching tips" description="Most important first. Each tip names the card to review.">
         {!v.ready ? (
-          <p className="text-sm text-foreground/70">Your coaching tips are being written. Refresh in a few minutes.</p>
+          <EmptyState title="Your coaching tips are being written">Refresh this page in a few minutes.</EmptyState>
         ) : (
           <>
-            {!v.tips.length && <p className="text-sm text-foreground/70">Nothing to fix: every question got full points.</p>}
-            <ul className="flex list-disc flex-col gap-2 pl-5 text-sm">
-              {v.tips.map((t) => (
-                <li key={t}>{t}</li>
-              ))}
-            </ul>
-            {v.strengths.length > 0 && (
-              <>
-                <p className="mt-2 text-sm font-semibold text-green-800 dark:text-green-300">What you did well</p>
-                <ul className="flex list-disc flex-col gap-2 pl-5 text-sm">
-                  {v.strengths.map((t) => (
-                    <li key={t}>{t}</li>
-                  ))}
-                </ul>
-              </>
-            )}
+            {!v.tips.length && <p className="text-muted">Nothing to fix: every question got full points.</p>}
+            <TipList tips={v.tips} tags={v.tipTags} />
           </>
         )}
-      </section>
+      </Card>
+
+      {v.ready && v.strengths.length > 0 && (
+        <Card title="What you did well" accent={toneOf("Strong")}>
+          <ul className="flex list-disc flex-col gap-2 pl-5">
+            {v.strengths.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </>
   );
 }

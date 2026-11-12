@@ -1,28 +1,108 @@
 @import "tailwindcss";
 
-/* Always dark: dark: classes follow the "dark" class on <html>, not the device setting. */
-@custom-variant dark (&:where(.dark, .dark *));
-
-:root {
-  --background: #000000;
-  --foreground: #ededed;
-  color-scheme: dark;
-}
+/* The colors, radius and sizes are CSS variables written from src/lib/theme.ts
+   (themeCss(), in src/app/layout.tsx): light by default, dark only when the
+   device is set to dark. dark: classes follow the device setting too. */
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-zebra: var(--surface-zebra);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
+  --color-primary-soft: var(--primary-soft);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-focus: var(--focus);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  /* Secondary text never goes under 13px. */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.4;
 }
 
-/* Bigger text everywhere: Tailwind sizes are in rem, so this scales them all. */
-html {
-  font-size: 112.5%;
-}
+/* Base styles sit in the base layer, so Tailwind classes on an element always win. */
+@layer base {
+  html {
+    font-size: 100%;
+  }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    line-height: 1.3;
+    font-weight: 600;
+  }
+  h2 {
+    font-size: 1.125rem;
+    line-height: 1.35;
+    font-weight: 600;
+  }
+  h3 {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  /* Visible keyboard focus everywhere. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Inputs: bordered, readable, the same height as buttons. */
+  :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), select, textarea) {
+    background: var(--surface);
+    color: var(--foreground);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-control);
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    line-height: 1.5;
+  }
+  :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]), select) {
+    min-height: var(--control-h);
+  }
+  :where(input, select, textarea)::placeholder {
+    color: var(--muted);
+    opacity: 0.85;
+  }
+  :where(input[type="checkbox"], input[type="radio"]) {
+    accent-color: var(--primary);
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+
+  /* Never scroll the whole page sideways on a phone. */
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  @media print {
+    body {
+      background: #fff;
+      color: #111;
+    }
+  }
 }

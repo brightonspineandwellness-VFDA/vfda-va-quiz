@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useActionState, useState, useTransition } from "react";
 import { inputClass } from "@/components/interview/answer-inputs";
+import { buttonClass, Field } from "@/components/ui";
 import { ScopeCheckboxes } from "@/components/va/va-scope";
 import { inviteVaAction, moveVaAction, type InviteVaState } from "@/lib/va-invite-actions";
 
@@ -10,41 +11,38 @@ export function InviteVaForm({ officeId, defaultStart }: { officeId: string; def
   const [state, action, pending] = useActionState<InviteVaState, FormData>(inviteVaAction.bind(null, officeId), null);
 
   return (
-    <form action={action} className="flex flex-col gap-3 rounded-lg border border-foreground/15 p-4">
+    <form action={action} className="flex flex-col gap-4 rounded-[var(--radius-card)] border border-line bg-surface p-4 sm:p-5">
       <h3 className="font-semibold">Invite VA</h3>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">VA name</span>
-          <input name="name" required maxLength={200} className={inputClass} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Email</span>
-          <input name="email" type="email" required className={inputClass} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Training start</span>
-          <input name="startDate" type="date" required defaultValue={defaultStart} className={inputClass} />
-        </label>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Field label="VA name" htmlFor={`${officeId}-va-name`}>
+          <input id={`${officeId}-va-name`} name="name" required maxLength={200} className={inputClass} />
+        </Field>
+        <Field label="Email" htmlFor={`${officeId}-va-email`}>
+          <input id={`${officeId}-va-email`} name="email" type="email" required className={inputClass} />
+        </Field>
+        <Field label="Training start" htmlFor={`${officeId}-va-start`}>
+          <input id={`${officeId}-va-start`} name="startDate" type="date" required defaultValue={defaultStart} className={inputClass} />
+        </Field>
       </div>
       <ScopeCheckboxes />
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"
           disabled={pending}
-          className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+          className={buttonClass("primary")}
         >
           {pending ? "Inviting…" : "Invite VA"}
         </button>
         {state && (
           <p
             aria-live="polite"
-            className={`text-sm ${state.ok ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}
+            className={`text-sm font-medium ${state.ok ? "text-success" : "text-danger"}`}
           >
             {state.message}
           </p>
         )}
       </div>
-      <p className="text-xs text-foreground/60">
+      <p className="text-sm text-muted">
         The VA gets a sign-in link by email. They only see this office&apos;s days that VFDA approved.
       </p>
     </form>
@@ -81,12 +79,12 @@ export function MoveVaForm({
         });
       }}
     >
-      <label className="flex items-center gap-2">
+      <label className="flex flex-wrap items-center gap-2">
         Move to
         <select
           value={office}
           onChange={(e) => setOffice(e.target.value)}
-          className="rounded-lg border border-foreground/20 bg-transparent px-2 py-1"
+          className="min-w-0"
         >
           <option value="">Pick an office</option>
           {offices.map((o) => (
@@ -96,23 +94,23 @@ export function MoveVaForm({
           ))}
         </select>
       </label>
-      <label className="flex items-center gap-2">
+      <label className="flex flex-wrap items-center gap-2">
         starting
         <input
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          className="rounded-lg border border-foreground/20 bg-transparent px-2 py-1"
+          className="min-w-0"
         />
       </label>
       <button
         type="submit"
         disabled={pending || !office || !date}
-        className="rounded-lg border border-foreground/25 px-3 py-1 font-medium hover:bg-foreground/5 disabled:opacity-60"
+        className={buttonClass("secondary", "sm")}
       >
         {pending ? "Moving…" : "Move"}
       </button>
-      {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
+      {error && <span className="font-medium text-danger">{error}</span>}
     </form>
   );
 }

@@ -4,7 +4,7 @@ import { showDate } from "@/lib/va-flow";
 export function ByLine({ verb, name, at }: { verb: string; name: string | null | undefined; at?: string | null }) {
   if (!name) return null;
   return (
-    <span className="text-xs text-foreground/60">
+    <span className="text-sm text-muted">
       {verb} by {name}
       {at ? ` · ${showDate(at.slice(0, 10))}` : ""}
     </span>

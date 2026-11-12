@@ -27,6 +27,8 @@ import {
 } from "@/lib/quiz-report";
 import { quizReportPdf } from "@/lib/quiz-report-pdf";
 import type { AttemptReport } from "@/lib/report";
+import { standardsUsed } from "@/lib/rule-source";
+import { itemRuleSources } from "@/lib/rule-sources";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { VaTips } from "@/lib/va-report";
 import { ANSWER_BOXES, formatOf, RESULT_LABELS, withOverride, type AnswerFormat } from "@/lib/va-flow";
@@ -87,6 +89,8 @@ export async function loadItems(db: Db, attemptId: string) {
       .in("id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
   ) ?? []) as Scenario[];
   const scenarioOf = new Map(scenarios.map((s) => [s.id, s]));
+  // Where each item's rule came from: the office's card or a VFDA standard.
+  const sources = await itemRuleSources(db, attemptId, attempt.office_id, ids);
   const names = new Map<string, string>((must(workflows) ?? []).map((w) => [w.code, w.name]));
   for (const g of must(gray) ?? []) names.set(g.code, g.name || String((g.card_answers as Record<string, unknown>)?.CARD_NAME ?? g.code));
   const dayFormat = ((must(day)?.answer_format as AnswerFormat | undefined) ?? "steps_say_doc") as AnswerFormat;
@@ -118,7 +122,7 @@ export async function loadItems(db: Db, attemptId: string) {
       awaiting.push(s.code);
     }
     if (i.first_score !== null && i.first_score >= s.points && !i.critical_error) {
-      doneWell.push({ workflow: s.workflow, workflowName, partTitle: s.part_title ?? "", correct });
+      doneWell.push({ workflow: s.workflow, workflowName, partTitle: s.part_title ?? "", correct, ruleSource: sources.get(s.id) ?? null });
       continue;
     }
     const a = (row.first_answer ?? {}) as Record<string, unknown>;
@@ -154,9 +158,22 @@ export async function loadItems(db: Db, attemptId: string) {
       sourceCard: s.source_card,
       sourceQuote: s.source_quote,
       correct: s.type === "mc" ? (right ? [right] : []) : correct,
+      ruleSource: sources.get(s.id) ?? null,
     });
   }
   return { needsWork, doneWell, awaiting, overrides, totalAnswers: items.filter((r) => r.first_answer).length };
+}
+
+// The VFDA standards notice and the tips' tags on the attempt pages: the
+// VFDA standard rules the attempt relied on, and its items for tagging tips.
+export async function attemptStandards(db: Db, attemptId: string) {
+  try {
+    const { needsWork, doneWell } = await loadItems(db, attemptId);
+    return { standards: standardsUsed([...needsWork, ...doneWell].map((i) => i.ruleSource)), needsWork };
+  } catch (e) {
+    console.error("VFDA standards not loaded", attemptId, e instanceof Error ? e.message : e);
+    return { standards: [], needsWork: [] as NeedsWorkItem[] };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +340,7 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
       sourceCard: "HOW TO: Phone Scripts",
       sourceQuote: null,
       correct: ["Verify the caller's name and date of birth", "Ask before putting the caller on hold"],
+      ruleSource: { kind: "vfda_standard", card: "HOW TO: Phone Scripts", rules: ["Holds and transfers: ask before putting a caller on hold; check back every 60 seconds"] },
     },
     {
       key: "1",
@@ -343,6 +361,7 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
       sourceCard: "Open & Close",
       sourceQuote: "Emergencies: tell the caller to call 911",
       correct: ["Tell the caller to call 911 or go to the ER now", "Tell the doctor right away"],
+      ruleSource: { kind: "card", card: "Open & Close", rules: [] },
     },
   ];
   const doneWell: DoneWellItem[] = [{ workflow: "WF01", workflowName: "Scheduling", partTitle: "Booking a new patient", correct: [] }];

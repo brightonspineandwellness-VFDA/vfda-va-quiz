@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { after } from "next/server";
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import { SopForm } from "@/components/certs/sop-form";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Badge, ButtonLink, Card, EmptyState, linkClass, NumberBadge, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { loadVaTasks } from "@/lib/certifications";
 import { sendPreparingNotice } from "@/lib/reports";
 import { markTodaysCardsDone, startDayRetake } from "@/lib/va-actions";
-import { dayName, proofState, RESULT_LABELS, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
+import { proofState, RESULT_LABELS, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
 import { claimPreparingNotice, loadRetakeTasks, loadToday } from "@/lib/va-training";
 
 // "Retake this day" waits while Claude writes the day's new versions.
@@ -30,7 +31,12 @@ const STATUS_LABELS: Record<UnlockStatus, string> = {
   done: "Done",
 };
 
-const card = "flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4";
+const PROOF_LABELS: Partial<Record<ReturnType<typeof proofState>, { label: string; tone: "warning" | "danger" | "success" | "neutral" }>> = {
+  pending: { label: "Waiting for VFDA", tone: "warning" },
+  redo: { label: "Redo proof", tone: "danger" },
+  missing: { label: "Proof needed", tone: "neutral" },
+  accepted: { label: "Accepted", tone: "success" },
+};
 
 async function Today() {
   const user = await requireRole("va");
@@ -39,8 +45,8 @@ async function Today() {
   if (loaded.kind === "no_office") {
     return (
       <>
-        <h1 className="text-2xl font-semibold">Today</h1>
-        <p>Your account isn&apos;t linked to an office yet. VFDA will set this up.</p>
+        <PageHeader title="Today" />
+        <EmptyState title="Your account isn't linked to an office yet">VFDA will set this up.</EmptyState>
       </>
     );
   }
@@ -50,84 +56,115 @@ async function Today() {
     const day = today.current.day.code;
     after(() => sendPreparingNotice(user.id, day).then(() => undefined));
   }
+  const total = "days" in today ? today.days.length : 0;
 
   return (
     <>
-      <div>
-        <h1 className="text-2xl font-semibold">Today</h1>
-        <p className="text-foreground/60">
-          {user.fullName || user.email} · {officeName}
-        </p>
-      </div>
+      <PageHeader
+        title="Today"
+        description={`${user.fullName || user.email} · ${officeName}`}
+        actions={
+          <>
+            <ButtonLink href="/va/results">My results</ButtonLink>
+            <ButtonLink href="/va/proof">Proof of work</ButtonLink>
+          </>
+        }
+      />
 
-      {today.kind === "no_days" && <p>No training days are set up for your office yet.</p>}
+      {today.kind === "no_days" && <EmptyState title="No training days yet">No training days are set up for your office yet.</EmptyState>}
       {today.kind === "finished" && (
-        <div className={card}>
-          <p className="font-medium">You&apos;ve finished every training day.</p>
-        </div>
+        <Card>
+          <p className="flex flex-wrap items-center gap-2 font-semibold">
+            <StatusBadge label="Done" /> You&apos;ve finished every training day.
+          </p>
+        </Card>
       )}
       {today.kind === "open" && (
-        <div className={card}>
-          <p className="text-sm font-medium text-green-700 dark:text-green-400">Open now</p>
-          <p className="text-lg font-semibold">{dayName(today.current)}</p>
-          <CardList view={today.current} />
-          <Link href="/va/day" className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+        <DayCard view={today.current} total={total} badge={<StatusBadge label="Open" />}>
+          <ButtonLink href="/va/day" variant="primary" className="self-start">
             Go to today&apos;s scenarios →
-          </Link>
-        </div>
+          </ButtonLink>
+        </DayCard>
       )}
       {today.kind === "cards" && (
-        <div className={card}>
-          <p className="text-sm font-medium text-foreground/60">Up next</p>
-          <p className="text-lg font-semibold">{dayName(today.current)}</p>
-          <CardList view={today.current} />
-          <p>Read today&apos;s cards, then mark them done to open the quiz.</p>
-          <ActionButton action={markTodaysCardsDone} label="Mark today's cards done" primary />
-        </div>
+        <DayCard view={today.current} total={total} badge={<Badge tone="primary">Up next</Badge>}>
+          <p className="text-[0.9375rem]">Read today&apos;s cards, then mark them done to open the quiz.</p>
+          <div>
+            <ActionButton action={markTodaysCardsDone} label="Mark today's cards done & start quiz" primary />
+          </div>
+        </DayCard>
       )}
       {today.kind === "preparing" && (
-        <div className={card}>
-          <p className="text-lg font-semibold">{dayName(today.current)}</p>
+        <DayCard view={today.current} total={total} badge={<StatusBadge label="Pending" />}>
           <p>Your quiz is being prepared, VFDA has been notified.</p>
-          <p className="text-sm text-foreground/60">Come back to this page later; the quiz opens here as soon as it&apos;s ready.</p>
-        </div>
+          <p className="text-sm text-muted">Come back to this page later; the quiz opens here as soon as it&apos;s ready.</p>
+        </DayCard>
       )}
 
       {user.officeId && <Tasks vaId={user.id} officeId={user.officeId} />}
 
       {"days" in today && (
-        <section className="flex flex-col gap-2">
-          <div className="flex items-baseline justify-between gap-2">
-            <h2 className="text-lg font-semibold">Your training days</h2>
-            <span className="flex gap-3 text-sm">
-              <Link href="/va/results" className="underline">
-                My results
-              </Link>
-              <Link href="/va/proof" className="underline">
-                Proof of work
-              </Link>
-            </span>
-          </div>
-          <ol className="flex flex-col divide-y divide-foreground/10 rounded-lg border border-foreground/15">
-            {today.days.map((d) => {
-              const proof = d.status === "locked" ? null : proofState(d.day, proofs);
-              return (
-                <li key={d.day.code} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm">
-                  <span>{dayName(d)}</span>
-                  <span className="text-foreground/70">
-                    {STATUS_LABELS[d.status]}
-                    {proof === "pending" && " · proof waiting for VFDA"}
-                    {proof === "redo" && " · redo proof"}
-                    {proof === "missing" && " · proof needed"}
-                    {proof === "accepted" && " · proof accepted"}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-        </section>
+        <Card title="Your training days" description="Your progress through the training schedule.">
+          <Table>
+            <thead>
+              <tr>
+                <th className={th}>Day</th>
+                <th className={th}>Topic</th>
+                <th className={th}>Status</th>
+                <th className={th}>Proof of work</th>
+              </tr>
+            </thead>
+            <tbody>
+              {today.days.map((d) => {
+                const proof = d.status === "locked" ? null : proofState(d.day, proofs);
+                const p = proof ? PROOF_LABELS[proof] : undefined;
+                return (
+                  <tr key={d.day.code}>
+                    <td className={`${td} whitespace-nowrap font-medium`}>
+                      Day {d.index} <span className="text-sm font-normal text-muted">{d.day.code}</span>
+                    </td>
+                    <td className={`${td} min-w-40`}>{d.day.title}</td>
+                    <td className={td}>
+                      <StatusBadge label={STATUS_LABELS[d.status]} />
+                    </td>
+                    <td className={td}>{p ? <Badge tone={p.tone}>{p.label}</Badge> : <span className="text-sm text-muted">–</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+          <p className="text-sm text-muted">
+            Scores and coaching tips for each finished day are on{" "}
+            <Link href="/va/results" className={linkClass}>
+              My results
+            </Link>
+            .
+          </p>
+        </Card>
       )}
     </>
+  );
+}
+
+// The day's card: day number badge, topic, "Day X of N", the cards to study.
+function DayCard({ view, total, badge, children }: { view: DayView; total: number; badge: ReactNode; children: ReactNode }) {
+  return (
+    <Card>
+      <div className="flex items-start gap-3">
+        <NumberBadge n={view.index} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">{view.day.title}</h2>
+            {badge}
+          </div>
+          <p className="text-sm text-muted">
+            Day {view.index} of {total} · {view.day.code}
+          </p>
+        </div>
+      </div>
+      <CardList view={view} />
+      {children}
+    </Card>
   );
 }
 
@@ -140,63 +177,66 @@ async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
     <>
       {retakes.map((t) =>
         t.kind === "open" ? (
-          <div key={t.parentId} className={card}>
-            <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Retake (optional)</p>
+          <Card key={t.parentId} accent="accent">
+            <Badge tone="accent" className="self-start">
+              Retake (optional)
+            </Badge>
             <p className="text-lg font-semibold">
               {t.day}: {t.title}
             </p>
-            <p className="text-sm">
-              Every question of the day again, with new details. Your first try stays your official score.
-            </p>
-            <Link href={`/va/drill/${t.id}`} className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+            <p className="text-[0.9375rem]">Every question of the day again, with new details. Your first try stays your official score.</p>
+            <ButtonLink href={`/va/drill/${t.id}`} variant="primary" className="self-start">
               Continue retake →
-            </Link>
-          </div>
+            </ButtonLink>
+          </Card>
         ) : (
-          <div key={t.parentId} className={card}>
-            <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Retake available (optional)</p>
-            <p className="text-lg font-semibold">
-              {t.day}: {t.title} · {RESULT_LABELS[t.result]}
+          <Card key={t.parentId} accent="accent">
+            <Badge tone="accent" className="self-start">
+              Retake available (optional)
+            </Badge>
+            <p className="flex flex-wrap items-center gap-2 text-lg font-semibold">
+              {t.day}: {t.title} <StatusBadge label={RESULT_LABELS[t.result]} />
             </p>
-            <p className="text-sm">
-              You can retake this whole day once, with new details. It&apos;s optional and doesn&apos;t block your next
-              day. Your first try stays your official score.
+            <p className="text-[0.9375rem]">
+              You can retake this whole day once, with new details. It&apos;s optional and doesn&apos;t block your next day. Your first try
+              stays your official score.
             </p>
-            <ActionButton
-              action={startDayRetake.bind(null, t.parentId)}
-              label="Retake this day"
-              pendingLabel="Preparing your retake (about a minute)…"
-            />
-          </div>
+            <div>
+              <ActionButton
+                action={startDayRetake.bind(null, t.parentId)}
+                label="Retake this day"
+                pendingLabel="Preparing your retake (about a minute)…"
+              />
+            </div>
+          </Card>
         ),
       )}
       {drills.map((d) => (
-        <div key={d.id} className={card}>
-          <p className="text-sm font-medium text-amber-700 dark:text-amber-300">Recheck</p>
+        <Card key={d.id} accent="warning">
+          <Badge tone="warning" className="self-start">
+            Recheck
+          </Badge>
           <p className="text-lg font-semibold">
             {d.code} {d.name}
           </p>
-          <p className="text-sm">A short recheck to keep your certification: 5 scenarios.</p>
-          <Link href={`/va/drill/${d.id}`} className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background">
+          <p className="text-[0.9375rem]">A short recheck to keep your certification: 5 scenarios.</p>
+          <ButtonLink href={`/va/drill/${d.id}`} variant="primary" className="self-start">
             Start →
-          </Link>
-        </div>
+          </ButtonLink>
+        </Card>
       ))}
       {sop.map((t) => (
-        <div key={t.certificationId} className={card}>
-          <p className="text-lg font-semibold">
-            Update your office&apos;s Trello card for {t.code} {t.name}
-          </p>
+        <Card key={t.certificationId} title={`Update your office's Trello card for ${t.code} ${t.name}`}>
           {t.note && t.sopStatus !== "pending" && (
-            <p className="rounded-lg bg-foreground/5 px-3 py-2 text-sm">
-              <span className="font-medium">VFDA: </span>
+            <p className="rounded-[var(--radius-control)] bg-surface-muted px-3 py-2 text-sm">
+              <span className="font-semibold">VFDA: </span>
               {t.note}
             </p>
           )}
           {t.todo ? (
             <>
-              <div className="text-sm">
-                <p className="font-medium">The card should cover:</p>
+              <div className="text-[0.9375rem]">
+                <p className="font-semibold">The card should cover:</p>
                 <ul className="mt-1 flex flex-col gap-0.5">
                   {t.outline.map((o) => (
                     <li key={o}>☐ {o}</li>
@@ -206,17 +246,30 @@ async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
               <SopForm certificationId={t.certificationId} links={t.links} />
             </>
           ) : (
-            <p className="text-sm text-foreground/70">
-              Sent {t.submittedAt ? showDate(t.submittedAt.slice(0, 10)) : ""}. Waiting for VFDA to confirm the doctor approved it on
-              Trello. {t.links.length > 1 ? `${t.links.length} cards.` : ""}
+            <p className="text-sm text-muted">
+              Sent {t.submittedAt ? showDate(t.submittedAt.slice(0, 10)) : ""}. Waiting for VFDA to confirm the doctor approved it on Trello.{" "}
+              {t.links.length > 1 ? `${t.links.length} cards.` : ""}
             </p>
           )}
-        </div>
+        </Card>
       ))}
     </>
   );
 }
 
+// The cards to study for the day.
 function CardList({ view }: { view: DayView }) {
-  return <p className="text-sm text-foreground/70">Cards: {view.day.cards.join(", ")}</p>;
+  if (!view.day.cards.length) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-sm font-semibold text-foreground">Cards to study</p>
+      <ul className="flex flex-col divide-y divide-line rounded-[var(--radius-control)] border border-line">
+        {view.day.cards.map((c) => (
+          <li key={c} className="px-3 py-2 text-[0.9375rem]">
+            {c}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }

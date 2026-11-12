@@ -3,6 +3,8 @@ import { Suspense } from "react";
 import { AttemptLink, ReportStatus } from "@/components/attempts/attempt-review";
 import { CertGrid } from "@/components/certs/cert-grid";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Card, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, tdNum, th, thNum } from "@/components/ui";
+import type { Tone } from "@/lib/theme";
 import { ActionButton } from "@/components/setup/action-button";
 import { ProofReview, StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
@@ -23,10 +25,11 @@ export const maxDuration = 60;
 export default function VasPage() {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin" className="text-sm text-foreground/60 hover:underline">
-        ← Admin
-      </Link>
-      <h1 className="text-2xl font-semibold">VA progress</h1>
+      <PageHeader
+        title="VA progress"
+        description="Where each VA is, how they score, and what needs a look."
+        breadcrumbs={[{ label: "Admin", href: "/admin" }, { label: "VA progress" }]}
+      />
       <Suspense fallback={<Loading />}>
         <Vas />
       </Suspense>
@@ -40,11 +43,13 @@ const STATUS_LABELS: Record<string, string> = {
   done: "done",
 };
 
-const LABEL_TONE: Record<string, string> = {
-  strong: "text-green-700 dark:text-green-400",
-  needs_coaching: "text-amber-700 dark:text-amber-300",
-  at_risk: "text-red-700 dark:text-red-400",
+const LABEL_TONE: Record<string, Tone> = {
+  strong: "success",
+  needs_coaching: "warning",
+  at_risk: "danger",
 };
+
+const PROOF_TONE: Record<string, Tone> = { approved: "success", pending: "warning", redo: "danger", rejected: "danger" };
 
 // An attempt with this many pastes is flagged.
 const HEAVY_PASTING = 5;
@@ -141,7 +146,7 @@ async function Vas() {
     {},
   );
 
-  if (!vas.data?.length) return <p className="text-foreground/70">No VAs yet.</p>;
+  if (!vas.data?.length) return <EmptyState title="No VAs yet">Invite a VA from an office&apos;s page.</EmptyState>;
   const [grid, board] = await Promise.all([loadCertGrid(supabase, {}), loadReminderBoard(createAdminClient())]);
   const reminderOf = new Map(board.map((r) => [r.vaId, r]));
   const rank = (id: string) => STATE_RANK[reminderOf.get(id)?.state ?? "ok"];
@@ -198,66 +203,74 @@ async function Vas() {
 
   return (
     <>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-foreground/15 text-foreground/60">
+      <Card number={1} title="Overview" description="Overdue VAs first, then behind, then everyone else.">
+      <Table maxHeight="70vh">
+          <thead>
             <tr>
-              <th className="py-1 pr-3 font-medium">VA</th>
-              <th className="py-1 pr-3 font-medium">Office</th>
-              <th className="py-1 pr-3 font-medium">Current day</th>
-              <th className="py-1 pr-3 font-medium">Last activity</th>
-              <th className="py-1 pr-3 font-medium">Reminders</th>
-              <th className="py-1 pr-3 font-medium">Latest label</th>
-              <th className="py-1 pr-3 font-medium">First-try scores</th>
-              <th className="py-1 pr-3 font-medium">Trend</th>
-              <th className="py-1 pr-3 font-medium">Repeats</th>
-              <th className="py-1 pr-3 font-medium">Flags</th>
+              <th className={th}>VA</th>
+              <th className={th}>Office</th>
+              <th className={th}>Current day</th>
+              <th className={th}>Last activity</th>
+              <th className={th}>Reminders</th>
+              <th className={th}>Latest label</th>
+              <th className={th}>First-try scores</th>
+              <th className={th}>Trend</th>
+              <th className={th}>Repeats</th>
+              <th className={th}>Flags</th>
             </tr>
           </thead>
           <tbody>
             {progress.map((p) => (
-              <tr key={p.va.id} className="border-b border-foreground/10 align-top">
-                <td className="py-1 pr-3">
-                  <a href={`#va-${p.va.id}`} className="underline">
+              <tr key={p.va.id}>
+                <td className={td}>
+                  <a href={`#va-${p.va.id}`} className={linkClass}>
                     {p.va.full_name || p.va.email}
                   </a>
                 </td>
-                <td className="py-1 pr-3">{p.va.office_id ? (officeName.get(p.va.office_id) ?? "Unknown office") : "No office"}</td>
-                <td className="py-1 pr-3">{p.current}</td>
-                <td className="py-1 pr-3">{activityText(reminderOf.get(p.va.id))}</td>
+                <td className={td}>{p.va.office_id ? (officeName.get(p.va.office_id) ?? "Unknown office") : "No office"}</td>
+                <td className={td}>{p.current}</td>
+                <td className={td}>{activityText(reminderOf.get(p.va.id))}</td>
                 <td
-                  className={`py-1 pr-3 ${
+                  className={`${td} ${
                     reminderOf.get(p.va.id)?.state === "overdue"
-                      ? "font-medium text-red-700 dark:text-red-400"
+                      ? "font-semibold text-danger"
                       : reminderOf.get(p.va.id)?.state === "behind"
-                        ? "text-amber-700 dark:text-amber-300"
+                        ? "font-medium text-warning"
                         : ""
                   }`}
                 >
                   {remindersText(reminderOf.get(p.va.id))}
                 </td>
-                <td className={`py-1 pr-3 font-medium ${LABEL_TONE[p.latest?.result ?? ""] ?? ""}`}>
-                  {p.latest ? `${p.latest.schedule_day}: ${resultLabel(p.latest.result)}` : "–"}
+                <td className={td}>
+                  {p.latest ? (
+                    <span className="inline-flex flex-wrap items-center gap-1.5">
+                      {p.latest.schedule_day} <StatusBadge label={resultLabel(p.latest.result)} tone={LABEL_TONE[p.latest.result ?? ""]} />
+                    </span>
+                  ) : (
+                    "–"
+                  )}
                 </td>
-                <td className="py-1 pr-3">{p.scores.join(", ") || "–"}</td>
-                <td className="py-1 pr-3">{p.trend}</td>
-                <td className="py-1 pr-3">{p.repeats}</td>
-                <td className={`py-1 pr-3 ${p.flags.length ? "text-red-700 dark:text-red-400" : ""}`}>{p.flags.join(", ") || "–"}</td>
+                <td className={`${td} tabular-nums`}>{p.scores.join(", ") || "–"}</td>
+                <td className={td}>{p.trend}</td>
+                <td className={td}>{p.repeats}</td>
+                <td className={`${td} ${p.flags.length ? "font-medium text-danger" : ""}`}>{p.flags.join(", ") || "–"}</td>
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+      </Table>
+      </Card>
 
-      <section className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-lg font-semibold">Certifications</h2>
-          <Link href="/admin/sops" className="text-sm underline">
+      <Card
+        number={2}
+        title="Certifications"
+        actions={
+          <Link href="/admin/sops" className={`${linkClass} text-sm`}>
             SOPs to confirm
           </Link>
-        </div>
+        }
+      >
         <CertGrid columns={grid.columns} rows={grid.rows} certificatePath={(id) => `/admin/vas/${id}/certificate`} />
-      </section>
+      </Card>
 
       {sortedVas.map((va) => {
         const reminder = reminderOf.get(va.id);
@@ -270,16 +283,16 @@ async function Vas() {
         const resettable = taken.filter((a) => !a.archived_at);
         const resets = taken.filter((a) => a.archived_at);
         return (
-          <section key={va.id} id={`va-${va.id}`} className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
-            <div>
-              <h2 className="text-lg font-semibold">{va.full_name || va.email}</h2>
-              <p className="text-sm text-foreground/60">
-                {va.email} · {va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office"}
-              </p>
-            </div>
+          <Card
+            key={va.id}
+            id={`va-${va.id}`}
+            className="scroll-mt-4"
+            title={va.full_name || va.email}
+            description={`${va.email} · ${va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office"}`}
+          >
             <div className="flex flex-col gap-1">
               <StartDateForm vaId={va.id} value={va.va_start_date} />
-              <p className="text-xs text-foreground/60">
+              <p className="text-xs text-muted">
                 {sinceStartText(va.va_start_date, todayIn(process.env.TRAINING_TIME_ZONE || "America/New_York"))}. Reports
                 only: a day opens when its cards are done, the previous quiz is submitted and VFDA approved it.
               </p>
@@ -287,18 +300,18 @@ async function Vas() {
 
             {reminder && (
               <p className="text-sm">
-                <span className="font-medium">Last activity: </span>
-                {reminder.activity.lastActivity} ({activityText(reminder)}) · <span className="font-medium">Reminders: </span>
+                <span className="font-semibold">Last activity: </span>
+                {reminder.activity.lastActivity} ({activityText(reminder)}) · <span className="font-semibold">Reminders: </span>
                 {remindersText(reminder)}
-                {reminder.anchor && <span className="text-foreground/70"> ({reminder.anchor.reason})</span>}
+                {reminder.anchor && <span className="text-muted"> ({reminder.anchor.reason})</span>}
               </p>
             )}
             <p className="text-sm">
-              <span className="font-medium">Role: </span>
+              <span className="font-semibold">Role: </span>
               {scopeText(normalizeScope(va.va_scope))}
             </p>
             <p className="text-sm">
-              <span className="font-medium">Days: </span>
+              <span className="font-semibold">Days: </span>
               {days.length
                 ? days
                     .map(
@@ -314,7 +327,7 @@ async function Vas() {
                     .join(" · ")
                 : "not started"}
               {outOfRole(va, days.filter((d) => unlockStatus(d.status) !== "locked").map((d) => d.schedule_day)).map((code) => (
-                <span key={code} className="text-foreground/60">
+                <span key={code} className="text-muted">
                   {" · "}
                   {code} Not in this VA&apos;s role
                 </span>
@@ -322,17 +335,16 @@ async function Vas() {
             </p>
 
             {mine.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-foreground/15 text-foreground/60">
+              <Table>
+                  <thead>
                     <tr>
-                      <th className="py-1 pr-3 font-medium">Day</th>
-                      <th className="py-1 pr-3 font-medium">First try</th>
-                      <th className="py-1 pr-3 font-medium">Label</th>
-                      <th className="py-1 pr-3 font-medium">Repeat scores</th>
-                      <th className="py-1 pr-3 font-medium">Time</th>
-                      <th className="py-1 pr-3 font-medium">Flags</th>
-                      <th className="py-1 pr-3 font-medium">Report</th>
+                      <th className={th}>Day</th>
+                      <th className={thNum}>First try</th>
+                      <th className={th}>Label</th>
+                      <th className={th}>Repeat scores</th>
+                      <th className={thNum}>Time</th>
+                      <th className={th}>Flags</th>
+                      <th className={th}>Report</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -350,11 +362,11 @@ async function Vas() {
                         its.some((i) => !i.vfda_override && i.first_score === null) && "item needs review",
                       ].filter(Boolean);
                       return (
-                        <tr key={a.id} className="border-b border-foreground/10 align-top">
-                          <td className="py-1 pr-3">
+                        <tr key={a.id}>
+                          <td className={td}>
                             {attemptLabel(a)} <AttemptLink id={a.id} area="admin" />
                           </td>
-                          <td className="py-1 pr-3">
+                          <td className={tdNum}>
                             {a.kind === "retake" && "retake "}
                             {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%)
                             {a.kind === "retake" &&
@@ -364,33 +376,34 @@ async function Vas() {
                                 return first ? ` · first try ${Number(first.first_try_points)}/${first.max_points} (${percentOf(first.first_try_points, first.max_points)}%)` : "";
                               })()}
                           </td>
-                          <td className={`py-1 pr-3 font-medium ${LABEL_TONE[a.result ?? ""] ?? ""}`}>{resultLabel(a.result)}</td>
-                          <td className="py-1 pr-3">
+                          <td className={td}>
+                            <StatusBadge label={resultLabel(a.result)} tone={LABEL_TONE[a.result ?? ""]} />
+                          </td>
+                          <td className={`${td} tabular-nums`}>
                             {repeats
                               .sort((x, y) => x.position - y.position)
                               .map((i) => `${i.first_score ?? "–"}→${i.repeat_score ?? "–"}`)
                               .join(", ") || "–"}
                           </td>
-                          <td className="py-1 pr-3">{minutes(a.time_spent)}</td>
-                          <td className="py-1 pr-3">{flags.join(", ") || "–"}</td>
-                          <td className="py-1 pr-3">
+                          <td className={tdNum}>{minutes(a.time_spent)}</td>
+                          <td className={td}>{flags.join(", ") || "–"}</td>
+                          <td className={td}>
                             <ReportStatus attemptId={a.id} rows={(notes ?? []).filter((n) => n.attempt_id === a.id)} />
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
-                </table>
-              </div>
+              </Table>
             )}
 
             {taken.length > 0 && (
-              <div className="flex flex-col gap-2 rounded-md border border-dashed border-foreground/25 p-3 text-sm">
-                <h3 className="font-medium">Test tools</h3>
-                <p className="text-foreground/70">
+              <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-dashed border-line-strong bg-surface-muted p-4 text-sm">
+                <h3 className="font-semibold">Test tools</h3>
+                <p className="text-muted">
                   Reset day (test): archives this VA&rsquo;s attempt (kept, no longer counted in scores or reports) and lets them
                   take the day again on the live version. Logged to the{" "}
-                  <Link href="/admin/logs" className="underline">
+                  <Link href="/admin/logs" className={linkClass}>
                     System log
                   </Link>
                   .
@@ -408,7 +421,7 @@ async function Vas() {
                   </div>
                 )}
                 {resets.length > 0 && (
-                  <ul className="text-foreground/70">
+                  <ul className="text-muted">
                     {resets.map((a) => (
                       <li key={a.id}>
                         {a.schedule_day} version {a.build_version ?? 1}: reset by {a.archived_by ? (emailOf.get(a.archived_by) ?? "VFDA") : "VFDA"} on{" "}
@@ -422,23 +435,23 @@ async function Vas() {
 
             {proofRows.length > 0 && (
               <div className="flex flex-col gap-2">
-                <h3 className="font-medium">Proof of work</h3>
+                <h3 className="font-semibold">Proof of work</h3>
                 <ul className="flex flex-col gap-2 text-sm">
                   {proofRows.map((p) => {
                     const href = p.link_url ?? (p.file_path ? urlOf.get(p.file_path) : undefined);
                     return (
                       <li key={p.id} className="flex flex-col gap-1">
-                        <span>
+                        <span className="flex flex-wrap items-center gap-1.5">
                           {p.schedule_day} ·{" "}
                           {href ? (
-                            <a href={href} target="_blank" rel="noreferrer" className="underline">
+                            <a href={href} target="_blank" rel="noreferrer" className={`${linkClass} break-all`}>
                               {p.link_url ?? p.file_name ?? "file"}
                             </a>
                           ) : (
                             (p.file_name ?? "file")
                           )}{" "}
-                          · {p.status}
-                          {p.review_note && ` · "${p.review_note}"`}
+                          <StatusBadge label={p.status} tone={PROOF_TONE[p.status] ?? "neutral"} />
+                          {p.review_note && <span className="text-muted">&ldquo;{p.review_note}&rdquo;</span>}
                         </span>
                         {p.status === "pending" && <ProofReview proofId={p.id} />}
                       </li>
@@ -447,7 +460,7 @@ async function Vas() {
                 </ul>
               </div>
             )}
-          </section>
+          </Card>
         );
       })}
     </>

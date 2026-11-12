@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { linkClass, Notice } from "@/components/ui";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 // Invite links (sent by the server, so no PKCE) arrive with the session in the
@@ -27,18 +28,18 @@ export default function ConfirmPage() {
   }, []);
 
   return (
-    <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-4 px-6 py-16">
+    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 px-4 py-16">
       {error ? (
         <>
-          <p className="rounded-lg border border-red-600/40 bg-red-50 px-4 py-3 text-red-800 dark:bg-red-950 dark:text-red-200">
-            That link didn&apos;t work: {error.replace(/\+/g, " ")}
-          </p>
-          <Link href="/login" className="underline">
+          <Notice tone="danger" role="alert">
+            <p>That link didn&apos;t work: {error.replace(/\+/g, " ")}</p>
+          </Notice>
+          <Link href="/login" className={linkClass}>
             Request a new sign-in link
           </Link>
         </>
       ) : (
-        <p className="text-foreground/70">Signing you in…</p>
+        <p className="text-muted" role="status">Signing you in…</p>
       )}
     </main>
   );

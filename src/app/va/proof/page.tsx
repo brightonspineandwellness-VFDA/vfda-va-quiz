@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Card, EmptyState, linkClass, PageHeader, StatusBadge } from "@/components/ui";
 import { ProofUpload, ProofWarning } from "@/components/va/proof-upload";
 import { requireRole } from "@/lib/auth";
-import { dayName, type ProofRow } from "@/lib/va-flow";
+import type { ProofRow } from "@/lib/va-flow";
 import { loadToday } from "@/lib/va-training";
 
 export default function ProofPage() {
@@ -16,10 +16,10 @@ export default function ProofPage() {
   );
 }
 
-const STATUS: Record<ProofRow["status"], { label: string; className: string }> = {
-  pending: { label: "Waiting for VFDA", className: "text-foreground/70" },
-  accepted: { label: "Accepted", className: "text-green-700 dark:text-green-400" },
-  redo: { label: "Redo", className: "text-red-700 dark:text-red-400" },
+const STATUS: Record<ProofRow["status"], { label: string; tone: "warning" | "success" | "danger" }> = {
+  pending: { label: "Waiting for VFDA", tone: "warning" },
+  accepted: { label: "Accepted", tone: "success" },
+  redo: { label: "Redo", tone: "danger" },
 };
 
 async function Proof() {
@@ -32,49 +32,45 @@ async function Proof() {
 
   return (
     <>
-      <Link href="/va" className="self-start text-sm underline">
-        ← Today
-      </Link>
-      <h1 className="text-2xl font-semibold">Proof of work</h1>
-      <p className="text-foreground/70">
-        For each day, upload screenshots or files, or paste a Loom or Drive link. VFDA checks them; the next day opens
-        once your proof is accepted.
-      </p>
+      <PageHeader
+        title="Proof of work"
+        description="For each day, upload screenshots or files, or paste a Loom or Drive link. VFDA checks them; the next day opens once your proof is accepted."
+        breadcrumbs={[{ label: "Today", href: "/va" }, { label: "Proof of work" }]}
+      />
       <ProofWarning />
-      {days.length === 0 && <p>Proof of work opens with your first training day.</p>}
+      {days.length === 0 && <EmptyState title="Nothing to upload yet">Proof of work opens with your first training day.</EmptyState>}
       {loaded.kind === "ok" &&
         days.map((d) => {
           const uploads = loaded.proofs.filter((p) => p.schedule_day === d.day.code);
           const accepted = uploads.some((p) => p.status === "accepted");
           return (
-            <section key={d.day.code} className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
-              <h2 className="font-semibold">{dayName(d)}</h2>
-              <ul className="ml-5 list-disc text-sm">
+            <Card key={d.day.code} number={d.index} title={d.day.title} description={`Day ${d.index} · ${d.day.code}`}>
+              <ul className="ml-5 list-disc text-[0.9375rem]">
                 {d.day.proof_of_work.map((p, i) => (
                   <li key={i}>{p}</li>
                 ))}
               </ul>
               {uploads.length > 0 && (
-                <ul className="flex flex-col gap-1 text-sm">
+                <ul className="flex flex-col divide-y divide-line rounded-[var(--radius-control)] border border-line text-[0.9375rem]">
                   {uploads.map((p) => (
-                    <li key={p.id} className="flex flex-col">
-                      <span>
+                    <li key={p.id} className="flex flex-col gap-1 px-3 py-2">
+                      <span className="flex flex-wrap items-center gap-2">
                         {p.link_url ? (
-                          <a href={p.link_url} target="_blank" rel="noreferrer" className="underline">
+                          <a href={p.link_url} target="_blank" rel="noreferrer" className={`${linkClass} break-all`}>
                             {p.link_url}
                           </a>
                         ) : (
-                          p.file_name || "File"
-                        )}{" "}
-                        · <span className={STATUS[p.status].className}>{STATUS[p.status].label}</span>
+                          <span className="break-all">{p.file_name || "File"}</span>
+                        )}
+                        <StatusBadge label={STATUS[p.status].label} tone={STATUS[p.status].tone} />
                       </span>
-                      {p.review_note && <span className="text-foreground/70">VFDA: {p.review_note}</span>}
+                      {p.review_note && <span className="text-sm text-muted">VFDA: {p.review_note}</span>}
                     </li>
                   ))}
                 </ul>
               )}
               {!accepted && user.officeId && <ProofUpload officeId={user.officeId} vaId={user.id} day={d.day.code} />}
-            </section>
+            </Card>
           );
         })}
     </>

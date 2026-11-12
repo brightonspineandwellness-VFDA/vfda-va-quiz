@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { ByLine } from "@/components/setup/by-line";
+import { buttonClass, Notice } from "@/components/ui";
 import { addCardDocument, removeCardDocument, setCardMissing } from "@/lib/card-actions";
 import { CARD_CHECKLIST, type DocumentRow, type MissingCard } from "@/lib/doctor-flow";
 import { MAX_UPLOAD_BYTES } from "@/lib/interview";
@@ -13,17 +14,13 @@ const BUCKET = "office-documents";
 // Shown wherever cards are uploaded (doctor step 2, VFDA's rules page).
 export function NoPatientInfoWarning() {
   return (
-    <div
-      role="note"
-      className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
-    >
-      <p className="font-semibold">No real patient information</p>
+    <Notice tone="danger" role="note" title="No real patient information">
       <p>
         Before you export a card, remove real patient names, dates of birth, phone numbers, emails, addresses,
         insurance or card numbers, and screenshots of charts. Use made-up examples instead. Never include logins or
         passwords.
       </p>
-    </div>
+    </Notice>
   );
 }
 
@@ -31,7 +28,7 @@ export function NoPatientInfoWarning() {
 // or "We don't have this card" (that topic then uses VFDA's standards).
 export function CardUpload({ officeId, documents, missing = [] }: { officeId: string; documents: DocumentRow[]; missing?: MissingCard[] }) {
   return (
-    <ul className="flex flex-col divide-y divide-foreground/10 rounded-lg border border-foreground/15">
+    <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface [&>li:nth-child(even)]:bg-surface-zebra">
       {CARD_CHECKLIST.map((card) => (
         <CardRow
           key={card.name}
@@ -117,20 +114,20 @@ function CardRow({
   return (
     <li className="flex flex-col gap-2 px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-medium">
+        <p className="font-semibold">
           <span
-            className={`mr-2 inline-block w-4 ${documents.length || missing ? "text-green-700 dark:text-green-400" : "text-foreground/30"}`}
+            className={`mr-2 inline-block w-4 ${documents.length || missing ? "text-success" : "text-muted"}`}
             aria-label={documents.length ? "Uploaded" : missing ? "No card" : "Not uploaded"}
           >
             {documents.length || missing ? "✓" : "○"}
           </span>
           {name}
-          {note && <span className="ml-2 text-sm font-normal text-foreground/60">({note})</span>}
+          {note && <span className="ml-2 text-sm font-normal text-muted">({note})</span>}
         </p>
         {missing ? (
           <span className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="text-foreground/70">We don&apos;t have this card: VFDA standards are used</span>
-            <button type="button" disabled={busy} onClick={() => markMissing(false)} className="underline disabled:opacity-60">
+            <span className="text-muted">We don&apos;t have this card: VFDA standards are used</span>
+            <button type="button" disabled={busy} onClick={() => markMissing(false)} className={buttonClass("ghost", "sm")}>
               Undo
             </button>
           </span>
@@ -140,7 +137,7 @@ function CardRow({
               type="button"
               disabled={busy}
               onClick={() => markMissing(true)}
-              className="rounded-lg px-3 py-1.5 text-sm text-foreground/70 underline hover:text-foreground disabled:opacity-60"
+              className={buttonClass("ghost", "sm")}
             >
               We don&apos;t have this card
             </button>
@@ -148,9 +145,7 @@ function CardRow({
         )}
         <label
           htmlFor={inputId}
-          className={`cursor-pointer rounded-lg border border-foreground/25 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5 ${
-            busy ? "pointer-events-none opacity-60" : ""
-          }`}
+          className={buttonClass("secondary", "sm", `cursor-pointer has-[+input:focus-visible]:outline-2 ${busy ? "pointer-events-none opacity-60" : ""}`)}
         >
           {busy ? "Uploading…" : documents.length ? "Add another PDF" : "Upload PDF"}
         </label>
@@ -171,12 +166,12 @@ function CardRow({
         <ul className="ml-6 flex flex-col gap-1 text-sm">
           {documents.map((d) => (
             <li key={d.id} className="flex flex-wrap items-center gap-2">
-              <span className="truncate">{d.file_name}</span>
+              <span className="min-w-0 truncate">{d.file_name}</span>
               <ByLine verb="Uploaded" name={d.uploaded_by_name} at={d.created_at} />
               {d.imported_at ? (
-                <span className="text-xs text-foreground/50">read</span>
+                <span className="text-xs font-medium text-success">read ✓</span>
               ) : (
-                <button type="button" onClick={() => remove(d.id)} className="text-xs underline">
+                <button type="button" onClick={() => remove(d.id)} className={buttonClass("danger", "sm")}>
                   Remove
                 </button>
               )}
@@ -189,7 +184,7 @@ function CardRow({
           <ByLine verb="Marked" name={missing.marked_by_name} at={missing.marked_at} />
         </p>
       )}
-      {error && <p className="ml-6 text-sm text-red-700 dark:text-red-400">{error}</p>}
+      {error && <p className="ml-6 text-sm font-medium text-danger" role="alert">{error}</p>}
     </li>
   );
 }

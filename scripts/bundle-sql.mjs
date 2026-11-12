@@ -149,6 +149,12 @@ const PHASES = [
     title: "VA reports database changes (My results, coaching tips for the VA)",
     after: "quiz-report-alerts.sql",
   },
+  {
+    name: "rule-sources",
+    starts: "20261112120000",
+    title: "Rule sources database changes (VFDA standards notice on the quiz reports)",
+    after: "va-reports.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

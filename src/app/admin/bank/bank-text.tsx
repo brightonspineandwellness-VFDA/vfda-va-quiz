@@ -8,7 +8,7 @@ export function BankText({ text }: { text: string }) {
         i % 2 === 1 ? (
           <code
             key={i}
-            className="rounded bg-amber-100 px-1 text-[0.9em] text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"
+            className="rounded bg-warning-soft px-1 text-[0.9em] text-warning ring-1 ring-warning/30"
           >
             {part}
           </code>

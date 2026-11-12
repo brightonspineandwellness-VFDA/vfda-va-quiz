@@ -5,6 +5,7 @@ import { grayCardAnswered, RISK_TAGS, type GrayCard, type GrayCardQuestion, type
 import { inputClass } from "./answer-inputs";
 import { SaveBadge } from "./save-badge";
 import type { SaveState } from "./use-autosave";
+import { buttonClass } from "@/components/ui";
 
 const RISK_LABELS: Record<RiskTag, string> = {
   high_risk: "High risk",
@@ -50,8 +51,8 @@ export function GrayCards({
   return (
     <section id="gray-cards" className="flex scroll-mt-40 flex-col gap-4">
       <div>
-        <h2 className="text-xl font-semibold">Gray cards</h2>
-        <p className="text-sm text-foreground/60">
+        <h2 className="text-lg font-semibold">Gray cards</h2>
+        <p className="text-sm text-muted">
           One card per extra office-specific task. Each card becomes a gray card workflow (WF-G1, WF-G2, …),
           certified like the standard workflows and tested on Week 2 Day 5.
         </p>
@@ -63,12 +64,12 @@ export function GrayCards({
           <article
             key={card.id}
             id={`card-${card.id}`}
-            className="scroll-mt-40 rounded-lg border border-foreground/15 p-4"
+            className="scroll-mt-40 rounded-lg border border-line bg-surface p-4"
           >
             <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-semibold">
                 <span className="font-mono">{card.code}</span>: {card.answers.CARD_NAME?.trim() || "Untitled"}
-                <span className="ml-2 text-sm font-normal text-foreground/60">
+                <span className="ml-2 text-sm font-normal text-muted">
                   {answered} of {questions.length} answered
                 </span>
               </h3>
@@ -80,7 +81,6 @@ export function GrayCards({
                     <select
                       value={card.risk_tag ?? ""}
                       onChange={(e) => onRisk(card.id, (e.target.value || null) as RiskTag | null)}
-                      className="rounded-md border border-foreground/20 bg-background px-2 py-1"
                     >
                       <option value="">Not set</option>
                       {RISK_TAGS.map((t) => (
@@ -92,7 +92,7 @@ export function GrayCards({
                   </label>
                 ) : (
                   card.risk_tag && (
-                    <span className="rounded-full bg-foreground/10 px-2 py-0.5 text-xs">{RISK_LABELS[card.risk_tag]}</span>
+                    <span className="rounded-full border border-line-strong bg-surface-muted px-2.5 py-0.5 text-xs font-semibold">{RISK_LABELS[card.risk_tag]}</span>
                   )
                 )}
                 {confirming === card.id ? (
@@ -104,11 +104,11 @@ export function GrayCards({
                         await onRemove(card.id);
                         setConfirming(null);
                       }}
-                      className="rounded-md bg-red-700 px-2 py-1 text-white"
+                      className={buttonClass("danger", "sm")}
                     >
                       Remove
                     </button>
-                    <button type="button" onClick={() => setConfirming(null)} className="rounded-md px-2 py-1 hover:bg-foreground/5">
+                    <button type="button" onClick={() => setConfirming(null)} className={buttonClass("ghost", "sm")}>
                       Keep
                     </button>
                   </span>
@@ -116,7 +116,7 @@ export function GrayCards({
                   <button
                     type="button"
                     onClick={() => setConfirming(card.id)}
-                    className="rounded-md px-2 py-1 text-sm text-foreground/60 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950"
+                    className={buttonClass("danger", "sm")}
                   >
                     Remove
                   </button>
@@ -125,8 +125,8 @@ export function GrayCards({
             </header>
             <div className="grid gap-3">
               {questions.map((q) => (
-                <label key={q.key} className="flex flex-col gap-1 text-sm">
-                  <span className="font-medium">{q.question}</span>
+                <label key={q.key} className="flex flex-col gap-1.5">
+                  <span className="text-sm font-semibold">{q.question}</span>
                   <textarea
                     rows={q.key === "CARD_NAME" ? 1 : 2}
                     value={card.answers[q.key] ?? ""}
@@ -145,7 +145,7 @@ export function GrayCards({
           type="button"
           disabled={adding}
           onClick={() => add()}
-          className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+          className={buttonClass("primary")}
         >
           + Add gray card
         </button>
@@ -155,7 +155,7 @@ export function GrayCards({
             type="button"
             disabled={adding}
             onClick={() => add(addon)}
-            className="rounded-lg border border-foreground/25 px-4 py-2 text-sm hover:bg-foreground/5 disabled:opacity-60"
+            className={buttonClass("secondary")}
           >
             + Card for add-on: {addon}
           </button>

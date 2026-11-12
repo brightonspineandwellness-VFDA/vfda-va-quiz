@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Notice, PageHeader } from "@/components/ui";
 import { getCurrentUser } from "@/lib/auth";
 import { homeFor } from "@/lib/roles";
 
@@ -21,11 +22,13 @@ async function Pending() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">You&apos;re signed in</h1>
-      <p>
-        {user.email} doesn&apos;t have access yet. VFDA will set up your account, then sign in
-        again.
-      </p>
+      <PageHeader title="You're signed in" description="Your account is waiting for access." />
+      <Notice tone="info" title="No access yet">
+        <p>
+          {user.email} doesn&apos;t have access yet. VFDA will set up your account, then sign in
+          again.
+        </p>
+      </Notice>
     </>
   );
 }

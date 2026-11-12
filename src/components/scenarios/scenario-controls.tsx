@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
+import { buttonClass } from "@/components/ui";
 import { buildDay, editScenario, type ScenarioEdit } from "@/lib/scenario-actions";
 
 // Reloads the page every few seconds while a build is running.
@@ -36,12 +37,12 @@ export function BuildAllButton({ officeId, days }: { officeId: string; days: str
             router.refresh();
           })
         }
-        className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+        className={buttonClass("primary")}
       >
         {pending ? "Starting…" : `Build ${days.length} day${days.length === 1 ? "" : "s"}`}
       </button>
       {errors.map((e) => (
-        <span key={e} className="text-sm text-red-700 dark:text-red-400">
+        <span key={e} className="text-sm font-medium text-danger">
           {e}
         </span>
       ))}
@@ -62,24 +63,24 @@ export function ScenarioEditor({ id, type, isRepeat, initial }: EditorProps) {
   const [edit, setEdit] = useState(initial);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const area = "rounded-lg border border-foreground/20 bg-transparent px-2 py-1 text-sm";
+  const area = "w-full text-[0.9375rem]";
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className="self-start text-sm underline">
+      <button type="button" onClick={() => setOpen(true)} className={buttonClass("secondary", "sm", "self-start")}>
         Edit
       </button>
     );
   }
   const field = (key: keyof ScenarioEdit, label: string, rows: number) => (
-    <label className="flex flex-col gap-1 text-sm">
-      <span className="font-medium">{label}</span>
+    <label className="flex flex-col gap-1.5 text-sm">
+      <span className="font-semibold">{label}</span>
       <textarea rows={rows} value={edit[key]} onChange={(e) => setEdit({ ...edit, [key]: e.target.value })} className={area} />
     </label>
   );
   return (
     <form
-      className="flex flex-col gap-2 rounded-lg border border-foreground/15 p-3"
+      className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-line bg-surface-muted p-4"
       onSubmit={(e) => {
         e.preventDefault();
         startTransition(async () => {
@@ -96,12 +97,12 @@ export function ScenarioEditor({ id, type, isRepeat, initial }: EditorProps) {
         <>
           {field("options", "Options (one per line, in order A–D)", 4)}
           <label className="flex items-center gap-2 text-sm">
-            <span className="font-medium">Right answer</span>
+            <span className="font-semibold">Right answer</span>
             <input
               value={edit.answer}
               onChange={(e) => setEdit({ ...edit, answer: e.target.value })}
               maxLength={1}
-              className={`${area} w-12`}
+              className="w-16 text-center"
             />
           </label>
         </>
@@ -117,14 +118,14 @@ export function ScenarioEditor({ id, type, isRepeat, initial }: EditorProps) {
         <button
           type="submit"
           disabled={pending}
-          className="rounded-lg bg-foreground px-3 py-1 text-sm font-medium text-background disabled:opacity-60"
+          className={buttonClass("primary", "sm")}
         >
           {pending ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={() => setOpen(false)} className="text-sm underline">
+        <button type="button" onClick={() => setOpen(false)} className={buttonClass("ghost", "sm")}>
           Cancel
         </button>
-        {error && <span className="text-sm text-red-700 dark:text-red-400">{error}</span>}
+        {error && <span className="text-sm font-medium text-danger" role="alert">{error}</span>}
       </div>
     </form>
   );

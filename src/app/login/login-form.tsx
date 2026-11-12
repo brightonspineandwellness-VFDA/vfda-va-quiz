@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { buttonClass, Field, Notice } from "@/components/ui";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 const LINK_ERRORS: Record<string, string> = {
@@ -33,25 +34,20 @@ export function LoginForm() {
 
   if (state === "sent") {
     return (
-      <div className="rounded-lg border border-green-600/40 bg-green-50 px-4 py-3 text-green-800 dark:bg-green-950 dark:text-green-200">
-        <p className="font-medium">Check your email</p>
-        <p className="mt-1 text-sm">
-          We sent a sign-in link to {email}. Open it in this same browser.
-        </p>
-      </div>
+      <Notice tone="success" title="Check your email" role="status">
+        <p>We sent a sign-in link to {email}. Open it in this same browser.</p>
+      </Notice>
     );
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-3">
+    <form onSubmit={onSubmit} className="flex flex-col gap-4">
       {(error ?? linkError) && (
-        <p className="rounded-lg border border-red-600/40 bg-red-50 px-4 py-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">
-          {error ?? linkError}
-        </p>
+        <Notice tone="danger" role="alert">
+          <p>{error ?? linkError}</p>
+        </Notice>
       )}
-      <label htmlFor="email" className="text-sm font-medium">
-        Email
-      </label>
+      <Field label="Email" htmlFor="email" helper="We'll email you a link that signs you in.">
       <input
         id="email"
         type="email"
@@ -59,13 +55,10 @@ export function LoginForm() {
         autoComplete="email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        className="rounded-lg border border-foreground/20 bg-background px-3 py-2"
+        className="w-full"
       />
-      <button
-        type="submit"
-        disabled={state === "sending"}
-        className="rounded-lg bg-foreground px-4 py-2 font-medium text-background disabled:opacity-60"
-      >
+      </Field>
+      <button type="submit" disabled={state === "sending"} className={buttonClass("primary")}>
         {state === "sending" ? "Sending…" : "Email me a sign-in link"}
       </button>
     </form>

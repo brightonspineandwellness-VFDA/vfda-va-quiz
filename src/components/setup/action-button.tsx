@@ -2,7 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { buttonClass } from "@/components/ui";
 import type { ActionResult } from "@/lib/interview-actions";
+
+// Destructive actions get the red outline.
+const DESTRUCTIVE = /^(remove|delete|deactivate|reset|reject)/i;
 
 // A button that runs one server action, then reloads the page's data.
 export function ActionButton({
@@ -35,13 +39,11 @@ export function ActionButton({
             router.refresh();
           })
         }
-        className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-60 ${
-          primary ? "bg-foreground text-background" : "border border-foreground/25 hover:bg-foreground/5"
-        }`}
+        className={buttonClass(primary ? "primary" : DESTRUCTIVE.test(label) ? "danger" : "secondary")}
       >
         {pending ? pendingLabel : label}
       </button>
-      {error && <span className="text-sm text-red-700 dark:text-red-400">{error}</span>}
+      {error && <span className="text-sm font-medium text-danger" role="alert">{error}</span>}
     </span>
   );
 }

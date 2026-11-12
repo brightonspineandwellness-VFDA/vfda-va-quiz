@@ -14,10 +14,10 @@ import {
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 
 export const inputClass =
-  "w-full rounded-md border border-foreground/20 bg-background px-3 py-2 text-sm focus:border-foreground/50 focus:outline-none";
+  "w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-[0.9375rem] focus:border-primary";
 const smallButton =
-  "rounded-md border border-foreground/20 px-2.5 py-1 text-sm hover:bg-foreground/5 disabled:opacity-50";
-const removeButton = "shrink-0 rounded-md px-2 text-foreground/50 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950";
+  "inline-flex min-h-8 items-center rounded-lg border border-line-strong bg-surface px-3 py-1 text-sm font-medium text-primary hover:border-primary hover:bg-primary-soft disabled:opacity-50";
+const removeButton = "shrink-0 rounded-lg px-2 text-muted hover:bg-danger-soft hover:text-danger";
 
 export function TextAnswer({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
   return (
@@ -49,8 +49,8 @@ export function OptionsAnswer({
           key={o.value}
           className={`cursor-pointer rounded-full border px-4 py-1.5 text-sm has-focus-visible:ring-2 ${
             value === o.value
-              ? "border-foreground bg-foreground text-background"
-              : "border-foreground/25 hover:border-foreground/50"
+              ? "border-primary bg-primary text-primary-fg"
+              : "border-line-strong bg-surface hover:border-primary"
           }`}
         >
           <input
@@ -133,9 +133,9 @@ export function MatrixAnswer({ rows, onChange }: { rows: MatrixRow[]; onChange: 
     onChange(rows.map((row, j) => (j === i ? { ...row, [key]: v } : row)));
   return (
     <div className="flex flex-col gap-2">
-      <div className="overflow-x-auto rounded-md border border-foreground/15">
+      <div className="overflow-x-auto rounded-md border border-line">
         <table className="min-w-[72rem] text-sm">
-          <thead className="bg-foreground/5 text-left">
+          <thead className="bg-surface-muted text-left">
             <tr>
               {MATRIX_COLUMNS.map((c) => (
                 <th key={c.key} scope="col" className="px-2 py-1.5 font-medium">
@@ -149,7 +149,7 @@ export function MatrixAnswer({ rows, onChange }: { rows: MatrixRow[]; onChange: 
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={i} className="border-t border-foreground/10 align-top">
+              <tr key={i} className="border-t border-line align-top">
                 {MATRIX_COLUMNS.map((c) => (
                   <td key={c.key} className="p-1">
                     <textarea
@@ -219,7 +219,7 @@ export function UploadAnswer({
 function SubLabel({ text, children }: { text: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-xs font-medium text-foreground/60">{text}</p>
+      <p className="text-xs font-medium text-muted">{text}</p>
       {children}
     </div>
   );
@@ -299,7 +299,7 @@ export function FileUploads({
               ) : (
                 <span className="truncate">{f.name}</span>
               )}
-              <span className="shrink-0 text-xs text-foreground/50">{Math.ceil(f.size / 1024)} KB</span>
+              <span className="shrink-0 text-xs text-muted">{Math.ceil(f.size / 1024)} KB</span>
               <button type="button" aria-label={`Remove ${f.name}`} onClick={() => remove(f.path)} className={removeButton}>
                 ×
               </button>
@@ -324,7 +324,7 @@ export function FileUploads({
           }}
         />
       </div>
-      {error && <p className="text-sm text-red-700 dark:text-red-400">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
     </SubLabel>
   );
 }

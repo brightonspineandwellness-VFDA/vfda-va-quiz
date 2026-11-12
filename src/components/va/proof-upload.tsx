@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
+import { buttonClass, Notice } from "@/components/ui";
 import { MAX_UPLOAD_BYTES } from "@/lib/interview";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 import { addProof } from "@/lib/va-actions";
@@ -10,16 +11,12 @@ const BUCKET = "proof-of-work";
 
 export function ProofWarning() {
   return (
-    <div
-      role="note"
-      className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
-    >
-      <p className="font-semibold">Fake patients only</p>
+    <Notice tone="danger" title="Fake patients only" role="note">
       <p>
         Screenshots and recordings must show made-up patients only. Never show real patient details, logins,
         passwords or card numbers. Crop or blur anything else that&apos;s private.
       </p>
-    </div>
+    </Notice>
   );
 }
 
@@ -72,9 +69,7 @@ export function ProofUpload({ officeId, vaId, day }: { officeId: string; vaId: s
       <div className="flex flex-wrap items-center gap-2">
         <label
           htmlFor={inputId}
-          className={`cursor-pointer rounded-lg border border-foreground/25 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5 ${
-            busy ? "pointer-events-none opacity-60" : ""
-          }`}
+          className={buttonClass("secondary", "md", `cursor-pointer ${busy ? "pointer-events-none opacity-60" : ""}`)}
         >
           {busy ? "Saving…" : "Upload a file"}
         </label>
@@ -90,9 +85,9 @@ export function ProofUpload({ officeId, vaId, day }: { officeId: string; vaId: s
             e.target.value = "";
           }}
         />
-        <span className="text-sm text-foreground/60">or</span>
+        <span className="text-sm text-muted">or</span>
         <form
-          className="flex flex-1 flex-wrap gap-2"
+          className="flex min-w-0 flex-1 flex-wrap gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             if (link.trim()) void saveLink();
@@ -104,18 +99,22 @@ export function ProofUpload({ officeId, vaId, day }: { officeId: string; vaId: s
             onChange={(e) => setLink(e.target.value)}
             placeholder="https://www.loom.com/share/…"
             aria-label="Link to your proof of work"
-            className="min-w-0 flex-1 rounded-lg border border-foreground/20 bg-transparent px-3 py-1.5 text-sm"
+            className="min-w-0 flex-1 basis-56"
           />
           <button
             type="submit"
             disabled={busy || !link.trim()}
-            className="rounded-lg border border-foreground/25 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5 disabled:opacity-60"
+            className={buttonClass("secondary")}
           >
             Add link
           </button>
         </form>
       </div>
-      {error && <p className="text-sm text-red-700 dark:text-red-400">{error}</p>}
+      {error && (
+        <p className="text-sm font-medium text-danger" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

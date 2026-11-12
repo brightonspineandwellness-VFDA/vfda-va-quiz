@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, th, thNum, tdNum } from "@/components/ui";
 import { StepProgress } from "@/components/setup/step-progress";
 import { requireRole } from "@/lib/auth";
 import { currentStep } from "@/lib/doctor-flow";
@@ -29,27 +30,24 @@ async function DoctorHome() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Welcome, {user.fullName || user.email}</h1>
-      <p>Office: {setup?.interview.office.name ?? "not found"}</p>
-      {setup && (
-        <>
-          <StepProgress steps={setup.flow.steps} />
-          <Link
-            href={next?.href ?? "/doctor/setup"}
-            className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background"
-          >
-            {next ? `Continue: ${next.label}` : "Office setup"}
-          </Link>
-        </>
-      )}
-      <Link href="/doctor/va" className="self-start underline">
-        My VA: workflow certifications and Trello cards
-      </Link>
-      {bankShared && (
-        <Link href="/doctor/bank" className="self-start underline">
-          Scenario bank with answers (shared by VFDA)
-        </Link>
-      )}
+      <PageHeader
+        title={`Welcome, ${user.fullName || user.email}`}
+        description={`Office: ${setup?.interview.office.name ?? "not found"}`}
+        actions={
+          setup && (
+            <ButtonLink href={next?.href ?? "/doctor/setup"} variant="primary">
+              {next ? `Continue: ${next.label}` : "Office setup"}
+            </ButtonLink>
+          )
+        }
+      />
+      {setup && <StepProgress steps={setup.flow.steps} />}
+      <Card title="Your VA" description="Training progress, workflow certifications and Trello card tips.">
+        <div className="flex flex-wrap gap-2">
+          <ButtonLink href="/doctor/va">My VA: workflow certifications and Trello cards</ButtonLink>
+          {bankShared && <ButtonLink href="/doctor/bank">Scenario bank with answers (shared by VFDA)</ButtonLink>}
+        </div>
+      </Card>
       <Results />
     </>
   );
@@ -65,7 +63,12 @@ async function Results() {
     .is("archived_at", null)
     .order("submitted_at", { ascending: false })
     .limit(50);
-  if (!attempts?.length) return null;
+  if (!attempts?.length)
+    return (
+      <Card title="VA training results">
+        <EmptyState title="No finished training days yet">Your VA&apos;s results show here after each quiz.</EmptyState>
+      </Card>
+    );
   const { data: vas } = await supabase
     .from("profiles")
     .select("id, full_name, email")
@@ -78,25 +81,38 @@ async function Results() {
     return { id, text: t ? TREND_LABELS[t] : null };
   });
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="text-lg font-semibold">VA training results</h2>
+    <Card title="VA training results" description="Finished training days, newest first.">
       {trends
         .filter((t) => t.text)
         .map((t) => (
-          <p key={t.id} className="text-sm">
-            {name.get(t.id)}: first-try scores {t.text?.toLowerCase()} across days.
+          <p key={t.id} className="text-[0.9375rem]">
+            <span className="font-semibold">{name.get(t.id)}</span>: first-try scores {t.text?.toLowerCase()} across days.
           </p>
         ))}
-      <ul className="flex flex-col gap-1 text-sm">
-        {attempts.map((a) => (
-          <li key={a.id}>
-            <Link href={`/doctor/attempts/${a.id}`} className="underline">
-              {name.get(a.va_id) ?? "Former VA"} · {attemptLabel(a)}
-            </Link>{" "}
-            · {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%) · {resultLabel(a.result)}
-          </li>
-        ))}
-      </ul>
-    </section>
+      <Table>
+        <thead>
+          <tr>
+            <th className={th}>VA · day</th>
+            <th className={thNum}>Score</th>
+            <th className={th}>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {attempts.map((a) => (
+            <tr key={a.id}>
+              <td className={td}>
+                <Link href={`/doctor/attempts/${a.id}`} className={linkClass}>
+                  {name.get(a.va_id) ?? "Former VA"} · {attemptLabel(a)}
+                </Link>
+              </td>
+              <td className={tdNum}>
+                {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%)
+              </td>
+              <td className={td}>{a.result ? <StatusBadge label={resultLabel(a.result)} /> : "–"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </Card>
   );
 }

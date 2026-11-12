@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Card, linkClass, Notice, PageHeader } from "@/components/ui";
 import { Suspense } from "react";
 import { StandardsCheckbox } from "@/components/setup/standards-checkbox";
 import { ByLine } from "@/components/setup/by-line";
@@ -9,9 +10,6 @@ import { loadDoctorSetup } from "../load";
 export default function StandardsPage() {
   return (
     <SignedInPage area="Doctor">
-      <Link href="/doctor/setup/upload" className="text-sm text-foreground/60 hover:underline">
-        ← Upload your cards
-      </Link>
       <Suspense fallback={<Loading />}>
         <StandardsStep />
       </Suspense>
@@ -25,32 +23,35 @@ export default function StandardsPage() {
 // privacy) apply whatever the cards say.
 async function StandardsStep() {
   const setup = await loadDoctorSetup();
-  if (!setup) return <p>Your office isn&apos;t set up yet. Contact VFDA.</p>;
+  if (!setup) return <Notice tone="info" title="Your office isn't set up yet">Contact VFDA.</Notice>;
   const { interview, flow } = setup;
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Office setup: {interview.office.name}</h1>
+      <PageHeader
+        title={`Office setup: ${interview.office.name}`}
+        description="Where your cards are silent, your VA follows VFDA's standard way."
+        breadcrumbs={[{ label: "Home", href: "/doctor" }, { label: "Office setup", href: "/doctor/setup" }, { label: "VFDA standards" }]}
+      />
       <StepProgress steps={flow.steps} current="standards" />
-      <h2 className="text-xl font-semibold">Step 3 · VFDA standards</h2>
       {
-        <div className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
+        <Card number={3} title="VFDA standards">
           <StandardsCheckbox accepted={flow.standardsAccepted} />
-          <p className="text-sm text-foreground/70">
+          <p className="text-[0.9375rem] text-muted">
             Your cards come first. Where they don&apos;t say how something is done, your VA follows VFDA&apos;s
             standard way ({flow.standards.length} standards). VFDA&apos;s safety standards (red flags, the emergency
             script, checking a patient&apos;s identity, privacy) always apply.{" "}
-            <Link href="/doctor/setup/standards/all" className="underline">
+            <Link href="/doctor/setup/standards/all" className={linkClass}>
               View
             </Link>
           </p>
           {flow.standardsAccepted && (
             <>
               <ByLine verb="Accepted" name={flow.standardsAcceptedBy} at={flow.standardsAcceptedAt} />
-              <p className="text-green-700 dark:text-green-400">Setup done. Thank you! ✓</p>
+              <Notice tone="success" title="Setup done. Thank you! ✓" />
             </>
           )}
-        </div>
+        </Card>
       }
     </>
   );

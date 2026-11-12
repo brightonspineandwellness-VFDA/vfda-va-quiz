@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClass } from "@/components/ui";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { overrideScore } from "@/lib/va-admin-actions";
@@ -34,17 +35,17 @@ export function OverrideForm({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="self-start rounded-lg border border-foreground/25 px-3 py-1 text-sm font-medium hover:bg-foreground/5"
+        className={buttonClass("secondary", "sm", "self-start")}
       >
         Override score
       </button>
     );
   }
 
-  const select = "rounded-lg border border-foreground/20 bg-transparent px-2 py-1";
+  const select = "min-w-20";
   return (
     <form
-      className="flex flex-col gap-2 rounded-lg border border-foreground/15 px-3 py-3 text-sm"
+      className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-line bg-surface-muted px-4 py-3 text-sm"
       onSubmit={(e) => {
         e.preventDefault();
         startTransition(async () => {
@@ -65,7 +66,7 @@ export function OverrideForm({
       }}
     >
       <div className="flex flex-wrap items-center gap-4">
-        <label className="flex items-center gap-2">
+        <label className="flex items-center gap-2 font-medium">
           First try
           <select value={firstScore} onChange={(e) => setFirstScore(e.target.value)} className={select} required>
             <option value="" disabled>
@@ -79,7 +80,7 @@ export function OverrideForm({
           </select>
         </label>
         {repeat !== undefined && (
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2 font-medium">
             Repeat
             <select value={repeatScore} onChange={(e) => setRepeatScore(e.target.value)} className={select} required>
               <option value="" disabled>
@@ -93,7 +94,7 @@ export function OverrideForm({
             </select>
           </label>
         )}
-        <label className="flex items-center gap-2">
+        <label className="flex items-center gap-2 font-medium">
           <input type="checkbox" checked={criticalError} onChange={(e) => setCriticalError(e.target.checked)} />
           Critical error
         </label>
@@ -104,24 +105,24 @@ export function OverrideForm({
         placeholder="Note: why the score changed"
         aria-label="Override note"
         required
-        className="rounded-lg border border-foreground/20 bg-transparent px-2 py-1"
+        className="w-full"
       />
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="submit"
           disabled={pending}
-          className="rounded-lg bg-foreground px-3 py-1 font-medium text-background disabled:opacity-60"
+          className={buttonClass("primary", "sm")}
         >
           {pending ? "Saving…" : "Save and recalculate"}
         </button>
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="rounded-lg border border-foreground/25 px-3 py-1 font-medium hover:bg-foreground/5"
+          className={buttonClass("secondary", "sm")}
         >
           Cancel
         </button>
-        {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
+        {error && <span className="font-medium text-danger">{error}</span>}
       </div>
     </form>
   );

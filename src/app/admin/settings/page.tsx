@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { Suspense } from "react";
 import { TestButton } from "@/components/settings/test-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Card, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { aiMode } from "@/lib/ai";
 import { requireRole } from "@/lib/auth";
 import { appUrl, reportFrom, vfdaEmails } from "@/lib/reports";
@@ -14,10 +14,11 @@ export const maxDuration = 300;
 export default function SettingsPage() {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin" className="text-sm text-foreground/60 hover:underline">
-        ← Admin
-      </Link>
-      <h1 className="text-2xl font-semibold">Settings</h1>
+      <PageHeader
+        title="Settings"
+        description="Grading mode, email and webhook setup, VA report backfill and test sends."
+        breadcrumbs={[{ label: "Admin", href: "/admin" }, { label: "Settings" }]}
+      />
       <Suspense fallback={<Loading />}>
         <Settings />
       </Suspense>
@@ -42,38 +43,44 @@ async function Settings() {
   ];
   return (
     <>
-      <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Grading and reports</h2>
-        <p className="text-sm text-foreground/70">Change these in Vercel (and .env.local), then redeploy.</p>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-          {rows.map(([k, v]) => (
-            <div key={k} className="contents">
-              <dt className="font-mono text-foreground/60">{k}</dt>
-              <dd className={v.startsWith("missing") ? "text-red-700 dark:text-red-400" : ""}>{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">VA reports</h2>
-        <p className="text-sm text-foreground/70">
+      <Card number={1} title="Grading and reports" description="Change these in Vercel (and .env.local), then redeploy.">
+        <Table>
+          <thead>
+            <tr>
+              <th className={th}>Setting</th>
+              <th className={th}>Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([k, v]) => (
+              <tr key={k}>
+                <td className={`${td} font-mono text-sm text-muted`}>{k}</td>
+                <td className={`${td} break-words`}>
+                  {v.startsWith("missing") ? <StatusBadge label={v} tone="danger" /> : v === "set" ? <StatusBadge label="set" tone="success" /> : v}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </Card>
+      <Card number={2} title="VA reports">
+        <p className="text-sm text-muted">
           Every finished attempt without a VA report gets one: coaching tips written by Claude, shown on the VA&apos;s My results
           at once. Then each VA gets ONE email listing all their new reports. Safe to run again: a report is never made twice
           and a report is never emailed twice. Skips deactivated VAs, and attempts graded in mock mode (listed on the System
           log).
         </p>
         <TestButton action={runVaReportBackfill} label="Backfill VA reports" pendingLabel="Writing reports… (a few minutes)" />
-      </section>
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Test sends</h2>
+      </Card>
+      <Card number={3} title="Test sends">
         <TestButton action={testEmail} label="Send a test email to VFDA" />
         <TestButton action={testSlack} label="Post a test message to Slack" />
         <TestButton action={testLeads4Life} label="Send test to Leads4Life" />
-        <p className="text-xs text-foreground/60">
+        <p className="text-sm text-muted">
           The Leads4Life test sends a sample report (Dr. Test, brightonspineandwellness+doctortest@gmail.com) with a real 30-day
           link to a sample PDF, and shows Leads4Life&apos;s answer.
         </p>
-      </section>
+      </Card>
     </>
   );
 }

@@ -12,8 +12,8 @@ export function ToolsAnswer({ lines, onChange }: { lines: string[]; onChange: (l
     <div className="flex flex-col gap-2">
       <div className="grid gap-2 sm:grid-cols-2">
         {TOOL_LABELS.map((label) => (
-          <label key={label} className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-foreground/60">{label}</span>
+          <label key={label} className="flex flex-col gap-1.5">
+            <span className="text-sm font-semibold">{label}</span>
             <input
               value={byLabel[label] ?? ""}
               placeholder={label === "Remote access" || label === "Imaging" ? "Name, or none" : "Name"}
@@ -24,7 +24,7 @@ export function ToolsAnswer({ lines, onChange }: { lines: string[]; onChange: (l
         ))}
       </div>
       <div className="flex flex-col gap-1">
-        <p className="text-xs font-medium text-foreground/60">Other tools</p>
+        <p className="text-sm font-semibold">Other tools</p>
         <LinesAnswer lines={other} onChange={(next) => onChange(formatTools(byLabel, next))} addLabel="Add tool" />
       </div>
     </div>

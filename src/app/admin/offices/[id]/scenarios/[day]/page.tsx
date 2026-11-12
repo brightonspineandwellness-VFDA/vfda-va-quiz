@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { dayState, KIND_LABELS, TONES } from "@/components/scenarios/day-state";
+import { dayState, KIND_LABELS, statePillClass } from "@/components/scenarios/day-state";
 import { Blanks, RuleAnswerBox } from "@/components/scenarios/missing-rules";
 import { AutoRefresh, ScenarioEditor } from "@/components/scenarios/scenario-controls";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Badge, Card, EmptyState, linkClass, Notice, PageHeader } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { approveDay, buildDay, regenerateScenario, removeScenario, reopenDay } from "@/lib/scenario-actions";
 import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
@@ -65,98 +66,115 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
   return (
     <>
       <AutoRefresh active={summary.status?.build_status === "running"} />
-      <Link href={`/admin/offices/${office.id}/scenarios`} className="text-sm text-foreground/60 hover:underline">
-        ← Scenarios: {office.name}
-      </Link>
+      <PageHeader
+        title={`${summary.code}: ${summary.title}`}
+        description={
+          <>
+            {KIND_LABELS[summary.kind]}
+            {summary.status?.build_version ? ` · version ${summary.status.build_version}` : ""}
+            {summary.kind !== "skipped" &&
+              ` · ${summary.cards.length ? `Written from: ${summary.cards.join(", ")}` : "No card mapped to this day: built from the master bank."}`}
+          </>
+        }
+        breadcrumbs={[
+          { label: "Offices", href: "/admin/offices" },
+          { label: office.name, href: `/admin/offices/${office.id}` },
+          { label: "Scenarios", href: `/admin/offices/${office.id}/scenarios` },
+          { label: summary.code },
+        ]}
+        actions={
+          <>
+            {built && !approved && (
+              <ActionButton action={approveDay.bind(null, office.id, day)} label="Approve day" primary disabled={review.length > 0} />
+            )}
+            {approved && !summary.liveTaken && <ActionButton action={reopenDay.bind(null, office.id, day)} label="Reopen" />}
+            {summary.status?.build_status !== "running" && (
+              <ActionButton
+                action={buildDay.bind(null, office.id, day)}
+                label={built ? `Rebuild (new version ${(summary.status?.build_version ?? 0) + 1})` : "Build"}
+                pendingLabel="Starting…"
+              />
+            )}
+          </>
+        }
+      />
       <div>
-        <h1 className="text-2xl font-semibold">
-          {summary.code}: {summary.title}
-        </h1>
-        <p className="text-sm text-foreground/60">
-          {KIND_LABELS[summary.kind]}
-          {summary.status?.build_version ? ` · version ${summary.status.build_version}` : ""}
-        </p>
-        <p className={`text-sm ${TONES[state.tone]}`}>{state.label}</p>
-        {summary.kind !== "skipped" && (
-          <p className="text-sm text-foreground/60">
-            {summary.cards.length ? `Written from: ${summary.cards.join(", ")}` : "No card mapped to this day: built from the master bank."}
-          </p>
-        )}
+        <span className={statePillClass(state.tone)}>{state.label}</span>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {built && !approved && (
-          <ActionButton action={approveDay.bind(null, office.id, day)} label="Approve day" primary disabled={review.length > 0} />
-        )}
-        {approved && !summary.liveTaken && <ActionButton action={reopenDay.bind(null, office.id, day)} label="Reopen" />}
-        {summary.status?.build_status !== "running" && (
-          <ActionButton
-            action={buildDay.bind(null, office.id, day)}
-            label={built ? `Rebuild (new version ${(summary.status?.build_version ?? 0) + 1})` : "Build"}
-            pendingLabel="Starting…"
-          />
-        )}
-      </div>
-      {note && <p className="text-sm text-amber-700 dark:text-amber-300">{note}</p>}
+      {note && (
+        <Notice tone="warning">
+          <p>{note}</p>
+        </Notice>
+      )}
       {(summary.status?.left_out ?? []).length > 0 && (
-        <div className="rounded-lg border border-amber-300 px-4 py-3 text-sm dark:border-amber-700">
-          <p className="font-medium">Extra cards left out of this day</p>
-          <ul className="mt-1 list-disc pl-5">
+        <Notice tone="warning" title="Extra cards left out of this day">
+          <ul className="list-disc pl-5">
             {summary.status!.left_out!.map((l) => (
               <li key={l.code}>
                 {l.code} {l.name}: {l.reason}
               </li>
             ))}
           </ul>
-        </div>
+        </Notice>
       )}
       {approved && (
-        <p className="text-sm text-foreground/70">
-          {summary.liveTaken
-            ? "A live version a VA has taken can't be edited. Rebuild to make a new version."
-            : "Approved days can't be edited. Reopen the day first."}
-        </p>
+        <Notice tone="info">
+          <p>
+            {summary.liveTaken
+              ? "A live version a VA has taken can't be edited. Rebuild to make a new version."
+              : "Approved days can't be edited. Reopen the day first."}
+          </p>
+        </Notice>
       )}
 
       {missing.length > 0 && !approved && (
-        <section className="flex flex-col gap-3 rounded-lg border-2 border-amber-600/60 p-3 dark:border-amber-400/60">
-          <h2 className="text-lg font-semibold text-amber-800 dark:text-amber-300">
-            {missing.length} office rule{missing.length > 1 ? "s" : ""} missing
-          </h2>
-          <p className="text-sm">
-            Type the office&rsquo;s answer: it&rsquo;s saved as an accepted rule and fills every scenario of this office that
-            uses it, without a rebuild.
-          </p>
-          <ul className="flex flex-col gap-3">
+        <Card
+          accent="warning"
+          title={
+            <span className="text-warning">
+              {missing.length} office rule{missing.length > 1 ? "s" : ""} missing
+            </span>
+          }
+          description="Type the office's answer: it's saved as an accepted rule and fills every scenario of this office that uses it, without a rebuild."
+        >
+          <ul className="flex flex-col gap-4">
             {missing.map((m) => (
               <li key={m.key} className="flex flex-col gap-1">
                 <RuleAnswerBox officeId={office.id} rule={m} />
-                <span className="text-xs text-foreground/60">Used by {m.items.join(", ")}</span>
+                <span className="text-xs text-muted">Used by {m.items.join(", ")}</span>
               </li>
             ))}
           </ul>
-        </section>
+        </Card>
       )}
 
       {review.length > 0 && (
-        <section className="flex flex-col gap-3 rounded-lg border-2 border-red-700/60 p-3 dark:border-red-400/60">
-          <h2 className="text-lg font-semibold text-red-700 dark:text-red-400">
-            {review.length} item{review.length > 1 ? "s" : ""} need{review.length > 1 ? "" : "s"} review
-          </h2>
-          <p className="text-sm">
-            These still failed a check after Claude rewrote them twice. Edit, regenerate or remove each one; the day can be approved
-            once none are left. Every failed check is on the{" "}
-            <Link href="/admin/logs" className="underline">
-              System log
-            </Link>
-            .
-          </p>
+        <Card
+          accent="danger"
+          title={
+            <span className="text-danger">
+              {review.length} item{review.length > 1 ? "s" : ""} need{review.length > 1 ? "" : "s"} review
+            </span>
+          }
+          description={
+            <>
+              These still failed a check after Claude rewrote them twice. Edit, regenerate or remove each one; the day can be approved
+              once none are left. Every failed check is on the{" "}
+              <Link href="/admin/logs" className={linkClass}>
+                System log
+              </Link>
+              .
+            </>
+          }
+        >
           {review.map(item)}
-        </section>
+        </Card>
       )}
 
       {items.length > review.length && (
-        <section className="flex flex-col gap-3">{items.filter((r) => r.test_status !== "needs_review").map(item)}</section>
+        <section className="flex flex-col gap-4">{items.filter((r) => r.test_status !== "needs_review").map(item)}</section>
       )}
+      {built && items.length === 0 && <EmptyState title="No items in this day">Rebuild the day to write its scenarios.</EmptyState>}
     </>
   );
 }
@@ -194,30 +212,33 @@ function Item({
   const needsReview = row.test_status === "needs_review";
   return (
     <article
-      className={`flex flex-col gap-2 rounded-lg border px-4 py-3 ${needsReview ? "border-red-700/60 bg-red-50 dark:border-red-400/60 dark:bg-red-950/40" : "border-foreground/15"}`}
+      className={`flex flex-col gap-3 rounded-[var(--radius-card)] border px-4 py-4 shadow-[0_1px_2px_rgba(16,24,40,0.06)] sm:px-5 ${needsReview ? "border-danger bg-danger-soft" : "border-line bg-surface"}`}
     >
       {needsReview && (
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium text-red-700 dark:text-red-400">Needs review: {row.review_error ?? "failed a check"}</p>
+          <p className="text-sm font-semibold text-danger">Needs review: {row.review_error ?? "failed a check"}</p>
           {!locked && (
             <div className="flex flex-wrap gap-2">
               <ActionButton action={regenerateScenario.bind(null, row.id)} label="Regenerate" pendingLabel="Regenerating…" />
               <ActionButton action={removeScenario.bind(null, row.id)} label="Remove" pendingLabel="Removing…" />
-              <span className="self-center text-sm text-foreground/60">or Edit below</span>
+              <span className="self-center text-sm text-muted">or Edit below</span>
             </div>
           )}
         </div>
       )}
-      <p className="text-sm text-foreground/60">
-        {row.code} · {row.workflow}
-        {row.part_title && ` · ${row.part_title}`} · {ITEM_TYPE_LABELS[row.type]} ·{" "}
-        {row.points} pt{row.points === 1 ? "" : "s"}
-        {row.formula && ` · formula ${row.formula}`}
-        {row.edited_by_vfda && " · edited by VFDA"}
-      </p>
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+        <span className="font-semibold text-foreground">{row.code}</span>
+        <Badge tone="primary">{ITEM_TYPE_LABELS[row.type]}</Badge>
+        <span>
+          {row.workflow}
+          {row.part_title && ` · ${row.part_title}`} · {row.points} pt{row.points === 1 ? "" : "s"}
+          {row.formula && ` · formula ${row.formula}`}
+        </span>
+        {row.edited_by_vfda && <Badge tone="info">Edited by VFDA</Badge>}
+      </div>
       {row.missing_keys.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-md border border-amber-600/50 p-2 dark:border-amber-400/50">
-          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+        <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-l-4 border-warning bg-warning-soft p-3">
+          <p className="text-sm font-semibold text-warning">
             Needs office rules: {row.missing_keys.map((k) => `{${k}}`).join(", ")}
           </p>
           {!locked && (
@@ -234,13 +255,13 @@ function Item({
       )}
       <div className="grid gap-3 md:grid-cols-2">
         {row.source_card && (
-          <div className="flex flex-col gap-1 rounded-md bg-foreground/5 px-3 py-2 text-sm md:order-last">
-            <p className="font-medium">Source: {row.source_card}</p>
-            {row.source_quote && <blockquote className="whitespace-pre-line text-foreground/70">&ldquo;{row.source_quote}&rdquo;</blockquote>}
+          <div className="flex flex-col gap-1 rounded-[var(--radius-card)] border border-line bg-surface-muted px-3 py-2 text-sm md:order-last">
+            <p className="font-semibold">Source: {row.source_card}</p>
+            {row.source_quote && <blockquote className="whitespace-pre-line text-muted">&ldquo;{row.source_quote}&rdquo;</blockquote>}
           </div>
         )}
         {!row.source_card && master && (
-          <div className="flex flex-col gap-1 text-sm text-foreground/70">
+          <div className="flex flex-col gap-1 text-sm text-muted">
             <p className="font-medium">Master</p>
             <p>{master.stem}</p>
             {master.options_rule && <p>Options rule: {master.options_rule}</p>}
@@ -253,7 +274,7 @@ function Item({
             <Blanks text={row.stem} />
           </p>
           {row.type === "mc" &&
-            (row.options ? <Options options={row.options} answer={row.answer} /> : <p className="text-amber-700 dark:text-amber-300">No options yet</p>)}
+            (row.options ? <Options options={row.options} answer={row.answer} /> : <p className="text-warning">No options yet</p>)}
         </div>
       </div>
       {row.type === "describe" && (
@@ -279,7 +300,7 @@ function Item({
       )}
       {editable(row)}
       {row.type === "situational" && (
-        <div className="flex flex-col gap-1 border-t border-foreground/10 pt-2 text-sm">
+        <div className="flex flex-col gap-1 border-t border-line pt-3 text-sm">
           <p className="font-medium">Repeat variant</p>
           {repeat ? (
             <>
@@ -287,7 +308,7 @@ function Item({
               {editable(repeat)}
             </>
           ) : (
-            <p className="text-foreground/60">
+            <p className="text-muted">
               None{needsReview ? " yet: one is written once the item passes" : ". A VA who misses this item gets no repeat"}.
             </p>
           )}
@@ -301,7 +322,7 @@ function Options({ options, answer }: { options: string[]; answer: string | null
   return (
     <ol className="flex flex-col gap-0.5">
       {options.map((o, i) => (
-        <li key={i} className={LETTERS[i] === answer ? "font-medium text-green-700 dark:text-green-400" : ""}>
+        <li key={i} className={LETTERS[i] === answer ? "font-semibold text-success" : ""}>
           {LETTERS[i]}) <Blanks text={o} />
           {LETTERS[i] === answer && " ✓"}
         </li>

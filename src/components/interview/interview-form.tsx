@@ -191,18 +191,18 @@ export function InterviewForm({
     <div className="flex flex-col gap-8">
       {/* Progress, save status and the unanswered list stay in view. Doctors see
           progress by step on the page instead of a question count. */}
-      <div className="sticky top-[env(safe-area-inset-top,0px)] z-10 -mx-6 border-b border-foreground/10 bg-background/95 px-6 py-3 backdrop-blur">
+      <div className="sticky top-[env(safe-area-inset-top,0px)] z-10 -mx-4 border-b border-line bg-surface/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex items-center justify-between gap-4 text-sm">
           {isAdmin ? (
             <p>
               <strong>{progress.done}</strong> of {progress.total} answered ({progress.percent}%)
             </p>
           ) : (
-            <p className="text-foreground/70">Everything saves as you type.</p>
+            <p className="text-muted">Everything saves as you type.</p>
           )}
           <p
             className={
-              autosave.failed ? "text-red-700 dark:text-red-400" : "text-foreground/60"
+              autosave.failed ? "text-danger" : "text-muted"
             }
             aria-live="polite"
           >
@@ -215,24 +215,24 @@ export function InterviewForm({
         </div>
         {isAdmin && (
         <div
-          className="mt-2 h-2 overflow-hidden rounded-full bg-foreground/10"
+          className="mt-2 h-2 overflow-hidden rounded-full bg-surface-muted"
           role="progressbar"
           aria-valuenow={progress.percent}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-label="Interview progress"
         >
-          <div className="h-full rounded-full bg-green-600 transition-all" style={{ width: `${progress.percent}%` }} />
+          <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${progress.percent}%` }} />
         </div>
         )}
         {isAdmin && progress.unanswered.length > 0 && (
           <details className="mt-2 text-sm">
-            <summary className="cursor-pointer text-foreground/70">Unanswered ({progress.unanswered.length})</summary>
+            <summary className="cursor-pointer text-muted">Unanswered ({progress.unanswered.length})</summary>
             <ul className="mt-2 max-h-64 overflow-y-auto pr-2">
               {progress.unanswered.map((u) => (
                 <li key={u.anchor}>
                   <a href={`#${u.anchor}`} className="block truncate py-0.5 hover:underline">
-                    <span className="mr-2 font-mono text-xs text-foreground/50">
+                    <span className="mr-2 font-mono text-xs text-muted">
                       {u.section === "PROFILE" ? "Profile" : u.section}
                     </span>
                     {u.label}
@@ -247,18 +247,18 @@ export function InterviewForm({
       {sections.map((section) => (
         <section key={section.code} className="flex flex-col gap-4">
           <div>
-            <h2 className="text-xl font-semibold">
+            <h2 className="text-lg font-semibold">
               {section.code === "PROFILE" ? section.title : `${section.code} · ${sectionTitle(section.code)}`}
             </h2>
             {section.code === "PROFILE" && (
-              <p className="text-sm text-foreground/60">
+              <p className="text-sm text-muted">
                 {isAdmin
                   ? "Answer these first: they switch quiz days and questions on or off for this office."
                   : "These decide which training days and rules apply to your office."}
               </p>
             )}
             {section.hidden > 0 && (
-              <p className="text-sm text-foreground/60">
+              <p className="text-sm text-muted">
                 {section.questions.length === 0
                   ? "This day doesn't apply to this office, based on the profile answers."
                   : `${section.hidden} question${section.hidden > 1 ? "s" : ""} hidden: they don't apply to this office.`}
@@ -268,13 +268,13 @@ export function InterviewForm({
           {section.questions.map((q) => {
             const done = isAnswered(q, answers[q.key]);
             return (
-              <div key={q.key} id={`q-${q.key}`} className="scroll-mt-40 rounded-lg border border-foreground/15 p-4">
+              <div key={q.key} id={`q-${q.key}`} className="scroll-mt-40 rounded-lg border border-line bg-surface p-4">
                 <div className="mb-2 flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium">{q.question}</p>
+                    <p className="font-semibold">{q.question}</p>
                     {done && <ByLine verb="Answered" name={data.sources[q.key]?.by} at={data.sources[q.key]?.at} />}
                     {isAdmin && (
-                      <p className="mt-0.5 text-xs text-foreground/50">
+                      <p className="mt-0.5 text-xs text-muted">
                         <span className="font-mono">{q.key}</span> · {TIER_LABELS[q.tier]}
                         {q.suggested_answer !== null && " (has a VFDA suggestion)"}
                         {data.sources[q.key] && ` · from ${SOURCE_LABELS[data.sources[q.key].source]}`}
@@ -288,7 +288,7 @@ export function InterviewForm({
                       onRetry={() => autosave.retry(`answer:${q.key}`)}
                     />
                     {done && (
-                      <span className="text-green-700 dark:text-green-400" aria-label="Answered">
+                      <span className="text-success" aria-label="Answered">
                         ✓
                       </span>
                     )}

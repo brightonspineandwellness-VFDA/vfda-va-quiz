@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { buttonClass } from "@/components/ui";
 import { setVaScopeAction } from "@/lib/va-invite-actions";
 import { VA_SCOPES, type ScopeKey } from "@/lib/va-scope";
 
@@ -9,8 +10,8 @@ import { VA_SCOPES, type ScopeKey } from "@/lib/va-scope";
 // form, each checked role is sent as "scope".
 export function ScopeCheckboxes({ value, onChange }: { value?: ScopeKey[]; onChange?: (keys: ScopeKey[]) => void }) {
   return (
-    <fieldset className="flex flex-col gap-1 text-sm">
-      <legend className="mb-1 font-medium">What this VA does</legend>
+    <fieldset className="flex flex-col gap-1.5 text-[0.9375rem]">
+      <legend className="mb-1.5 text-sm font-semibold">What this VA does</legend>
       <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2 lg:grid-cols-4">
         {VA_SCOPES.map((s) => (
           <label key={s.key} className="flex items-center gap-2">
@@ -29,7 +30,7 @@ export function ScopeCheckboxes({ value, onChange }: { value?: ScopeKey[]; onCha
           </label>
         ))}
       </div>
-      <span className="text-xs text-foreground/60">
+      <span className="text-sm text-muted">
         Basics &amp; VA Onboarding is always included. Days outside these roles are skipped.
       </span>
     </fieldset>
@@ -59,12 +60,12 @@ export function VaScopeForm({ vaId, scope }: { vaId: string; scope: ScopeKey[] }
               router.refresh();
             })
           }
-          className="rounded-lg border border-foreground/25 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5 disabled:opacity-60"
+          className={buttonClass("secondary", "sm")}
         >
           {pending ? "Saving…" : "Save roles"}
         </button>
         {message && (
-          <span className={`text-sm ${message.ok ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>{message.text}</span>
+          <span className={`text-sm font-medium ${message.ok ? "text-success" : "text-danger"}`}>{message.text}</span>
         )}
       </div>
     </div>

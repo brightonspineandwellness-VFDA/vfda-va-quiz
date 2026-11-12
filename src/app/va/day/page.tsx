@@ -1,8 +1,9 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { ButtonLink, EmptyState } from "@/components/ui";
+import { QuizDone } from "@/components/va/quiz-done";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
 import { percentOf, RESULT_LABELS } from "@/lib/va-flow";
@@ -28,7 +29,11 @@ async function DayScreen() {
   const screen = await loadDayScreen(user);
   if (screen.kind === "closed") redirect("/va");
   if (screen.kind === "empty") {
-    return <p>{screen.dayCode} has no scenarios yet. Check back later.</p>;
+    return (
+      <EmptyState title={`${screen.dayCode} has no scenarios yet`} action={<ButtonLink href="/va">Back to Today</ButtonLink>}>
+        Check back later.
+      </EmptyState>
+    );
   }
   if (screen.kind === "finished") {
     const { attemptId, fresh } = screen.result;
@@ -42,33 +47,29 @@ async function DayScreen() {
 // The score right away, and My report (coaching tips are written in a minute
 // or two); the next day opens once its cards are done.
 function Finished({ result }: { result: FinishedDay }) {
+  const retake = !!result.result && result.result !== "strong";
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-foreground/15 px-4 py-4">
-      <p className="text-lg font-semibold">{result.dayCode} complete</p>
-      <p>
-        First try: <span className="font-medium">{result.points}/{result.max}</span>
-        {result.max > 0 && ` (${percentOf(result.points, result.max)}%)`}
-      </p>
-      {result.result && result.result !== "strong" && (
-        <p className="text-sm">
-          {RESULT_LABELS[result.result]}: you can retake this whole day once, with new details, from Today. It&apos;s
-          optional and doesn&apos;t block your next day.
-        </p>
-      )}
-      <p className="text-sm text-foreground/70">
-        Your report with coaching tips will be ready in a few minutes (we&apos;ll email you). Read it, then go on to your next day.
-      </p>
-      <div className="flex flex-wrap gap-3">
-        <Link href={`/va/results/${result.attemptId}`} className="rounded-lg bg-foreground px-4 py-2 font-medium text-background">
-          My report
-        </Link>
-        <Link href="/va" className="rounded-lg border border-foreground/25 px-4 py-2 font-medium">
-          Back to Today
-        </Link>
-        <Link href="/va/proof" className="rounded-lg border border-foreground/25 px-4 py-2 font-medium">
-          Proof of work
-        </Link>
-      </div>
-    </div>
+    <QuizDone
+      title={`${result.dayCode} complete`}
+      score={result.max > 0 ? `${percentOf(result.points, result.max)}%` : `${result.points}/${result.max}`}
+      scoreLabel={`First try: ${result.points}/${result.max}`}
+      result={result.result ? RESULT_LABELS[result.result] : null}
+      attemptId={result.attemptId}
+      retakeAllowed={retake}
+      message={
+        <>
+          {retake && (
+            <p>
+              {RESULT_LABELS[result.result!]}: you can retake this whole day once, with new details, from Today. It&apos;s optional
+              and doesn&apos;t block your next day.
+            </p>
+          )}
+          <p className="text-muted">
+            Your report with coaching tips will be ready in a few minutes (we&apos;ll email you). Read it, then go on to your next day.
+          </p>
+        </>
+      }
+      extra={<ButtonLink href="/va/proof">Proof of work</ButtonLink>}
+    />
   );
 }

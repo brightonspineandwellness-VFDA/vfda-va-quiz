@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Card, Notice, PageHeader } from "@/components/ui";
 import { Suspense } from "react";
 import { ActionButton } from "@/components/setup/action-button";
 import { CardUpload, NoPatientInfoWarning } from "@/components/setup/card-upload";
@@ -15,9 +16,6 @@ export const maxDuration = 300;
 export default function UploadPage() {
   return (
     <SignedInPage area="Doctor">
-      <Link href="/doctor/setup" className="text-sm text-foreground/60 hover:underline">
-        ← Profile
-      </Link>
       <Suspense fallback={<Loading />}>
         <UploadStep />
       </Suspense>
@@ -28,25 +26,32 @@ export default function UploadPage() {
 // Step 2: the Trello cards as PDFs.
 async function UploadStep() {
   const setup = await loadDoctorSetup();
-  if (!setup) return <p>Your office isn&apos;t set up yet. Contact VFDA.</p>;
+  if (!setup) return <Notice tone="info" title="Your office isn't set up yet">Contact VFDA.</Notice>;
   const { interview, flow, documents, state } = setup;
   const officeId = interview.office.id;
   const pending = flow.newDocuments.length;
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Office setup: {interview.office.name}</h1>
+      <PageHeader
+        title={`Office setup: ${interview.office.name}`}
+        description="Upload each Trello card as a PDF so your VA learns your office's rules."
+        breadcrumbs={[{ label: "Home", href: "/doctor" }, { label: "Office setup", href: "/doctor/setup" }, { label: "Upload your cards" }]}
+      />
       <StepProgress steps={flow.steps} current="upload" />
-      <div>
-        <h2 className="text-xl font-semibold">Step 2 · Upload your cards</h2>
-        <p className="text-foreground/70">
-          Export each Trello card as a PDF and upload it next to its name. We read the rules your VA needs from
-          them, so you only answer what the cards don&apos;t cover. No card for a topic? Press &ldquo;We don&apos;t have
-          this card&rdquo;: your VA then learns VFDA&apos;s standard way for it.
-        </p>
-      </div>
-      <NoPatientInfoWarning />
-      <CardUpload officeId={officeId} documents={documents} missing={setup.missingCards} />
+      <Card
+        number={2}
+        title="Upload your cards"
+        description={
+          <>
+            Export each Trello card as a PDF and upload it next to its name. We read the rules your VA needs from
+            them, so you only answer what the cards don&apos;t cover. No card for a topic? Press &ldquo;We don&apos;t have
+            this card&rdquo;: your VA then learns VFDA&apos;s standard way for it.
+          </>
+        }
+      >
+        <NoPatientInfoWarning />
+        <CardUpload officeId={officeId} documents={documents} missing={setup.missingCards} />
 
       <div className="flex flex-wrap items-center gap-3">
         {pending > 0 || (!state.cardsUploadedAt && documents.length === 0 && flow.uncoveredTopics.length === 0) ? (
@@ -61,20 +66,21 @@ async function UploadStep() {
             Next: VFDA standards →
           </Link>
         ) : (
-          <p className="text-sm text-foreground/70">Upload at least one card to continue.</p>
+          <p className="text-sm text-muted">Upload at least one card to continue.</p>
         )}
       </div>
       {flow.uncoveredTopics.length > 0 && (
-        <p className="text-sm text-foreground/70">
+        <p className="text-sm text-muted">
           Still to do: {flow.uncoveredTopics.join(", ")}. Upload the card, or mark &ldquo;We don&apos;t have this card&rdquo;.
         </p>
       )}
       {state.cardsUploadedAt && pending === 0 && (
-        <p className="text-sm text-foreground/70">
+        <p className="text-sm text-muted">
           Found another card later? Upload it here and press Done uploading again. We&apos;ll only ask about rules
           that are still missing.
         </p>
       )}
+      </Card>
     </>
   );
 }

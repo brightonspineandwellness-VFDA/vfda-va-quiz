@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { buttonClass } from "@/components/ui";
 import {
   choiceOptions,
   FileUploads,
@@ -22,7 +23,6 @@ import {
   type UploadValue,
 } from "@/lib/interview";
 
-const button = "rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-60";
 
 // "Edit" for one rule (or the answer box for a short question). By default
 // saving writes the office's direct rule as the user's own answer; pass
@@ -60,7 +60,7 @@ export function RuleEditor({
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className={`${button} border border-foreground/25 hover:bg-foreground/5`}>
+      <button type="button" onClick={() => setOpen(true)} className={buttonClass("secondary", "sm")}>
         {editLabel}
       </button>
     );
@@ -97,7 +97,7 @@ export function RuleEditor({
     <div className="flex flex-col gap-2">
       {input(slot, draft, setDraft, files ? fileProps : null)}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={submit} disabled={pending} className={`${button} bg-foreground text-background`}>
+        <button type="button" onClick={submit} disabled={pending} className={buttonClass("primary", "sm")}>
           {pending ? "Saving…" : saveLabel}
         </button>
         {!startOpen && (
@@ -107,12 +107,12 @@ export function RuleEditor({
               setDraft(normalize(slot, value));
               setOpen(false);
             }}
-            className={`${button} hover:bg-foreground/5`}
+            className={buttonClass("ghost", "sm")}
           >
             Cancel
           </button>
         )}
-        {error && <p className="text-sm text-red-700 dark:text-red-400">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
       </div>
     </div>
   );

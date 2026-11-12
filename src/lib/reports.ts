@@ -9,6 +9,7 @@ import "server-only";
 // One notifications row per recipient is written before sending, so running
 // this again only sends what hasn't gone out yet. Each send is tried twice.
 
+import { colors, LOGO } from "@/lib/theme";
 import { passPercent } from "@/lib/certification";
 import { reportFileName, type Leads4LifePayload } from "@/lib/quiz-report";
 import { makeQuizReport, sampleQuizReportLink, type StoredQuizReport } from "@/lib/quiz-reports";
@@ -258,6 +259,15 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
 // Channels
 // ---------------------------------------------------------------------------
 
+// Every email: the logo on a white band at the top (a full URL, so it shows in
+// email), then the message, on white with dark gray text.
+export function brandedEmail(html: string) {
+  return `<div style="background:#ffffff;color:${colors.light.foreground};font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5">
+<div style="background:#ffffff;padding:16px 0 12px;border-bottom:1px solid ${colors.light.border};margin-bottom:16px"><img src="${LOGO.url}" width="140" alt="${LOGO.alt}" style="display:block;width:140px;height:auto;border:0;outline:none;text-decoration:none"></div>
+${html}
+</div>`;
+}
+
 export async function sendEmail(
   to: string,
   subject: string,
@@ -277,7 +287,7 @@ export async function sendEmail(
       from,
       to: [to],
       subject,
-      html,
+      html: brandedEmail(html),
       text,
       ...(replyTo ? { reply_to: replyTo } : {}),
       ...(attachments.length ? { attachments } : {}),

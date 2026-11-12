@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { Badge, Card, EmptyState, Notice, PageHeader } from "@/components/ui";
 import { Suspense } from "react";
 import { RuleValue } from "@/components/setup/rule-value";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
@@ -7,9 +7,6 @@ import { loadDoctorSetup } from "../../load";
 export default function AllStandardsPage() {
   return (
     <SignedInPage area="Doctor">
-      <Link href="/doctor/setup/standards" className="text-sm text-foreground/60 hover:underline">
-        ← VFDA standards
-      </Link>
       <Suspense fallback={<Loading />}>
         <AllStandards />
       </Suspense>
@@ -21,27 +18,38 @@ export default function AllStandardsPage() {
 // version (accepted by VFDA) is what's shown and used.
 async function AllStandards() {
   const setup = await loadDoctorSetup();
-  if (!setup) return <p>Your office isn&apos;t set up yet. Contact VFDA.</p>;
+  if (!setup) return <Notice tone="info" title="Your office isn't set up yet">Contact VFDA.</Notice>;
   const { interview, flow } = setup;
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">VFDA standards</h1>
-      <p className="text-foreground/70">
-        What your VA follows where your cards don&apos;t say. To change one, tell VFDA or update your card.
-      </p>
+      <PageHeader
+        title="VFDA standards"
+        description="What your VA follows where your cards don't say. To change one, tell VFDA or update your card."
+        breadcrumbs={[
+          { label: "Home", href: "/doctor" },
+          { label: "Office setup", href: "/doctor/setup" },
+          { label: "VFDA standards", href: "/doctor/setup/standards" },
+          { label: "All standards" },
+        ]}
+      />
+      {!flow.standards.length && <EmptyState title="No VFDA standards for your office yet" />}
       <ul className="flex flex-col gap-3">
         {flow.standards.map(({ slot, row }) => (
-          <li key={slot.key} className="flex flex-col gap-1 rounded-lg border border-foreground/15 px-4 py-3">
-            <p className="font-medium">{slot.question}</p>
-            <div className="text-sm">
+          <Card as="li" key={slot.key} bodyClassName="gap-2">
+            <p className="font-semibold">{slot.question}</p>
+            <div className="text-[0.9375rem]">
               <RuleValue slot={slot} value={row?.rule ?? null} attachments={row?.attachments} fileUrls={interview.fileUrls} />
             </div>
             {row?.source === "card_import" && (
-              <p className="text-xs text-foreground/60">From your card{row.document_name ? `: ${row.document_name}` : ""}</p>
+              <p>
+                <Badge tone="info">From your card{row.document_name ? `: ${row.document_name}` : ""}</Badge>
+              </p>
             )}
-            {(row?.source === "doctor" || row?.source === "doctor_card" || row?.source === "vfda") && <p className="text-xs text-foreground/60">Your office&apos;s version</p>}
-          </li>
+            {(row?.source === "doctor" || row?.source === "doctor_card" || row?.source === "vfda") && <p>
+                <Badge tone="primary">Your office&apos;s version</Badge>
+              </p>}
+          </Card>
         ))}
       </ul>
     </>

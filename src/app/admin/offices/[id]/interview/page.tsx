@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { InterviewForm } from "@/components/interview/interview-form";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Card, linkClass, PageHeader } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { StepProgress } from "@/components/setup/step-progress";
 import { isMustAsk } from "@/lib/card-map";
@@ -11,9 +12,6 @@ import { loadOfficeSetup } from "@/lib/interview-data";
 export default function AdminInterviewPage({ params }: PageProps<"/admin/offices/[id]/interview">) {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin/offices" className="text-sm text-foreground/60 hover:underline">
-        ← Offices
-      </Link>
       <Suspense fallback={<Loading />}>
         <AdminInterview params={params} />
       </Suspense>
@@ -40,15 +38,24 @@ async function AdminInterview({ params }: { params: Promise<{ id: string }> }) {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Office setup: {data.office.name}</h1>
-      <div>
-        <p className="mb-2 text-sm font-medium">Doctor&apos;s progress</p>
+      <PageHeader
+        title={`Office setup: ${data.office.name}`}
+        description="The office's profile, VFDA standards, the 12 must-ask rules and the automatic rules."
+        breadcrumbs={[
+          { label: "Offices", href: "/admin/offices" },
+          { label: data.office.name, href: `/admin/offices/${data.office.id}` },
+          { label: "Standards & must-ask rules" },
+        ]}
+        actions={
+          <Link href={`/admin/offices/${data.office.id}/rules`} className={`${linkClass} text-sm`}>
+            Cards: mapping and the rules read from them →
+          </Link>
+        }
+      />
+      <Card title="Doctor's progress">
         <StepProgress steps={flow.steps} links={false} />
-      </div>
-      <Link href={`/admin/offices/${data.office.id}/rules`} className="self-start text-sm underline">
-        Cards: mapping and the rules read from them →
-      </Link>
-      <p className="text-sm text-foreground/70">
+      </Card>
+      <p className="text-sm text-muted">
         The office&apos;s profile, VFDA standards, the 12 must-ask rules and the automatic rules (the doctor never
         sees automatic rules). Everything else comes from the office&apos;s cards. Editing a standard or an automatic rule here makes it VFDA&apos;s answer: it won&apos;t be
         refilled automatically.

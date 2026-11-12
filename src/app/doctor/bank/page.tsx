@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { EmptyState, Notice, PageHeader } from "@/components/ui";
 import { Suspense } from "react";
 import { BankView } from "@/components/bank/bank-view";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
@@ -10,9 +10,6 @@ import { createAdminClient } from "@/lib/supabase/server";
 export default function DoctorBankPage({ searchParams }: PageProps<"/doctor/bank">) {
   return (
     <SignedInPage area="Doctor">
-      <Link href="/doctor" className="text-sm text-foreground/60 hover:underline">
-        ← Home
-      </Link>
       <Suspense fallback={<Loading />}>
         <DoctorBank searchParams={searchParams} />
       </Suspense>
@@ -24,16 +21,17 @@ export default function DoctorBankPage({ searchParams }: PageProps<"/doctor/bank
 async function DoctorBank({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const user = await requireRole("doctor");
   if (!user.officeId || !(await canReadBank(user, user.officeId))) {
-    return <p>VFDA hasn&apos;t shared your office&apos;s scenario bank with you.</p>;
+    return <EmptyState title="Not shared yet">VFDA hasn&apos;t shared your office&apos;s scenario bank with you.</EmptyState>;
   }
   const bank = await loadBank(createAdminClient(), user.officeId);
-  if (!bank) return <p>Your office isn&apos;t set up yet.</p>;
+  if (!bank) return <Notice tone="info" title="Your office isn't set up yet" />;
   return (
     <>
-      <div>
-        <h1 className="text-2xl font-semibold">Scenario bank: {bank.office.name}</h1>
-        <p className="text-sm text-foreground/60">Your VAs&apos; questions with the answers, shared by VFDA. Read-only; keep it away from your VAs.</p>
-      </div>
+      <PageHeader
+        title={`Scenario bank: ${bank.office.name}`}
+        description="Your VAs' questions with the answers, shared by VFDA. Read-only; keep it away from your VAs."
+        breadcrumbs={[{ label: "Home", href: "/doctor" }, { label: "Scenario bank" }]}
+      />
       <BankView bank={bank} filters={bankFilters(await searchParams)} admin={false} pagePath="/doctor/bank" exportPath="/doctor/bank/export" />
     </>
   );

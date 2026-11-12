@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { buttonClass } from "@/components/ui";
 import type { ActionResult } from "@/lib/interview-actions";
 
 // Runs one test send (or another one-off action) and says how it went.
@@ -28,12 +29,12 @@ export function TestButton({
             setMessage(result.ok ? { ok: true, text: result.data } : { ok: false, text: result.error });
           })
         }
-        className="rounded-lg border border-foreground/25 px-4 py-2 text-sm font-medium hover:bg-foreground/5 disabled:opacity-60"
+        className={buttonClass("secondary")}
       >
         {pending ? pendingLabel : label}
       </button>
       {message && (
-        <span className={`text-sm ${message.ok ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>
+        <span role="status" className={`text-sm font-medium ${message.ok ? "text-success" : "text-danger"}`}>
           {message.text}
         </span>
       )}

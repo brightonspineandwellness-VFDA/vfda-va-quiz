@@ -1,1 +1,3 @@
-export const nextButton = "self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background";
+import { buttonClass } from "@/components/ui";
+
+export const nextButton = buttonClass("primary", "md", "self-start");

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { ButtonAnchor, Card, EmptyState, linkClass, PageHeader, StatusBadge } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { itemLines, reportBlocks, reportCounts, type OfficeReportContent } from "@/lib/office-report";
 import { regenerateOfficeReport, resendOfficeReport } from "@/lib/office-report-actions";
@@ -69,53 +70,47 @@ async function OfficeReport({
 
   return (
     <>
-      <Link href={`/admin/offices/${id}`} className="text-sm text-foreground/60 hover:underline">
-        ← {office.name}
-      </Link>
-      <div>
-        <h1 className="text-2xl font-semibold">Office SOP gap report: {office.name}</h1>
-        <p className="text-sm text-foreground/60">
-          VFDA only; the doctor never sees this. The office&apos;s cards against the VFDA standards and the 10 workflows.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        {report && (
-          <a
-            href={`/admin/offices/${id}/report/pdf?r=${report.id}`}
-            className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background"
-            download
-          >
-            Download PDF
-          </a>
-        )}
-        <ActionButton
-          action={regenerateOfficeReport.bind(null, id)}
-          label={report ? "Write a new report" : "Write the report"}
-          pendingLabel="Comparing the cards (about a minute)…"
-        />
-      </div>
+      <PageHeader
+        title={`Office SOP gap report: ${office.name}`}
+        description="VFDA only; the doctor never sees this. The office's cards against the VFDA standards and the 10 workflows."
+        breadcrumbs={[
+          { label: "Offices", href: "/admin/offices" },
+          { label: office.name, href: `/admin/offices/${id}` },
+          { label: "SOP gap report" },
+        ]}
+        actions={
+          <>
+            {report && (
+              <ButtonAnchor href={`/admin/offices/${id}/report/pdf?r=${report.id}`} variant="primary" download>
+                Download PDF
+              </ButtonAnchor>
+            )}
+            <ActionButton
+              action={regenerateOfficeReport.bind(null, id)}
+              label={report ? "Write a new report" : "Write the report"}
+              pendingLabel="Comparing the cards (about a minute)…"
+            />
+          </>
+        }
+      />
 
       {!report ? (
-        <p className="text-foreground/70">
-          No report yet. It&apos;s written each time the office&apos;s cards are read.
-        </p>
+        <EmptyState title="No report yet">It&apos;s written each time the office&apos;s cards are read.</EmptyState>
       ) : (
         <>
           <Status report={report} when={when} />
           <Report content={report.content} />
           {reports.length > 1 && (
-            <section className="flex flex-col gap-1 border-t border-foreground/10 pt-4 text-sm">
-              <h2 className="text-lg font-semibold">Earlier reports</h2>
-              <ul className="flex flex-col gap-1">
+            <Card title="Earlier reports">
+              <ul className="flex flex-col gap-1 text-sm">
                 {reports.map((x) => {
                   const n = reportCounts(x.content);
                   return (
                     <li key={x.id}>
                       {x.id === report.id ? (
-                        <span className="font-medium">{when(x.created_at)}</span>
+                        <span className="font-semibold">{when(x.created_at)}</span>
                       ) : (
-                        <Link href={`/admin/offices/${id}/report?r=${x.id}`} className="underline">
+                        <Link href={`/admin/offices/${id}/report?r=${x.id}`} className={linkClass}>
                           {when(x.created_at)}
                         </Link>
                       )}{" "}
@@ -125,7 +120,7 @@ async function OfficeReport({
                   );
                 })}
               </ul>
-            </section>
+            </Card>
           )}
         </>
       )}
@@ -136,45 +131,57 @@ async function OfficeReport({
 function Status({ report, when }: { report: ReportRow; when: (iso: string) => string }) {
   const failed = !!report.email_error || !!report.slack_error;
   return (
-    <div className="flex flex-col gap-1 text-sm">
-      <p className="text-foreground/70">
+    <Card title="Status">
+      <p className="text-sm text-muted">
         {when(report.created_at)} · {REASONS[report.reason] ?? report.reason}
         {report.content.method === "claude" ? " · steps checked by Claude" : " · steps checked by word matching"}
       </p>
-      <p>
+      <p className="flex flex-wrap items-center gap-2 text-sm">
         Email to VFDA:{" "}
-        {report.emailed_at ? `sent ${when(report.emailed_at)}` : <span className="text-red-700 dark:text-red-400">{report.email_error ?? "not sent"}</span>}
-        {" · "}Slack:{" "}
-        {report.slack_at ? `posted ${when(report.slack_at)}` : <span className="text-red-700 dark:text-red-400">{report.slack_error ?? "not posted"}</span>}
+        {report.emailed_at ? (
+          <StatusBadge label={`Sent ${when(report.emailed_at)}`} tone="success" />
+        ) : (
+          <StatusBadge label={report.email_error ?? "Not sent"} tone="danger" />
+        )}
+        <span className="text-muted">·</span> Slack:{" "}
+        {report.slack_at ? (
+          <StatusBadge label={`Posted ${when(report.slack_at)}`} tone="success" />
+        ) : (
+          <StatusBadge label={report.slack_error ?? "Not posted"} tone="danger" />
+        )}
       </p>
-      {failed && <ActionButton action={resendOfficeReport.bind(null, report.id)} label="Send again" pendingLabel="Sending…" />}
-    </div>
+      {failed && (
+        <div>
+          <ActionButton action={resendOfficeReport.bind(null, report.id)} label="Send again" pendingLabel="Sending…" />
+        </div>
+      )}
+    </Card>
   );
 }
 
 // The same blocks as the email and the PDF.
 function Report({ content }: { content: OfficeReportContent }) {
   return (
-    <article className="flex flex-col gap-2">
+    <article className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-line bg-surface px-4 py-5 shadow-[0_1px_2px_rgba(16,24,40,0.06)] sm:px-6">
       {reportBlocks(content).map((b, i) => {
         switch (b.type) {
           case "title":
             return null;
           case "heading":
             return (
-              <h2 key={i} className="mt-4 text-xl font-semibold">
+              <h2 key={i} className="mt-4 border-b border-line pb-1.5 text-lg font-semibold first:mt-0">
                 {b.text}
               </h2>
             );
           case "subheading":
             return (
-              <h3 key={i} className="mt-2 font-semibold text-foreground/80">
+              <h3 key={i} className="mt-2 font-semibold text-foreground">
                 {b.text}
               </h3>
             );
           case "muted":
             return (
-              <p key={i} className="text-sm text-foreground/60">
+              <p key={i} className="text-sm text-muted">
                 {b.text}
               </p>
             );
@@ -185,21 +192,21 @@ function Report({ content }: { content: OfficeReportContent }) {
             return (
               <div
                 key={i}
-                className={`flex flex-col gap-1 rounded-md border-l-4 px-3 py-2 text-sm ${
-                  b.high ? "border-red-600 bg-red-50 dark:bg-red-950/40" : "border-foreground/20 bg-foreground/5"
+                className={`flex flex-col gap-1 rounded-[var(--radius-card)] border border-l-4 px-3 py-2.5 text-sm ${
+                  b.high ? "border-danger bg-danger-soft" : "border-line-strong bg-surface-muted"
                 }`}
               >
-                <p className={`font-medium ${b.high ? "text-red-800 dark:text-red-300" : ""}`}>{l.title}</p>
+                <p className={`font-semibold ${b.high ? "text-danger" : ""}`}>{l.title}</p>
                 <div className={`grid gap-2 ${l.office ? "md:grid-cols-2" : ""}`}>
                   <p className="whitespace-pre-wrap">{l.vfda}</p>
                   {l.office && <p className="whitespace-pre-wrap">{l.office}</p>}
                 </div>
                 {l.quotes.map((q) => (
-                  <p key={q} className="text-foreground/70 italic">
+                  <p key={q} className="text-muted italic">
                     {q}
                   </p>
                 ))}
-                <p className="text-foreground/60">{l.note}</p>
+                <p className="text-muted">{l.note}</p>
               </div>
             );
           }

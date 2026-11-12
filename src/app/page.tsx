@@ -1,6 +1,7 @@
 import { connection } from "next/server";
-import Link from "next/link";
 import { Suspense } from "react";
+import { Logo } from "@/components/signed-in-page";
+import { ButtonLink, Notice } from "@/components/ui";
 import { checkSupabase } from "@/lib/supabase/server";
 
 async function SupabaseStatus() {
@@ -10,39 +11,44 @@ async function SupabaseStatus() {
 
   if (status.ok) {
     return (
-      <p className="rounded-lg border border-green-600/40 bg-green-50 px-4 py-3 text-green-800 dark:bg-green-950 dark:text-green-200">
-        Connected to Supabase ({status.latencyMs} ms)
-      </p>
+      <Notice tone="success" role="status">
+        <p>Connected to Supabase ({status.latencyMs} ms)</p>
+      </Notice>
     );
   }
 
   return (
-    <div className="rounded-lg border border-red-600/40 bg-red-50 px-4 py-3 text-red-800 dark:bg-red-950 dark:text-red-200">
-      <p className="font-medium">Cannot reach Supabase</p>
-      <p className="mt-1 text-sm">{status.reason}</p>
-    </div>
+    <Notice tone="danger" title="Cannot reach Supabase" role="alert">
+      <p className="text-sm">{status.reason}</p>
+    </Notice>
   );
 }
 
 export default function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center gap-6 px-6 py-16">
-      <h1 className="text-3xl font-semibold tracking-tight">VFDA VA Quiz App</h1>
-      <Suspense
-        fallback={
-          <p className="rounded-lg border border-foreground/15 px-4 py-3 text-foreground/70">
-            Checking Supabase…
-          </p>
-        }
-      >
-        <SupabaseStatus />
-      </Suspense>
-      <Link
-        href="/login"
-        className="self-start rounded-lg bg-foreground px-4 py-2 font-medium text-background"
-      >
-        Sign in
-      </Link>
+    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 px-4 py-16">
+      {/* The logo is a JPG on white: keep it on a white panel. */}
+      <div className="flex justify-center rounded-[var(--radius-card)] border border-[#DCE1E8] bg-white px-6 py-6">
+        <Logo height={64} />
+      </div>
+      <div className="flex flex-col gap-4 rounded-[var(--radius-card)] border border-line bg-surface px-6 py-6 shadow-[0_1px_2px_rgba(16,24,40,0.06)]">
+        <div>
+          <h1 className="text-2xl font-semibold">VFDA VA Quiz App</h1>
+          <p className="mt-1 text-muted">Daily training quizzes for VFDA office VAs.</p>
+        </div>
+        <Suspense
+          fallback={
+            <Notice tone="neutral" role="status">
+              <p className="text-muted">Checking Supabase…</p>
+            </Notice>
+          }
+        >
+          <SupabaseStatus />
+        </Suspense>
+        <ButtonLink href="/login" variant="primary" className="self-start">
+          Sign in
+        </ButtonLink>
+      </div>
     </main>
   );
 }

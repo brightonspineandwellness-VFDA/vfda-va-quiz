@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { inputClass } from "@/components/interview/answer-inputs";
+import { Badge, buttonClass, StatusBadge } from "@/components/ui";
 import { reextractExtraWorkflowAction, saveExtraWorkflow, setExtraWorkflowApproved, type ExtraWorkflowEdit } from "@/lib/extra-workflow-actions";
 
 export type ExtraWorkflowView = ExtraWorkflowEdit & {
@@ -39,31 +40,24 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
       router.refresh();
     });
   const set = <K extends keyof ExtraWorkflowEdit>(key: K, value: ExtraWorkflowEdit[K]) => setW({ ...w, [key]: value });
-  const button = "rounded-lg border border-foreground/25 px-3 py-1.5 text-sm font-medium hover:bg-foreground/5 disabled:opacity-60";
+  const button = buttonClass("secondary", "sm");
+  const primaryButton = buttonClass("primary", "sm");
 
   return (
-    <article className="flex flex-col gap-2 rounded-lg border border-foreground/15 p-4 text-sm">
+    <article className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4 text-[0.9375rem]">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="font-semibold">
           {workflow.code} {workflow.name}
         </span>
-        <span className="text-foreground/60">from {workflow.cardTitle}</span>
-        <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-xs font-medium">{workflow.kind === "process" ? "Process" : "Info only"}</span>
+        <span className="text-sm text-muted">from {workflow.cardTitle}</span>
+        <Badge>{workflow.kind === "process" ? "Process" : "Info only"}</Badge>
         {workflow.kind === "process" && workflow.phone !== "none" && (
-          <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-900 dark:bg-blue-950 dark:text-blue-200">
-            Phone call: built into {workflow.phone === "routine" ? "W2D1" : "W2D2"}
-          </span>
+          <Badge tone="info">Phone call: built into {workflow.phone === "routine" ? "W2D1" : "W2D2"}</Badge>
         )}
         {(workflow.patientFacing || workflow.risky) && (
-          <span className="text-xs text-foreground/60">{[workflow.patientFacing && "patient-facing", workflow.risky && "risky"].filter(Boolean).join(", ")}</span>
+          <span className="text-xs text-muted">{[workflow.patientFacing && "patient-facing", workflow.risky && "risky"].filter(Boolean).join(", ")}</span>
         )}
-        <span
-          className={`rounded px-1.5 py-0.5 text-xs font-medium ${
-            workflow.approved ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300" : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-          }`}
-        >
-          {workflow.approved ? "Approved" : "Waiting for VFDA"}
-        </span>
+        <StatusBadge label={workflow.approved ? "Approved" : "Waiting for VFDA"} tone={workflow.approved ? "success" : "warning"} />
       </div>
 
       {!editing ? (
@@ -81,7 +75,7 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
           {workflow.requires_approval.length > 0 && <p>Needs approval: {workflow.requires_approval.join("; ")}</p>}
           {workflow.immediate_escalation.length > 0 && <p>Escalate at once: {workflow.immediate_escalation.join("; ")}</p>}
           {workflow.quotes.length > 0 && (
-            <ul className="flex flex-col gap-0.5 text-xs text-foreground/60 italic">
+            <ul className="flex flex-col gap-0.5 text-xs text-muted italic">
               {workflow.quotes.map((q, i) => (
                 <li key={i}>
                   {q.field.replace(/_/g, " ")}: &ldquo;{q.quote}&rdquo;
@@ -93,19 +87,19 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
       ) : (
         <div className="grid gap-2 md:grid-cols-2">
           <label className="flex flex-col gap-1">
-            <span className="font-medium">Name</span>
+            <span className="text-sm font-semibold">Name</span>
             <input value={w.name} onChange={(e) => set("name", e.target.value)} className={inputClass} />
           </label>
           <div className="flex gap-2">
             <label className="flex flex-1 flex-col gap-1">
-              <span className="font-medium">Kind</span>
+              <span className="text-sm font-semibold">Kind</span>
               <select value={w.kind} onChange={(e) => set("kind", e.target.value as ExtraWorkflowEdit["kind"])} className={inputClass}>
                 <option value="process">Process (has steps)</option>
                 <option value="info">Info only</option>
               </select>
             </label>
             <label className="flex flex-1 flex-col gap-1">
-              <span className="font-medium">Phone call?</span>
+              <span className="text-sm font-semibold">Phone call?</span>
               <select value={w.phone} onChange={(e) => set("phone", e.target.value as ExtraWorkflowEdit["phone"])} className={inputClass} disabled={w.kind !== "process"}>
                 <option value="none">No (W2D5)</option>
                 <option value="routine">Routine call (W2D1)</option>
@@ -114,16 +108,16 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
             </label>
           </div>
           <label className="flex flex-col gap-1">
-            <span className="font-medium">Starts when</span>
+            <span className="text-sm font-semibold">Starts when</span>
             <textarea value={w.trigger} onChange={(e) => set("trigger", e.target.value)} rows={2} className={inputClass} />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="font-medium">Done when</span>
+            <span className="text-sm font-semibold">Done when</span>
             <textarea value={w.definition_of_done} onChange={(e) => set("definition_of_done", e.target.value)} rows={2} className={inputClass} />
           </label>
           {LIST_FIELDS.map(([key, label]) => (
             <label key={key} className="flex flex-col gap-1">
-              <span className="font-medium">{label}</span>
+              <span className="text-sm font-semibold">{label}</span>
               <textarea value={w[key].join("\n")} onChange={(e) => set(key, e.target.value.split("\n"))} rows={key === "steps" ? 6 : 3} className={inputClass} />
             </label>
           ))}
@@ -136,7 +130,7 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
             <button
               type="button"
               disabled={pending}
-              className={`${button} bg-foreground text-background`}
+              className={primaryButton}
               onClick={() => run(() => saveExtraWorkflow(workflow.id, { ...w, steps: w.steps.map((s) => s.trim()).filter(Boolean) }))}
             >
               {pending ? "Saving…" : "Save and approve"}
@@ -148,7 +142,7 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
         ) : (
           <>
             {!workflow.approved ? (
-              <button type="button" disabled={pending} className={`${button} bg-foreground text-background`} onClick={() => run(() => setExtraWorkflowApproved(workflow.id, true))}>
+              <button type="button" disabled={pending} className={primaryButton} onClick={() => run(() => setExtraWorkflowApproved(workflow.id, true))}>
                 Approve
               </button>
             ) : (
@@ -164,7 +158,7 @@ export function ExtraWorkflowEditor({ workflow }: { workflow: ExtraWorkflowView 
             </button>
           </>
         )}
-        {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
+        {error && <span className="text-danger">{error}</span>}
       </div>
     </article>
   );

@@ -15,6 +15,7 @@ import { loadItems } from "@/lib/quiz-reports";
 import type { DoneWellItem, NeedsWorkItem } from "@/lib/quiz-report";
 import { escapeHtml as escapeHtmlText, trendSummary } from "@/lib/report";
 import { appUrl, deliver, loadAttemptReport, sendAttemptReport, sendEmail, type Target } from "@/lib/reports";
+import { standardsUsed, vaTipTags } from "@/lib/rule-source";
 import { createAdminClient } from "@/lib/supabase/server";
 import {
   cardOf,
@@ -164,11 +165,13 @@ export async function makeVaReport(db: Db, attemptId: string): Promise<"created"
 // in the PDF. `tipsDb`: the client the stored tips are read with (the VA's own
 // session on their pages, so row-level security applies).
 export async function loadVaReportView(db: Db, attemptId: string, tipsDb: Pick<Db, "from"> = db): Promise<VaReportView | null> {
-  const [loaded, attempt, stored, items] = await Promise.all([
+  const [loaded, attempt, stored, items, graded] = await Promise.all([
     loadAttemptReport(db, attemptId),
     db.from("attempts").select("kind, submitted_at").eq("id", attemptId).maybeSingle(),
     tipsDb.from("va_reports").select("alerts, tips, strengths, released_at").eq("attempt_id", attemptId).maybeSingle(),
     db.from("attempt_items").select("first_answer").eq("attempt_id", attemptId),
+    // For the VFDA standards notice and the tips' tags.
+    loadItems(db, attemptId).catch(() => null),
   ]);
   if (!loaded || !attempt.data?.submitted_at) return null;
   const r = loaded.report;
@@ -180,6 +183,8 @@ export async function loadVaReportView(db: Db, attemptId: string, tipsDb: Pick<D
   const percent = r.maxPoints ? Math.round((r.points * 100) / r.maxPoints) : 0;
   return {
     attemptId,
+    vaName: r.vaName,
+    officeName: r.officeName,
     dayCode: r.dayCode,
     topic: r.dayTitle,
     date: attempt.data.submitted_at,
@@ -200,6 +205,8 @@ export async function loadVaReportView(db: Db, attemptId: string, tipsDb: Pick<D
       direction: trendSummary(history).direction,
     },
     tips: ready ? list(row!.tips) : [],
+    tipTags: ready && graded ? vaTipTags(list(row!.tips), graded.needsWork) : [],
+    standards: graded ? standardsUsed([...graded.needsWork, ...graded.doneWell].map((i) => i.ruleSource)) : [],
     strengths: ready ? list(row!.strengths) : [],
     ready,
   };

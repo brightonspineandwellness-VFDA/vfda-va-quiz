@@ -11,7 +11,7 @@ export function StandardsCheckbox({ accepted }: { accepted: boolean }) {
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-1">
-      <label className="flex items-start gap-3 text-lg">
+      <label className="flex items-start gap-3 text-lg font-medium">
         <input
           type="checkbox"
           checked={accepted}
@@ -25,12 +25,12 @@ export function StandardsCheckbox({ accepted }: { accepted: boolean }) {
               router.refresh();
             });
           }}
-          className="mt-1.5 size-5"
+          className="mt-1.5 size-5 shrink-0"
         />
         <span>Anything your cards don&apos;t cover uses VFDA standards</span>
       </label>
-      {pending && <span className="text-sm text-foreground/60">Saving…</span>}
-      {error && <span className="text-sm text-red-700 dark:text-red-400">{error}</span>}
+      {pending && <span className="text-sm text-muted">Saving…</span>}
+      {error && <span className="text-sm font-medium text-danger" role="alert">{error}</span>}
     </div>
   );
 }

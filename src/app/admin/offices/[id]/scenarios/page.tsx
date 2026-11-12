@@ -4,9 +4,10 @@ import { Suspense } from "react";
 import { AutoRefresh, BuildAllButton } from "@/components/scenarios/scenario-controls";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Card, EmptyState, linkClass, PageHeader, Table, td, tdNum, th, thNum } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { approveDay, buildDay, reopenDay } from "@/lib/scenario-actions";
-import { dayState, KIND_LABELS, TONES } from "@/components/scenarios/day-state";
+import { dayState, KIND_LABELS, statePillClass } from "@/components/scenarios/day-state";
 import { loadScenarioOverview, rebuildNote } from "@/lib/scenario-data";
 
 // Build buttons start the build after the response is sent.
@@ -17,9 +18,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export default function ScenariosPage({ params }: PageProps<"/admin/offices/[id]/scenarios">) {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin/offices" className="text-sm text-foreground/60 hover:underline">
-        ← Offices
-      </Link>
       <Suspense fallback={<Loading />}>
         <Scenarios params={params} />
       </Suspense>
@@ -41,38 +39,45 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
   return (
     <>
       <AutoRefresh active={running} />
-      <div>
-        <h1 className="text-2xl font-semibold">Scenarios: {office.name}</h1>
-        <p className="text-sm text-foreground/60">
-          {approved} of {days.length} days approved
+      <PageHeader
+        title={`Scenarios: ${office.name}`}
+        description={`${approved} of ${days.length} days approved`}
+        breadcrumbs={[
+          { label: "Offices", href: "/admin/offices" },
+          { label: office.name, href: `/admin/offices/${office.id}` },
+          { label: "Scenarios" },
+        ]}
+      />
+      <Card title="How days are built">
+        <p className="text-sm text-muted">
+          Card-first: Claude writes each day from the office&apos;s own cards mapped to it, with the master day as the
+          pattern (same number of items) and the VFDA standards where the cards are silent, keeping the{" "}
+          <Link href="/admin/logs" className={linkClass}>
+            day rules
+          </Link>{" "}
+          (which cards, item types and topics each day may have). Every item shows the card and the card&apos;s words it
+          came from, plus the repeat variant a VA gets right after a situational answer below 2/2 (describe items have
+          none). A day with no card mapped is built from the master bank. Map cards on the{" "}
+          <Link href={`/admin/offices/${office.id}/rules`} className={linkClass}>
+            Cards page
+          </Link>
+          . Review each day, edit anything, then approve it. A day opens to VAs only once it&apos;s approved. Every
+          rebuild is a new version (your edits stay on the old one): VAs who already took a version keep it, and new
+          attempts get the new version once you approve it.
         </p>
-      </div>
-      <p className="text-sm text-foreground/70">
-        Card-first: Claude writes each day from the office&apos;s own cards mapped to it, with the master day as the
-        pattern (same number of items) and the VFDA standards where the cards are silent, keeping the{" "}
-        <Link href="/admin/logs" className="underline">
-          day rules
-        </Link>{" "}
-        (which cards, item types and topics each day may have). Every item shows the card and the card&apos;s words it
-        came from, plus the repeat variant a VA gets right after a situational answer below 2/2 (describe items have
-        none). A day with no card mapped is built from the master bank. Map cards on the{" "}
-        <Link href={`/admin/offices/${office.id}/rules`} className="underline">
-          Cards page
-        </Link>
-        . Review each day, edit anything, then approve it. A day opens to VAs only once it&apos;s approved. Every
-        rebuild is a new version (your edits stay on the old one): VAs who already took a version keep it, and new
-        attempts get the new version once you approve it.
-      </p>
-      <BuildAllButton officeId={office.id} days={toBuild.map((d) => d.code)} />
+        <BuildAllButton officeId={office.id} days={toBuild.map((d) => d.code)} />
+      </Card>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-foreground/15 text-foreground/60">
+      {days.length === 0 ? (
+        <EmptyState title="No training days yet">The office&apos;s training days show here once they&apos;re set up.</EmptyState>
+      ) : (
+        <Table>
+          <thead>
             <tr>
-              <th className="py-2 pr-3 font-medium">Day</th>
-              <th className="py-2 pr-3 font-medium">Status</th>
-              <th className="py-2 pr-3 font-medium">Scenarios</th>
-              <th className="py-2 pr-3 font-medium">Actions</th>
+              <th className={th}>Day</th>
+              <th className={th}>Status</th>
+              <th className={thNum}>Scenarios</th>
+              <th className={th}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -80,24 +85,22 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
               const state = dayState(d);
               const built = d.status?.build_status === "done";
               return (
-                <tr key={d.code} className="border-b border-foreground/10 align-top">
-                  <td className="py-2 pr-3">
-                    <Link href={`/admin/offices/${office.id}/scenarios/${d.code}`} className="font-medium underline">
+                <tr key={d.code}>
+                  <td className={td}>
+                    <Link href={`/admin/offices/${office.id}/scenarios/${d.code}`} className={linkClass}>
                       {d.code}: {d.title}
                     </Link>
-                    <p className="text-foreground/60">{KIND_LABELS[d.kind]}</p>
-                    <p className="text-xs text-foreground/60">
+                    <p className="text-sm text-muted">{KIND_LABELS[d.kind]}</p>
+                    <p className="text-xs text-muted">
                       {d.kind === "skipped" ? "" : d.cards.length ? `From: ${d.cards.join(", ")}` : "No card mapped: master bank"}
                     </p>
                   </td>
-                  <td className={`py-2 pr-3 ${TONES[state.tone]}`}>
-                    {state.label}
-                    {rebuildNote(d) && <p className="text-foreground/60">{rebuildNote(d)}</p>}
+                  <td className={td}>
+                    <span className={statePillClass(state.tone)}>{state.label}</span>
+                    {rebuildNote(d) && <p className="mt-1 text-sm text-muted">{rebuildNote(d)}</p>}
                   </td>
-                  <td className="py-2 pr-3">
-                    {built ? `${d.countA} (repeats: ${d.repeats})` : "–"}
-                  </td>
-                  <td className="py-2 pr-3">
+                  <td className={tdNum}>{built ? `${d.countA} (repeats: ${d.repeats})` : "–"}</td>
+                  <td className={td}>
                     <div className="flex flex-wrap gap-2">
                       {d.status?.build_status !== "running" && (
                         <ActionButton
@@ -106,20 +109,16 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
                           pendingLabel="Starting…"
                         />
                       )}
-                      {built && !d.approved && (
-                        <ActionButton action={approveDay.bind(null, office.id, d.code)} label="Approve day" primary />
-                      )}
-                      {d.approved && !d.liveTaken && (
-                        <ActionButton action={reopenDay.bind(null, office.id, d.code)} label="Reopen" />
-                      )}
+                      {built && !d.approved && <ActionButton action={approveDay.bind(null, office.id, d.code)} label="Approve day" primary />}
+                      {d.approved && !d.liveTaken && <ActionButton action={reopenDay.bind(null, office.id, d.code)} label="Reopen" />}
                     </div>
                   </td>
                 </tr>
               );
             })}
           </tbody>
-        </table>
-      </div>
+        </Table>
+      )}
     </>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClass } from "@/components/ui";
 import { useState, useTransition } from "react";
 import { saveVaReport } from "@/lib/va-report-actions";
 
@@ -11,7 +12,7 @@ export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId
   const [pending, startTransition] = useTransition();
   const box = (key: keyof typeof text, label: string, rows: number) => (
     <label className="flex flex-col gap-1 text-sm">
-      <span className="font-medium">{label}</span>
+      <span className="font-semibold">{label}</span>
       <textarea
         value={text[key]}
         rows={rows}
@@ -19,7 +20,7 @@ export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId
           setText({ ...text, [key]: e.target.value });
           setMessage(null);
         }}
-        className="rounded-lg border border-foreground/20 bg-transparent px-3 py-2"
+        className="w-full"
       />
     </label>
   );
@@ -38,12 +39,12 @@ export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId
               setMessage(r.ok ? { ok: true, text: "Saved. The VA sees it now." } : { ok: false, text: r.error });
             })
           }
-          className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+          className={buttonClass("primary")}
         >
           {pending ? "Saving…" : "Save tips"}
         </button>
         {message && (
-          <span className={`text-sm ${message.ok ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>{message.text}</span>
+          <span className={`text-sm ${message.ok ? "font-medium text-success" : "font-medium text-danger"}`}>{message.text}</span>
         )}
       </span>
     </div>

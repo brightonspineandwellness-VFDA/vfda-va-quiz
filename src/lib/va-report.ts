@@ -8,6 +8,7 @@
 // from the office gap report. Only the fields of VaReportView leave the server.
 
 import { orderNeedsWork, type DoneWellItem, type NeedsWorkItem } from "@/lib/quiz-report";
+import type { TipTag } from "@/lib/rule-source";
 
 // What's written for the VA (va_reports.alerts / tips / strengths).
 export type VaTips = {
@@ -18,6 +19,8 @@ export type VaTips = {
 
 export type VaReportView = {
   attemptId: string;
+  vaName: string;
+  officeName: string;
   dayCode: string;
   topic: string;
   date: string; // ISO
@@ -32,6 +35,11 @@ export type VaReportView = {
   flags: string[];
   trend: { rows: { day: string; percent: number; current: boolean }[]; direction: "improving" | "steady" | "declining" | null };
   tips: string[];
+  // Each tip's tag: "VFDA standard" or "Card: <name>" (null: none).
+  tipTags: (TipTag | null)[];
+  // The VFDA standard rules the quiz relied on, rules only (no scenarios or
+  // answers); empty: no notice.
+  standards: string[];
   strengths: string[];
   ready: boolean; // false: the tips aren't written yet
 };

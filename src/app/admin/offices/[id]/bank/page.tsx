@@ -1,8 +1,8 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { BankView } from "@/components/bank/bank-view";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { PageHeader } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { bankFilters } from "@/lib/bank-export";
 import { loadBank } from "@/lib/scenario-bank";
@@ -38,16 +38,15 @@ async function AdminBank({
   if (!bank) notFound();
   return (
     <>
-      <Link href={`/admin/offices/${id}`} className="text-sm text-foreground/60 hover:underline">
-        ← {bank.office.name}
-      </Link>
-      <div>
-        <h1 className="text-2xl font-semibold">Scenario bank: {bank.office.name}</h1>
-        <p className="text-sm text-foreground/60">
-          Every built scenario with its answers, by day and version. VFDA only; the office&apos;s doctors see it read-only
-          when shared. VAs never see it.
-        </p>
-      </div>
+      <PageHeader
+        title={`Scenario bank: ${bank.office.name}`}
+        description="Every built scenario with its answers, by day and version. VFDA only; the office's doctors see it read-only when shared. VAs never see it."
+        breadcrumbs={[
+          { label: "Offices", href: "/admin/offices" },
+          { label: bank.office.name, href: `/admin/offices/${id}` },
+          { label: "Scenario bank" },
+        ]}
+      />
       <BankView bank={bank} filters={bankFilters(await searchParams)} admin pagePath={`/admin/offices/${id}/bank`} exportPath={`/admin/offices/${id}/bank/export`} />
     </>
   );

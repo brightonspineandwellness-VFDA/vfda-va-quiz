@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { Suspense } from "react";
 import { SopDecision } from "@/components/certs/sop-decision";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { EmptyState, linkClass, PageHeader, StatusBadge, Table, td, tdNum, th, thNum } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { daysBetween, SOP_WAIT_FLAG_DAYS } from "@/lib/certification";
 import { createSessionClient } from "@/lib/supabase/server";
@@ -10,13 +10,11 @@ import { showDate } from "@/lib/va-flow";
 export default function SopsPage() {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin" className="text-sm text-foreground/60 hover:underline">
-        ← Admin
-      </Link>
-      <h1 className="text-2xl font-semibold">SOPs to confirm</h1>
-      <p className="text-sm text-foreground/70">
-        Each office&apos;s Trello board is its SOP. Open the card, check the doctor approved it on Trello, then record it here.
-      </p>
+      <PageHeader
+        title="SOPs to confirm"
+        description="Each office's Trello board is its SOP. Open the card, check the doctor approved it on Trello, then record it here."
+        breadcrumbs={[{ label: "Admin", href: "/admin" }, { label: "SOPs to confirm" }]}
+      />
       <Suspense fallback={<Loading />}>
         <Sops />
       </Suspense>
@@ -33,7 +31,7 @@ async function Sops() {
     .eq("sop_status", "pending")
     .not("sop_submitted_at", "is", null)
     .order("sop_submitted_at");
-  if (!certs?.length) return <p>Nothing waiting. Links appear here when a VA says a card is updated.</p>;
+  if (!certs?.length) return <EmptyState title="Nothing waiting">Links appear here when a VA says a card is updated.</EmptyState>;
 
   const [vas, offices, workflows, gray] = await Promise.all([
     supabase.from("profiles").select("id, full_name, email").in("id", [...new Set(certs.map((c) => c.va_id))]),
@@ -48,17 +46,16 @@ async function Sops() {
   const now = new Date();
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b border-foreground/15 text-foreground/60">
+    <Table>
+        <thead>
           <tr>
-            <th className="py-1 pr-3 font-medium">VA</th>
-            <th className="py-1 pr-3 font-medium">Office</th>
-            <th className="py-1 pr-3 font-medium">Workflow</th>
-            <th className="py-1 pr-3 font-medium">Trello</th>
-            <th className="py-1 pr-3 font-medium">Submitted</th>
-            <th className="py-1 pr-3 font-medium">Waiting</th>
-            <th className="py-1 pr-3 font-medium">Decision</th>
+            <th className={th}>VA</th>
+            <th className={th}>Office</th>
+            <th className={th}>Workflow</th>
+            <th className={th}>Trello</th>
+            <th className={th}>Submitted</th>
+            <th className={thNum}>Waiting</th>
+            <th className={th}>Decision</th>
           </tr>
         </thead>
         <tbody>
@@ -70,33 +67,38 @@ async function Sops() {
             const links: string[] = c.sop_links?.length ? c.sop_links : c.sop_link ? [c.sop_link] : [];
             const waiting = daysBetween(c.sop_submitted_at, now);
             return (
-              <tr key={c.id} className="border-b border-foreground/10 align-top">
-                <td className="py-2 pr-3">{va?.full_name || va?.email}</td>
-                <td className="py-2 pr-3">{officeName.get(c.office_id) ?? "–"}</td>
-                <td className="py-2 pr-3">
+              <tr key={c.id}>
+                <td className={td}>{va?.full_name || va?.email}</td>
+                <td className={td}>{officeName.get(c.office_id) ?? "–"}</td>
+                <td className={td}>
                   {code} {name}
                 </td>
-                <td className="py-2 pr-3">
+                <td className={td}>
                   <div className="flex flex-col">
                     {links.map((l, i) => (
-                      <a key={l} href={l} target="_blank" rel="noreferrer" className="underline">
+                      <a key={l} href={l} target="_blank" rel="noreferrer" className={linkClass}>
                         Card{links.length > 1 ? ` ${i + 1}` : ""}
                       </a>
                     ))}
                   </div>
                 </td>
-                <td className="py-2 pr-3">{showDate(c.sop_submitted_at.slice(0, 10))}</td>
-                <td className={`py-2 pr-3 ${waiting > SOP_WAIT_FLAG_DAYS ? "font-medium text-red-700 dark:text-red-400" : ""}`}>
-                  {waiting} day{waiting === 1 ? "" : "s"}
+                <td className={td}>{showDate(c.sop_submitted_at.slice(0, 10))}</td>
+                <td className={tdNum}>
+                  {waiting > SOP_WAIT_FLAG_DAYS ? (
+                    <StatusBadge label={`${waiting} day${waiting === 1 ? "" : "s"}`} tone="danger" />
+                  ) : (
+                    <>
+                      {waiting} day{waiting === 1 ? "" : "s"}
+                    </>
+                  )}
                 </td>
-                <td className="py-2 pr-3">
+                <td className={td}>
                   <SopDecision certificationId={c.id} />
                 </td>
               </tr>
             );
           })}
         </tbody>
-      </table>
-    </div>
+    </Table>
   );
 }

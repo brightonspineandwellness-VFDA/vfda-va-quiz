@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { Badge, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { currentStep } from "@/lib/doctor-flow";
 import { loadOffices } from "@/lib/interview-data";
+import type { Tone } from "@/lib/theme";
 import { AddOfficeForm } from "./add-office-form";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -15,13 +17,23 @@ const STATUS_LABELS: Record<string, string> = {
   done: "Done",
 };
 
+const STATUS_TONES: Record<string, Tone> = {
+  setup: "neutral",
+  rules_in_review: "warning",
+  gap_list: "warning",
+  scenarios_in_review: "warning",
+  va_training: "primary",
+  done: "success",
+};
+
 export default function OfficesPage() {
   return (
     <SignedInPage area="VFDA admin">
-      <Link href="/admin" className="text-sm text-foreground/60 hover:underline">
-        ← Admin
-      </Link>
-      <h1 className="text-2xl font-semibold">Offices</h1>
+      <PageHeader
+        title="Offices"
+        description="Every office, its doctors and where it is in setup."
+        breadcrumbs={[{ label: "Admin", href: "/admin" }, { label: "Offices" }]}
+      />
       <Suspense fallback={<Loading />}>
         <Offices />
       </Suspense>
@@ -37,61 +49,65 @@ async function Offices() {
     <>
       <AddOfficeForm />
       {offices.length === 0 ? (
-        <p className="text-foreground/70">No offices yet.</p>
+        <EmptyState title="No offices yet">Add the first office above. The doctor gets an invite by email.</EmptyState>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-foreground/15 text-foreground/60">
-              <tr>
-                <th className="py-2 pr-4 font-medium">Office</th>
-                <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 pr-4 font-medium">Doctors</th>
-                <th className="py-2 pr-4 font-medium">Doctor setup step</th>
-                <th className="py-2 pr-4 font-medium">Open</th>
+        <Table>
+          <thead>
+            <tr>
+              <th className={th}>Office</th>
+              <th className={th}>Status</th>
+              <th className={th}>Doctors</th>
+              <th className={th}>Doctor setup step</th>
+              <th className={th}>Open</th>
+            </tr>
+          </thead>
+          <tbody>
+            {offices.map((office) => (
+              <tr key={office.id}>
+                <td className={`${td} font-medium`}>
+                  <Link href={`/admin/offices/${office.id}`} className={linkClass}>
+                    {office.name}
+                  </Link>
+                </td>
+                <td className={td}>
+                  <StatusBadge label={STATUS_LABELS[office.status] ?? office.status} tone={STATUS_TONES[office.status]} />
+                </td>
+                <td className={td}>
+                  {office.doctors.length
+                    ? office.doctors.map((d) => (
+                        <span key={d.email} className="block">
+                          {d.name || d.email}
+                          {d.primary && office.doctors.length > 1 && (
+                            <Badge tone="success" className="ml-1.5">
+                              Primary
+                            </Badge>
+                          )}
+                          {d.name && <span className="block text-xs text-muted">{d.email}</span>}
+                        </span>
+                      ))
+                    : "—"}
+                </td>
+                <td className={td}>
+                  <SetupStep steps={office.steps} />
+                </td>
+                <td className={`${td} text-sm`}>
+                  <Link href={`/admin/offices/${office.id}`} className={`${linkClass} block`}>
+                    VAs
+                  </Link>
+                  <Link href={`/admin/offices/${office.id}/rules`} className={`${linkClass} block`}>
+                    Cards &amp; rules
+                  </Link>
+                  <Link href={`/admin/offices/${office.id}/interview`} className={`${linkClass} block`}>
+                    Standards &amp; must-ask rules
+                  </Link>
+                  <Link href={`/admin/offices/${office.id}/scenarios`} className={`${linkClass} block`}>
+                    Scenarios
+                  </Link>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {offices.map((office) => (
-                <tr key={office.id} className="border-b border-foreground/10 align-top">
-                  <td className="py-2 pr-4 font-medium">
-                    <Link href={`/admin/offices/${office.id}`} className="underline">
-                      {office.name}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-4">{STATUS_LABELS[office.status] ?? office.status}</td>
-                  <td className="py-2 pr-4">
-                    {office.doctors.length
-                      ? office.doctors.map((d) => (
-                          <span key={d.email} className="block">
-                            {d.name || d.email}
-                            {d.primary && office.doctors.length > 1 && <span className="ml-1 text-xs text-green-700 dark:text-green-400">Primary</span>}
-                            {d.name && <span className="block text-xs text-foreground/50">{d.email}</span>}
-                          </span>
-                        ))
-                      : "—"}
-                  </td>
-                  <td className="py-2 pr-4">
-                    <SetupStep steps={office.steps} />
-                  </td>
-                  <td className="py-2 pr-4">
-                    <Link href={`/admin/offices/${office.id}`} className="block underline">
-                      VAs
-                    </Link>
-                    <Link href={`/admin/offices/${office.id}/rules`} className="block underline">
-                      Cards &amp; rules
-                    </Link>
-                    <Link href={`/admin/offices/${office.id}/interview`} className="block underline">
-                      Standards &amp; must-ask rules
-                    </Link>
-                    <Link href={`/admin/offices/${office.id}/scenarios`} className="block underline">
-                      Scenarios
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </Table>
       )}
     </>
   );
@@ -104,10 +120,10 @@ function SetupStep({ steps }: { steps: Parameters<typeof currentStep>[0] }) {
       {current ? (
         <>
           Step {current.index + 1} of {steps.length}: {current.step.label}
-          <span className="block text-xs text-foreground/60">{current.step.detail}</span>
+          <span className="block text-xs text-muted">{current.step.detail}</span>
         </>
       ) : (
-        <span className="text-green-700 dark:text-green-400">All {steps.length} steps done ✓</span>
+        <StatusBadge label={`All ${steps.length} steps done ✓`} tone="success" />
       )}
     </span>
   );

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { buttonClass } from "@/components/ui";
 import { reviewProof, setStartDate } from "@/lib/va-admin-actions";
 
 // VFDA: accept one proof upload, or ask for a redo with a note.
@@ -26,13 +27,13 @@ export function ProofReview({ proofId }: { proofId: string }) {
         onChange={(e) => setNote(e.target.value)}
         placeholder="Note (needed for a redo)"
         aria-label="Note to the VA"
-        className="min-w-0 flex-1 rounded-lg border border-foreground/20 bg-transparent px-2 py-1 text-sm"
+        className="min-w-0 flex-1 basis-48"
       />
       <button
         type="button"
         disabled={pending}
         onClick={() => decide("accept")}
-        className="rounded-lg bg-foreground px-3 py-1 text-sm font-medium text-background disabled:opacity-60"
+        className={buttonClass("primary", "sm")}
       >
         Accept
       </button>
@@ -40,11 +41,11 @@ export function ProofReview({ proofId }: { proofId: string }) {
         type="button"
         disabled={pending}
         onClick={() => decide("redo")}
-        className="rounded-lg border border-foreground/25 px-3 py-1 text-sm font-medium hover:bg-foreground/5 disabled:opacity-60"
+        className={buttonClass("danger", "sm")}
       >
         Ask to redo
       </button>
-      {error && <span className="text-sm text-red-700 dark:text-red-400">{error}</span>}
+      {error && <span className="text-sm font-medium text-danger">{error}</span>}
     </div>
   );
 }
@@ -68,23 +69,23 @@ export function StartDateForm({ vaId, value }: { vaId: string; value: string | n
         });
       }}
     >
-      <label className="flex items-center gap-2">
+      <label className="flex flex-wrap items-center gap-2 font-semibold">
         Training start
         <input
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          className="rounded-lg border border-foreground/20 bg-transparent px-2 py-1"
+          className="font-normal"
         />
       </label>
       <button
         type="submit"
         disabled={pending || !date || date === value}
-        className="rounded-lg border border-foreground/25 px-3 py-1 font-medium hover:bg-foreground/5 disabled:opacity-60"
+        className={buttonClass("secondary", "sm")}
       >
         {pending ? "Saving…" : "Save"}
       </button>
-      {error && <span className="text-red-700 dark:text-red-400">{error}</span>}
+      {error && <span className="font-medium text-danger">{error}</span>}
     </form>
   );
 }

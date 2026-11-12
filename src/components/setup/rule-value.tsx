@@ -13,7 +13,7 @@ export function RuleValue({
   fileUrls?: Record<string, string>;
 }) {
   if (value === null || value === undefined || value === "") {
-    return <p className="text-foreground/50">Not answered</p>;
+    return <p className="text-muted">Not answered</p>;
   }
   if (typeof value === "string") {
     return <p className="whitespace-pre-line">{slot.answer_type === "yesno" ? (value === "yes" ? "Yes" : "No") : value}</p>;
@@ -21,12 +21,12 @@ export function RuleValue({
   if (Array.isArray(value) && slot.answer_type === "matrix") {
     const rows = value as MatrixRow[];
     return (
-      <div className="overflow-x-auto">
-        <table className="text-left text-xs">
-          <thead className="text-foreground/60">
+      <div className="overflow-x-auto rounded-[var(--radius-card)] border border-line">
+        <table className="w-full text-left text-sm [&_tbody_tr:nth-child(even)]:bg-surface-zebra">
+          <thead className="bg-surface-muted">
             <tr>
               {MATRIX_COLUMNS.map((c) => (
-                <th key={c.key} className="py-1 pr-3 font-medium">
+                <th key={c.key} className="px-3 py-2 font-semibold">
                   {c.label}
                 </th>
               ))}
@@ -34,9 +34,9 @@ export function RuleValue({
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={i} className="border-t border-foreground/10 align-top">
+              <tr key={i} className="border-t border-line align-top">
                 {MATRIX_COLUMNS.map((c) => (
-                  <td key={c.key} className="py-1 pr-3">
+                  <td key={c.key} className="px-3 py-2">
                     {row?.[c.key] || "—"}
                   </td>
                 ))}
@@ -56,7 +56,7 @@ export function RuleValue({
         ))}
       </ul>
     ) : (
-      <p className="text-foreground/50">Not answered</p>
+      <p className="text-muted">Not answered</p>
     );
   }
   const upload = value as { text?: string; links?: string[] };
@@ -65,13 +65,13 @@ export function RuleValue({
     <div className="flex flex-col gap-1">
       {upload.text?.trim() && <p className="whitespace-pre-line">{upload.text}</p>}
       {links.map((l) => (
-        <a key={l} href={l} target="_blank" rel="noreferrer" className="break-all underline">
+        <a key={l} href={l} target="_blank" rel="noreferrer" className="break-all font-medium text-primary underline">
           {l}
         </a>
       ))}
       {attachments.map((f) =>
         fileUrls[f.path] ? (
-          <a key={f.path} href={fileUrls[f.path]} target="_blank" rel="noreferrer" className="underline">
+          <a key={f.path} href={fileUrls[f.path]} target="_blank" rel="noreferrer" className="font-medium text-primary underline">
             {f.name}
           </a>
         ) : (
@@ -79,7 +79,7 @@ export function RuleValue({
         ),
       )}
       {!upload.text?.trim() && links.length === 0 && attachments.length === 0 && (
-        <p className="text-foreground/50">Not answered</p>
+        <p className="text-muted">Not answered</p>
       )}
     </div>
   );

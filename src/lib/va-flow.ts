@@ -227,7 +227,15 @@ export const formatOf = (type: string, own: AnswerFormat | null | undefined, day
   type === "describe" ? "describe" : (own ?? day);
 
 // What the VA's browser gets for one item. Display only: no answer keys.
-export type Feedback = { reason: string; missedSteps: string[]; repeatNext: boolean; ungraded: boolean };
+export type Feedback = {
+  reason: string;
+  missedSteps: string[];
+  repeatNext: boolean;
+  ungraded: boolean;
+  // Shown on the feedback card only: the points, and the office card to review.
+  score?: number | null;
+  review?: string | null;
+};
 
 export type ServedItem = {
   scenarioId: string; // the day's scenario (a repeat is answered under its parent)

@@ -24,8 +24,22 @@ export function dayState(d: DaySummary): { label: string; tone: "muted" | "ok" |
 }
 
 export const TONES = {
-  muted: "text-foreground/60",
-  ok: "text-green-700 dark:text-green-400",
-  warn: "text-amber-700 dark:text-amber-400",
-  bad: "text-red-700 dark:text-red-400",
+  muted: "text-muted",
+  ok: "text-success",
+  warn: "text-warning",
+  bad: "text-danger",
 };
+
+// The same tones as badges (src/components/ui.tsx Badge).
+export const BADGE_TONES = {
+  muted: "neutral",
+  ok: "success",
+  warn: "warning",
+  bad: "danger",
+} as const;
+
+// A day's state as a pill: wraps on small screens instead of overflowing.
+export const statePillClass = (tone: keyof typeof TONES) =>
+  `inline-flex max-w-full items-center rounded-2xl border px-2.5 py-0.5 text-xs font-semibold whitespace-normal ${
+    { muted: "border-line-strong bg-surface-muted text-muted", ok: "border-success bg-success-soft text-success", warn: "border-warning bg-warning-soft text-warning", bad: "border-danger bg-danger-soft text-danger" }[tone]
+  }`;
