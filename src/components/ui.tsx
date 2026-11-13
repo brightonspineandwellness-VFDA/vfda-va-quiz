@@ -137,7 +137,7 @@ export function Card({
   id?: string;
   as?: "section" | "div" | "article" | "li";
   headingAs?: "h2" | "h3";
-  // A colored left border (e.g. "accent" for "Try it again").
+  // A colored left border (e.g. "accent" for "Let's try one more").
   accent?: Tone;
 }) {
   const hasHeader = title !== undefined || actions !== undefined;
@@ -235,13 +235,15 @@ export function Badge({ children, tone = "neutral", size = "sm", className }: { 
 }
 
 // Approved, Draft, Needs review, Invited, Training, Certified, Retake,
-// Strong, Needs coaching, At risk, ...: the tone comes from the label.
-export function StatusBadge({ label, size, tone }: { label: string; size?: "sm" | "lg"; tone?: Tone }) {
-  return (
+// Great work, Building skills, Needs extra support, ...: the tone comes from the label.
+// `hint`: a tooltip (e.g. the old label name on admin pages).
+export function StatusBadge({ label, size, tone, hint }: { label: string; size?: "sm" | "lg"; tone?: Tone; hint?: string }) {
+  const badge = (
     <Badge tone={tone ?? toneOf(label)} size={size}>
       {label}
     </Badge>
   );
+  return hint ? <span title={hint}>{badge}</span> : badge;
 }
 
 // ---------------------------------------------------------------------------

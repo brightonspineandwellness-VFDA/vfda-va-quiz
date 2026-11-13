@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { InviteDoctorForm } from "@/components/doctors/invite-doctor";
+import { TestButton } from "@/components/settings/test-button";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { Badge, ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge } from "@/components/ui";
@@ -13,9 +14,13 @@ import { removeDoctorAction, resendDoctorLinkAction, setPrimaryDoctorAction } fr
 import { loadOfficeDoctors } from "@/lib/doctor-invites";
 import { createSessionClient } from "@/lib/supabase/server";
 import { showDate } from "@/lib/va-flow";
+import { regradeOfficeAction } from "@/lib/va-admin-actions";
 import { resendVaLinkAction, setVaActiveAction } from "@/lib/va-invite-actions";
 import { loadOfficeVas, VA_STATUS_LABELS, type VaStatus } from "@/lib/va-invites";
 import { nextTrainingDay } from "@/lib/va-training";
+
+// "Re-grade with new rubric" grades every finished quiz again while you wait.
+export const maxDuration = 300;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -159,6 +164,14 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
           </ul>
         )}
         <InviteVaForm officeId={id} defaultStart={defaultStart} />
+      </Card>
+
+      <Card
+        number={3}
+        title="Re-grade with new rubric"
+        description="Scores every finished quiz of this office again with the current, more encouraging rubric (safety checks unchanged), then rebuilds each VA report and PDF. No emails, Slack posts or Leads4Life sends. Quizzes already on the new rubric are skipped; a big office may need a second press."
+      >
+        <TestButton action={regradeOfficeAction.bind(null, id)} label="Re-grade with new rubric" pendingLabel="Re-grading… (this takes a few minutes)" />
       </Card>
     </>
   );

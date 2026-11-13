@@ -5,9 +5,8 @@ import { Badge, ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge
 import { requireRole } from "@/lib/auth";
 import { CERT_LABELS, SOP_LABELS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
-import { TREND_LABELS } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
-import { attemptLabel, percentOf, resultLabel, showDate, todayIn, trend } from "@/lib/va-flow";
+import { attemptLabel, percentOf, resultLabel, showDate, todayIn } from "@/lib/va-flow";
 
 const TIME_ZONE = process.env.TRAINING_TIME_ZONE || "America/New_York";
 
@@ -46,20 +45,11 @@ async function Results() {
   ]);
   const done = attempts ?? [];
   const titleOf = new Map((days ?? []).map((d) => [d.code, d.title as string]));
-  const direction = trend(
-    done
-      .filter((a) => a.kind === "day")
-      .reverse()
-      .map((a) => percentOf(a.first_try_points, a.max_points)),
-  );
   const row = grid.rows[0];
 
   return (
     <>
-      <Card
-        title="My quizzes"
-        description={direction ? `Your first-try scores across days: ${TREND_LABELS[direction].toLowerCase()}.` : undefined}
-      >
+      <Card title="My quizzes">
         {!done.length ? (
           <EmptyState title="No finished quizzes yet">Your scores and coaching tips show up here after your first quiz.</EmptyState>
         ) : (
@@ -68,7 +58,7 @@ async function Results() {
               <tr>
                 <th className={th}>Quiz</th>
                 <th className={th}>Date</th>
-                <th className={thNum}>First try</th>
+                <th className={thNum}>Score</th>
                 <th className={th}>Result</th>
                 <th className={th}>
                   <span className="sr-only">Report</span>
@@ -88,7 +78,9 @@ async function Results() {
                     </span>
                   </td>
                   <td className={`${td} whitespace-nowrap text-muted`}>{showDate(todayIn(TIME_ZONE, new Date(a.submitted_at!)))}</td>
-                  <td className={tdNum}>{percentOf(a.first_try_points, a.max_points)}%</td>
+                  <td className={`${tdNum} whitespace-nowrap`}>
+                    {Number(a.first_try_points ?? 0)}/{a.max_points ?? 0} ({percentOf(a.first_try_points, a.max_points)}%)
+                  </td>
                   <td className={td}>{a.result ? <StatusBadge label={resultLabel(a.result)} /> : <span className="text-muted">–</span>}</td>
                   <td className={`${td} whitespace-nowrap text-right`}>
                     <Link href={`/va/results/${a.id}`} className={linkClass}>

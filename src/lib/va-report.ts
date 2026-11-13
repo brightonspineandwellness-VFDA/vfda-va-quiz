@@ -1,21 +1,34 @@
 // The VA report: the VA-safe version of a quiz report (My results -> My
-// report, and its PDF). Pure functions: the fallback tips, the check on
-// Claude's tips, and the shape sent to the VA's page. src/lib/va-reports.ts
+// report, and its PDF). Pure functions: the fallback text, the check on
+// Claude's text, and the shape sent to the VA's page. src/lib/va-reports.ts
 // loads the data, asks Claude and stores the text in va_reports.
 //
-// The VA never sees the scenarios, their answers, the correct answers, the
-// critical fail text, VFDA notes, the doctor's Trello card tips or anything
-// from the office gap report. Only the fields of VaReportView leave the server.
+// Sections, in order: score + label, What went well (the biggest section,
+// grouped by workflow), Things to focus on, Important to review (only with a
+// critical error), gentle flags, the VFDA standards notice, and an
+// encouraging line about the next day. Warm, second person, never shaming.
+//
+// The VA never sees the scenarios, their answers (or quotes of them), the
+// correct answers, the critical fail text, VFDA notes, the doctor's Trello
+// card tips or anything from the office gap report. Only the fields of
+// VaReportView leave the server.
 
-import { orderNeedsWork, type DoneWellItem, type NeedsWorkItem } from "@/lib/quiz-report";
+import { cardOf, orderNeedsWork, withReview, type DoneWellItem, type NeedsWorkItem } from "@/lib/quiz-report";
 import type { TipTag } from "@/lib/rule-source";
+import type { ResultLabel } from "@/lib/va-flow";
+
+export { cardOf };
 
 // What's written for the VA (va_reports.alerts / tips / strengths).
+// strengths: "[Workflow name] bullet" lines (the group in brackets); older
+// reports have plain lines.
 export type VaTips = {
-  alerts: string[]; // each critical error, in general terms
-  tips: string[]; // most important first (critical errors at the top)
-  strengths: string[]; // 1-2
+  alerts: string[]; // "Important to review": each critical error, calm, general terms, ends "Review: <card>."
+  tips: string[]; // "Things to focus on", most important first, each ends "Review: <card> ..."
+  strengths: string[]; // "What went well", 4-8
 };
+
+export type WentWellGroup = { name: string | null; bullets: string[] };
 
 export type VaReportView = {
   attemptId: string;
@@ -25,27 +38,29 @@ export type VaReportView = {
   topic: string;
   date: string; // ISO
   retake: boolean;
-  percent: number; // first try (a retake: the retake's own score)
+  result: ResultLabel;
   resultLabel: string;
+  // "16 of 20 points (80%)"; a retake: the retake's own score.
+  score: string;
+  // A day with a retake: the retake's score. A retake: its day's first try.
+  otherScore: { caption: string; text: string } | null;
   timeSpent: number | null; // seconds
-  // A day with a retake: the retake's score beside it. A retake: its day's first try.
-  retakePercent: number | null;
-  firstTryPercent: number | null;
-  alerts: string[];
-  flags: string[];
-  trend: { rows: { day: string; percent: number; current: boolean }[]; direction: "improving" | "steady" | "declining" | null };
+  wentWell: WentWellGroup[];
   tips: string[];
   // Each tip's tag: "VFDA standard" or "Card: <name>" (null: none).
   tipTags: (TipTag | null)[];
+  important: string[];
+  flags: string[];
   // The VFDA standard rules the quiz relied on, rules only (no scenarios or
   // answers); empty: no notice.
   standards: string[];
-  strengths: string[];
-  ready: boolean; // false: the tips aren't written yet
+  // The encouraging last line.
+  closing: string;
+  ready: boolean; // false: the text isn't written yet
 };
 
-export const MAX_TIPS = 6; // with the strengths
-const MAX_STRENGTHS = 2;
+export const MAX_TIPS = 5;
+export const MAX_STRENGTHS = 8;
 const MAX_LINE = 500;
 
 const clip = (s: string, n = MAX_LINE) => {
@@ -53,16 +68,31 @@ const clip = (s: string, n = MAX_LINE) => {
   return t.length <= n ? t : `${t.slice(0, n - 1).trimEnd()}…`;
 };
 
-// The card a VA reviews for an item: the scenario's source card, else the workflow's card.
-export const cardOf = (i: Pick<NeedsWorkItem, "sourceCard" | "workflowName">) => i.sourceCard?.trim() || `${i.workflowName} card`;
-
 const topicOf = (i: Pick<NeedsWorkItem, "partTitle" | "workflowName">) => i.partTitle?.trim() || i.workflowName;
 const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
-// Items lost points on, grouped by the card to review, most important first.
+// "[Scheduling] You offered two times..." -> group and text.
+export function parseStrength(line: string): { group: string | null; text: string } {
+  const m = /^\s*\[([^\]]{1,80})\]\s*(.+)$/.exec(line);
+  return m ? { group: m[1].trim(), text: m[2].trim() } : { group: null, text: line.trim() };
+}
+
+export function groupStrengths(lines: string[]): WentWellGroup[] {
+  const groups: WentWellGroup[] = [];
+  for (const l of lines) {
+    const { group, text } = parseStrength(l);
+    if (!text) continue;
+    const g = groups.find((x) => x.name === group);
+    if (g) g.bullets.push(text);
+    else groups.push({ name: group, bullets: [text] });
+  }
+  return groups;
+}
+
+// Items below full points that aren't critical errors, grouped by the card to review, most important first.
 export function tipGroups(needsWork: NeedsWorkItem[]) {
   const groups: { card: string; items: NeedsWorkItem[] }[] = [];
-  for (const i of orderNeedsWork(needsWork)) {
+  for (const i of orderNeedsWork(needsWork).filter((x) => !x.critical)) {
     const card = cardOf(i);
     const g = groups.find((x) => x.card === card);
     if (g) g.items.push(i);
@@ -71,25 +101,30 @@ export function tipGroups(needsWork: NeedsWorkItem[]) {
   return groups;
 }
 
-const tipRoom = (strengths: number) => Math.max(1, MAX_TIPS - strengths);
-
-// AI_MODE=mock, or when Claude's answer can't be used: tips from the grading itself.
+// AI_MODE=mock, or when Claude's answer can't be used: text from the grading itself.
 export function fallbackVaTips(needsWork: NeedsWorkItem[], doneWell: DoneWellItem[]): VaTips {
-  const strengths = [...new Set(doneWell.map((d) => d.partTitle.trim() || d.workflowName))]
-    .slice(0, MAX_STRENGTHS)
-    .map((t) => `You handled ${lower(t)} well. Keep doing it the same way.`);
-  if (!strengths.length) strengths.push("You finished the whole quiz. Keep going: every day builds on this one.");
-  const groups = tipGroups(needsWork);
+  const strengths = [
+    ...doneWell.map((d) => {
+      const skill = d.partTitle.trim() || d.workflowName;
+      return `[${d.workflowName}] ${d.didWell?.trim() || `You handled ${lower(skill)} with every key step${d.sourceCard?.trim() ? `, just like the ${d.sourceCard.trim()} card` : ""}.`}`;
+    }),
+    ...needsWork.filter((i) => i.didWell.trim()).map((i) => `[${i.workflowName}] ${i.didWell.trim()}`),
+  ];
+  const unique = [...new Set(strengths)].slice(0, MAX_STRENGTHS);
+  if (!unique.length) unique.push("You finished every question in the quiz. That steady effort is how these skills grow.");
   return {
     alerts: orderNeedsWork(needsWork)
       .filter((i) => i.critical)
-      .map((i) => `Critical error on ${lower(topicOf(i))}: a safety step the office requires was missed.`),
-    tips: groups.slice(0, tipRoom(strengths.length)).map((g) => {
-      const topics = [...new Set(g.items.map(topicOf))];
-      const critical = g.items.some((i) => i.critical);
-      return `${critical ? "Most important: " : ""}Some steps were missed in ${topics.length === 1 ? "this topic" : `${topics.length} topics`} (${topics.join("; ")}). Next time, go through the card's steps in order before you answer. Review: ${g.card} – the steps for ${topics.length === 1 ? lower(topics[0]) : "these topics"}.`;
-    }),
-    strengths,
+      .map((i) => withReview(`When ${lower(topicOf(i))} comes up, always start with the safety steps first`, cardOf(i))),
+    tips: tipGroups(needsWork)
+      .slice(0, MAX_TIPS)
+      .map((g) => {
+        const first = g.items.flatMap((i) => i.missed)[0];
+        const topics = [...new Set(g.items.map(topicOf))];
+        const what = first ? lower(first.replace(/[.\s]+$/, "")) : `go through the card's steps for ${lower(topics[0])} in order`;
+        return `Next time, ${what}. Review: ${g.card} – the steps for ${topics.length === 1 ? lower(topics[0]) : "these topics"}.`;
+      }),
+    strengths: unique,
   };
 }
 
@@ -109,14 +144,17 @@ export function copiesFrom(text: string, sources: string[], run = 8): boolean {
 }
 
 export type RawVaTips = {
-  alerts: { key: string; text: string }[];
+  alerts: { key: string; text: string; card: string }[];
   tips: { keys: string[]; text: string; card: string; section: string }[];
-  strengths: string[];
+  strengths: { workflow: string; text: string }[];
 };
 
-// Claude's tips, kept to what the VA may see. A line that copies the scenario
-// or the VA's answer, names a card that isn't one of theirs, or is empty is
-// replaced by the fallback line.
+// Never on a VA screen.
+const HARSH = /\b(wrong|failed|fail|missed|missing)\b/i;
+
+// Claude's text, kept to what the VA may see. A line that copies the scenario
+// or the VA's answer, names a card that isn't one of theirs, uses harsh words,
+// or is empty is replaced by the fallback line.
 export function checkVaTips(raw: RawVaTips, needsWork: NeedsWorkItem[], doneWell: DoneWellItem[]): VaTips {
   const fallback = fallbackVaTips(needsWork, doneWell);
   // Never echo the scenario, the VA's words or the critical fail. (What to do
@@ -124,56 +162,64 @@ export function checkVaTips(raw: RawVaTips, needsWork: NeedsWorkItem[], doneWell
   const secret = needsWork.flatMap((i) => [i.scenario, i.answer, i.criticalFail ?? "", i.criticalQuote ?? ""]);
   const safe = (s: string | undefined) => {
     const t = clip(s ?? "");
-    return t && !copiesFrom(t, secret) ? t : null;
+    return t && !copiesFrom(t, secret) && !HARSH.test(t) ? t : null;
   };
   const critical = orderNeedsWork(needsWork).filter((i) => i.critical);
-  const alerts = critical.map((i, n) => safe(raw.alerts.find((a) => a.key === i.key)?.text) ?? fallback.alerts[n]);
+  const alerts = critical.map((i, n) => {
+    const a = raw.alerts.find((x) => x.key === i.key);
+    const text = safe(a?.text);
+    return text ? withReview(text, cardOf(i)) : fallback.alerts[n];
+  });
 
-  const strengths = raw.strengths.map((s) => safe(s)).filter((s): s is string => !!s).slice(0, MAX_STRENGTHS);
-  const finalStrengths = strengths.length ? strengths : fallback.strengths;
+  const workflows = new Set([...doneWell, ...needsWork].map((d) => d.workflowName.toLowerCase()));
+  const strengths = raw.strengths
+    .map((s) => {
+      const text = safe(s.text);
+      const group = s.workflow?.trim();
+      if (!text) return null;
+      return group && workflows.has(group.toLowerCase()) ? `[${group}] ${text}` : text;
+    })
+    .filter((s): s is string => !!s)
+    .slice(0, MAX_STRENGTHS);
+  const finalStrengths = strengths.length >= 2 ? strengths : fallback.strengths;
 
   const groups = tipGroups(needsWork);
   const cards = new Set(groups.map((g) => g.card.toLowerCase()));
   const used = new Set<string>();
   const tips: string[] = [];
-  // Claude's order, but every critical error's card first.
-  const criticalKeys = new Set(critical.map((i) => i.key));
-  const ordered = [...raw.tips].sort(
-    (a, b) => Number(b.keys.some((k) => criticalKeys.has(k))) - Number(a.keys.some((k) => criticalKeys.has(k))),
-  );
-  for (const t of ordered) {
+  for (const t of raw.tips) {
     const text = safe(t.text);
     const card = t.card?.trim();
     if (!text || !card || !cards.has(card.toLowerCase()) || used.has(card.toLowerCase())) continue;
     used.add(card.toLowerCase());
     const section = t.section?.trim() ? ` – ${clip(t.section, 120)}` : "";
-    tips.push(`${text.replace(/[.\s]+$/, "")}. Review: ${card}${section}.`);
+    tips.push(`${text.replace(/\s*review:.*$/i, "").replace(/[.\s]+$/, "")}. Review: ${card}${section}.`);
   }
   // A card Claude left out gets the fallback line.
   groups.forEach((g, n) => {
     if (!used.has(g.card.toLowerCase())) tips.push(fallback.tips[n] ?? fallbackVaTips([...g.items], []).tips[0]);
   });
-  return { alerts, tips: tips.slice(0, tipRoom(finalStrengths.length)), strengths: finalStrengths };
+  return { alerts, tips: tips.slice(0, MAX_TIPS), strengths: finalStrengths };
 }
 
-// The flags a VA sees: fast finish and pasted answers only.
+// The flags a VA sees, gently: fast finish and pasted answers only.
 export function vaFlags(f: { fastFinish: boolean; pastedAnswers: number; totalAnswers: number }): string[] {
   return [
-    f.fastFinish && "You finished much faster than usual. Take time to read each question and think through every step.",
-    f.pastedAnswers > 0 &&
-      `${f.pastedAnswers} of ${f.totalAnswers} answers had pasted text. Write each answer in your own words: that's how the steps stick.`,
+    f.fastFinish && "Take your time with each question next time; there's no rush, and thinking it through helps the steps stick.",
+    f.pastedAnswers > 0 && "Try to write answers in your own words next time. That's how the steps stick.",
   ].filter((x): x is string => !!x);
 }
 
-export const TREND_LINE: Record<"improving" | "steady" | "declining", string> = {
-  improving: "Improving: your first-try scores are going up.",
-  steady: "Steady: your first-try scores are about the same.",
-  declining: "Declining: your first-try scores have dropped. Slow down and review the cards before each quiz.",
+// The encouraging last line of the VA report.
+export const CLOSING: Record<ResultLabel, string> = {
+  strong: "You're doing great. Keep this momentum going into your next day!",
+  needs_coaching: "You're building real skills. Take one of these focus points into your next day and keep going!",
+  at_risk: "Every day builds on the last. Review the cards above, and you'll feel more confident in your next day. You've got this!",
 };
 
 // One line per report in the VA's email.
-export const vaReportLine = (r: { dayCode: string; topic: string; retake: boolean; percent: number; resultLabel: string }) =>
-  `${r.dayCode}${r.retake ? " RETAKE" : ""}${r.topic ? ` – ${r.topic}` : ""}: ${r.percent}% first try, ${r.resultLabel}`;
+export const vaReportLine = (r: { dayCode: string; topic: string; retake: boolean; score: string; resultLabel: string }) =>
+  `${r.dayCode}${r.retake ? " retake" : ""}${r.topic ? ` – ${r.topic}` : ""}: ${r.score}, ${r.resultLabel}`;
 
 // Admin edits: one line per bullet.
 export const linesOf = (s: string, max: number) =>

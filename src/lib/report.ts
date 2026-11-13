@@ -1,10 +1,13 @@
 // The results report sent after every attempt (SPEC section 6, Reports), as
 // pure functions: what goes in it and how it reads as an email (text + HTML)
-// and a Slack post. An At risk day reads as an alert. src/lib/reports.ts
-// loads the data and sends it.
+// and a Slack post. The body follows the quiz report (src/lib/quiz-report.ts):
+// what went well first, then things to focus on, important to review, flags.
+// src/lib/reports.ts loads the data and sends it.
 
+import { scoreLine, type QuizReport } from "@/lib/quiz-report";
 import { retakeLineText, type RetakeComparison } from "@/lib/retake";
-import { RESULT_LABELS, trend, type ResultLabel, type Trend } from "@/lib/va-flow";
+import { STANDARDS_NOTICE } from "@/lib/rule-source";
+import { RESULT_LABELS, type ResultLabel, type Trend } from "@/lib/va-flow";
 
 export type ReportItem = {
   code: string;
@@ -32,8 +35,8 @@ export type AttemptReport = {
   points: number;
   maxPoints: number;
   result: ResultLabel;
-  // First-try % per day so far, oldest first (this one last), and where it's heading.
-  trend: { direction: Trend | null; percents: number[] };
+  // A day the VA retook: the retake's raw score (the first try stays official).
+  retakeScore?: { points: number; max: number } | null;
   timeSpent: number | null; // seconds
   fastFinish: boolean;
   pastes: number;
@@ -57,6 +60,7 @@ export type AttemptReport = {
   workflows: WorkflowStatus[];
 };
 
+// Admin and doctor dashboards only; reports no longer show a trend.
 export const TREND_LABELS: Record<Trend, string> = { improving: "Improving", flat: "Flat", declining: "Declining" };
 
 export type DayHistory = {
@@ -68,7 +72,7 @@ export type DayHistory = {
   current: boolean; // this attempt (or its retake)
 };
 
-// Missed questions answered right on the repeat, of all the repeats.
+// Questions below full points answered at full points on the repeat, of all the repeats.
 export type RepeatStats = { right: number; total: number };
 
 export function repeatStats(items: Pick<ReportItem, "repeated" | "repeat_score" | "type" | "points">[]): RepeatStats {
@@ -77,24 +81,6 @@ export function repeatStats(items: Pick<ReportItem, "repeated" | "repeat_score" 
     right: repeated.filter((i) => i.repeat_score !== null && i.repeat_score >= (i.type === "mc" ? i.points : 2)).length,
     total: repeated.length,
   };
-}
-
-// The trend over the first tries so far: improving / steady / declining, and
-// the change in points (percentage points) since the first day.
-export function trendSummary(history: Pick<DayHistory, "percent">[]) {
-  const percents = history.map((h) => h.percent);
-  const t = trend(percents);
-  return {
-    direction: t === null ? null : t === "flat" ? ("steady" as const) : t,
-    change: percents.length >= 2 ? percents[percents.length - 1] - percents[0] : null,
-  };
-}
-
-// Short, for Leads4Life: "improving, +12 pts"; "first day" before there's a trend.
-export function trendShort(history: Pick<DayHistory, "percent">[]): string {
-  const { direction, change } = trendSummary(history);
-  if (!direction || change === null) return "first day";
-  return `${direction}, ${change > 0 ? "+" : ""}${change} pts`;
 }
 
 // Critical errors on the first try (after VFDA's overrides).
@@ -107,7 +93,7 @@ export const awaitingReview = (r: Pick<AttemptReport, "items">) =>
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 // The flags in short ("fast finish, 3 pasted answers"), for Leads4Life and the
-// VFDA email; the PDF's Alerts box says the same at length.
+// VFDA email; the PDF says the same at length.
 export function shortFlags(r: AttemptReport): string[] {
   const awaiting = awaitingReview(r).length;
   const overridden = r.items.filter((i) => i.overridden).length;
@@ -122,116 +108,101 @@ export function shortFlags(r: AttemptReport): string[] {
 
 export const flagsText = (r: AttemptReport) => shortFlags(r).join(", ") || "none";
 
-export function trendText(t: AttemptReport["trend"]) {
-  if (!t.direction) return "first day, no trend yet";
-  return `${TREND_LABELS[t.direction]} (${t.percents.slice(-5).map((p) => `${p}%`).join(" → ")})`;
-}
-
-const score = (n: number | null, max: number) => (n === null ? "ungraded" : `${n}/${max}`);
-
 export function minutesText(seconds: number | null) {
   if (seconds === null) return "unknown";
   const m = Math.round(seconds / 60);
   return m < 60 ? `${Math.max(1, m)} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
+// "Maria Test finished W1D2: Building skills" (the doctor's email subject).
+export const finishedSubject = (r: Pick<AttemptReport, "vaName" | "dayCode" | "result" | "retake">) =>
+  `${r.vaName} finished ${r.dayCode}${r.retake ? " retake" : ""}: ${RESULT_LABELS[r.result]}`;
+
+// The quiz report's sections, or (when it couldn't be made) what the grading
+// alone says: things to focus on from the steps to focus on, no "went well".
+function bodyOf(r: AttemptReport, q: QuizReport | null) {
+  if (q) {
+    return {
+      wentWell: q.wentWell.map((g) => ({ name: g.name, bullets: g.bullets })),
+      focus: q.focus.map((f) => `${f.code}: ${f.text}${f.tag?.kind === "vfda_standard" ? " [VFDA standard]" : ""}`),
+      important: q.important.map((c) => `${c.code}: ${c.text}${c.quote ? ` The VA's words: "${c.quote}"` : ""}`),
+      flags: q.flags,
+      standards: q.standards,
+      cardTips: q.cardTips,
+    };
+  }
+  const below = r.items.filter((i) => !i.critical_error && (i.first_score ?? 0) < i.points);
+  return {
+    wentWell: [],
+    focus: below.slice(0, 5).map((i) => `${i.code}: ${i.missed_steps.slice(0, 2).join("; ") || "keep the card's steps in mind"}`),
+    important: r.items.filter((i) => i.critical_error).map((i) => `${i.code}: please review the safety steps with the VA. The VA's words: "${i.critical_quote ?? ""}"`),
+    flags: shortFlags(r),
+    standards: [] as string[],
+    cardTips: [] as string[],
+  };
+}
+
 // What the report says, in order. Every channel renders these sections.
-export function reportSections(r: AttemptReport) {
-  const repeated = r.items.filter((i) => i.repeated);
-  const critical = r.items.filter((i) => i.critical_error);
-  // Weakest: lowest share of points on the first try, among items that lost points.
-  const weakest = r.items
-    .filter((i) => (i.first_score ?? 0) < i.points)
-    .sort((a, b) => (a.first_score ?? 0) / a.points - (b.first_score ?? 0) / b.points || b.points - a.points)
-    .slice(0, 3);
-  const flags = [
-    r.fastFinish && "finished much faster than normal",
-    r.items.some((i) => i.fast) && `${r.items.filter((i) => i.fast).length} item(s) answered much faster than normal`,
-    r.pastes > 0 && `${r.pastes} paste(s) logged`,
-    r.items.some((i) => i.type !== "mc" && i.first_score === null) && "an answer couldn't be graded automatically (needs review)",
-    r.items.some((i) => i.low_confidence) && "a low-confidence grade (VFDA reviews)",
-    r.items.some((i) => i.overridden) && "a score was changed by VFDA",
-  ].filter((f): f is string => !!f);
-  const percent = r.maxPoints ? Math.round((r.points * 100) / r.maxPoints) : 0;
-  // At risk (or any critical error) is an alert: VFDA coaches, the VA keeps going.
-  const alert = r.result === "at_risk" ? "ALERT: " : "";
+export function reportSections(r: AttemptReport, q: QuizReport | null = null) {
   const rt = r.retake;
   const firstLabel = rt?.first.result ? RESULT_LABELS[rt.first.result] : "–";
+  const body = bodyOf(r, q);
 
   return {
-    alert: !!alert,
+    // Needs extra support (or any critical error): VFDA coaches, the VA keeps going.
+    alert: r.result === "at_risk",
     retake: !!rt,
-    subject: rt
-      ? `${alert}RETAKE: ${r.vaName} – ${r.dayCode} – retake ${RESULT_LABELS[r.result]} (first try ${firstLabel}) – ${r.officeName}`
-      : `${alert}${r.vaName} – ${r.dayCode} – ${RESULT_LABELS[r.result]} – ${r.officeName}`,
+    subject: `${finishedSubject(r)} – ${r.officeName}`,
     summary: [
       ["VA", r.vaName],
       ...(r.scope ? [["VA's role", r.scope] as [string, string]] : []),
       ["Office", r.officeName],
       ...(r.primaryDoctor ? [["Primary doctor", r.primaryDoctor] as [string, string]] : []),
-      ["Day", `${r.dayCode}: ${r.dayTitle}${rt ? " (RETAKE)" : ""}`],
+      ["Day", `${r.dayCode}: ${r.dayTitle}${rt ? " (retake)" : ""}`],
+      ["Result", RESULT_LABELS[r.result]],
+      [rt ? "Retake score" : "Score", scoreLine(r.points, r.maxPoints)],
       ...((rt
-        ? [
-            ["Retake result", RESULT_LABELS[r.result]],
-            ["Retake score", `${r.points}/${r.maxPoints} (${percent}%)`],
-            ["First try (official)", `${rt.first.points}/${rt.first.max} (${rt.first.percent}%) · ${firstLabel}`],
-          ]
-        : [
-            ["Result", RESULT_LABELS[r.result]],
-            ["First-try score", `${r.points}/${r.maxPoints} (${percent}%)`],
-          ]) as [string, string][]),
+        ? [["First try (official)", `${scoreLine(rt.first.points, rt.first.max)} · ${firstLabel}`]]
+        : r.retakeScore
+          ? [["Retake", scoreLine(r.retakeScore.points, r.retakeScore.max)]]
+          : []) as [string, string][]),
       ["Critical errors", String(criticalCount(r))],
       ["Flags", flagsText(r)],
-      ["Trend", trendText(r.trend)],
       ["Time spent", minutesText(r.timeSpent)],
       ...(r.sinceStart ? [["Since start", r.sinceStart] as [string, string]] : []),
     ] as [string, string][],
-    repeated: repeated.map(
-      (i) =>
-        `${i.code}: ${score(i.first_score, i.points)} first try, ${score(i.repeat_score, i.points)} on repeat${
-          i.repeat_score === 2 ? " (learned from the feedback)" : i.repeat_score !== null ? " (still below 2/2)" : ""
-        }`,
-    ),
-    critical: critical.map((i) => `${i.code}: "${i.critical_quote ?? ""}"`),
-    weakest: weakest.map((i) => ({
-      title: `${i.code} (${i.workflow}): ${score(i.first_score, i.points)}`,
-      missed: i.missed_steps,
-    })),
+    ...body,
     workflows: r.workflows.map((w) => `${w.code} ${w.name}: ${w.status}${w.why ? ` (${w.why})` : ""}`),
-    flags,
-    // Every question, first try next to retake; the ones missed the first time are highlighted.
+    // Every question, first try next to retake; highlighted: below full points the first time.
     retakeLines: (rt?.lines ?? []).map((l) => ({ text: retakeLineText(l), missed: l.missedFirst })),
     retakeNote: rt
-      ? `${rt.fixed} of ${rt.missedFirst} question(s) missed the first time got full points on the retake. The first try stays the official score; certification uses first-try scores.`
+      ? `${rt.fixed} of ${rt.missedFirst} question(s) below full points the first time got full points on the retake. The first try stays the official score; certification uses first-try scores.`
       : "",
   };
 }
 
 const NONE = "None";
-const ALERT_LINE = "ALERT: At risk. Please coach this VA; they keep going with their training.";
+const ALERT_LINE = "Needs extra support: please coach this VA. They keep going with their training.";
 
 // `link`: the attempt review page (login required).
-export function reportText(r: AttemptReport, link: string): string {
-  const s = reportSections(r);
+export function reportText(r: AttemptReport, link: string, q: QuizReport | null = null): string {
+  const s = reportSections(r, q);
   const list = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : NONE);
   return [
-    s.retake ? "RETAKE" : "",
     s.summary.map(([k, v]) => `${k}: ${v}`).join("\n"),
     s.alert ? ALERT_LINE : "",
+    s.wentWell.length ? `What went well:\n${s.wentWell.map((g) => `${g.name}\n${list(g.bullets)}`).join("\n")}` : "",
+    `Things to focus on:\n${list(s.focus)}`,
+    s.important.length ? `Important to review:\n${list(s.important)}` : "",
+    s.flags.length ? `Flags:\n${list(s.flags)}` : "",
+    s.standards.length ? `${STANDARDS_NOTICE.title}\n${STANDARDS_NOTICE.doctor}\n${list(s.standards)}` : "",
+    s.cardTips.length ? `Trello card suggestions:\n${list(s.cardTips)}` : "",
     s.retake
-      ? `First try vs retake, every question (* = missed the first time):\n${s.retakeLines
+      ? `First try vs retake, every question (* = below full points the first time):\n${s.retakeLines
           .map((l) => `${l.missed ? "* " : "- "}${l.text}`)
           .join("\n")}\n${s.retakeNote}`
       : "",
-    `Items repeated (repeat scores):\n${list(s.repeated)}`,
-    `Critical errors (VA's exact words):\n${list(s.critical)}`,
-    `Weakest items:\n${
-      s.weakest.length
-        ? s.weakest.map((w) => `- ${w.title}${w.missed.length ? `\n${w.missed.map((m) => `    missed: ${m}`).join("\n")}` : ""}`).join("\n")
-        : NONE
-    }`,
     `Workflow statuses:\n${list(s.workflows)}`,
-    s.flags.length ? `Flags:\n${list(s.flags)}` : "",
     `Review the attempt (login required): ${link}`,
   ]
     .filter(Boolean)
@@ -241,36 +212,32 @@ export function reportText(r: AttemptReport, link: string): string {
 export const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-export function reportHtml(r: AttemptReport, link: string): string {
-  const s = reportSections(r);
+export function reportHtml(r: AttemptReport, link: string, q: QuizReport | null = null): string {
+  const s = reportSections(r, q);
   const e = escapeHtml;
-  const h = (t: string) => `<h3 style="margin:20px 0 6px;font-size:15px">${e(t)}</h3>`;
+  const h = (t: string, color = "#111") => `<h3 style="margin:20px 0 6px;font-size:15px;color:${color}">${e(t)}</h3>`;
   const list = (items: string[]) =>
     items.length ? `<ul style="margin:0;padding-left:20px">${items.map((i) => `<li>${e(i)}</li>`).join("")}</ul>` : `<p style="margin:0">${NONE}</p>`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">
 ${s.retake ? `<p style="margin:0 0 12px;padding:6px 12px;background:#e8eefc;color:#1e3a8a;font-weight:bold;letter-spacing:1px">RETAKE</p>` : ""}
-${s.alert ? `<p style="margin:0 0 12px;padding:8px 12px;background:#fde8e8;color:#9b1c1c;font-weight:bold">${e(ALERT_LINE)}</p>` : ""}
+${s.alert ? `<p style="margin:0 0 12px;padding:8px 12px;background:#fdf3e1;color:#7a4a00;font-weight:bold">${e(ALERT_LINE)}</p>` : ""}
 <table style="border-collapse:collapse">${s.summary
     .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#555">${e(k)}</td><td style="padding:2px 0"><b>${e(v)}</b></td></tr>`)
     .join("")}</table>
+${s.wentWell.length ? `${h("What went well", "#166534")}${s.wentWell.map((g) => `<p style="margin:6px 0 2px;font-weight:bold">${e(g.name)}</p>${list(g.bullets)}`).join("")}` : ""}
+${h("Things to focus on")}${list(s.focus)}
+${s.important.length ? `${h("Important to review", "#7a4a00")}${list(s.important)}` : ""}
+${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
+${s.standards.length ? `${h(STANDARDS_NOTICE.title)}<p style="margin:0 0 4px">${e(STANDARDS_NOTICE.doctor)}</p>${list(s.standards)}` : ""}
+${s.cardTips.length ? `${h("Trello card suggestions")}${list(s.cardTips)}` : ""}
 ${
   s.retake
-    ? `${h("First try vs retake, every question")}<p style="margin:0 0 4px;color:#555">Highlighted: missed the first time.</p><ul style="margin:0;padding-left:20px">${s.retakeLines
+    ? `${h("First try vs retake, every question")}<p style="margin:0 0 4px;color:#555">Highlighted: below full points the first time.</p><ul style="margin:0;padding-left:20px">${s.retakeLines
         .map((l) => (l.missed ? `<li style="background:#fff3cd"><b>${e(l.text)}</b></li>` : `<li>${e(l.text)}</li>`))
         .join("")}</ul><p style="margin:6px 0 0">${e(s.retakeNote)}</p>`
     : ""
 }
-${h("Items repeated (repeat scores)")}${list(s.repeated)}
-${h("Critical errors (VA's exact words)")}${list(s.critical)}
-${h("Weakest items")}${
-    s.weakest.length
-      ? `<ul style="margin:0;padding-left:20px">${s.weakest
-          .map((w) => `<li>${e(w.title)}${w.missed.length ? `<ul>${w.missed.map((m) => `<li>Missed: ${e(m)}</li>`).join("")}</ul>` : ""}</li>`)
-          .join("")}</ul>`
-      : `<p style="margin:0">${NONE}</p>`
-  }
 ${h("Workflow statuses")}${list(s.workflows)}
-${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
 <p style="margin-top:20px"><a href="${e(link)}">Review the attempt</a> (login required)</p>
 <p style="margin-top:24px;color:#777;font-size:12px">VFDA VA Quiz App. Practice scenarios use fake patients only.</p>
 </div>`;
@@ -280,28 +247,26 @@ ${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
 export const slackEscape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 // The same summary in short form.
-export function reportSlack(r: AttemptReport, link: string): { text: string } {
-  const s = reportSections(r);
+export function reportSlack(r: AttemptReport, link: string, q: QuizReport | null = null): { text: string } {
+  const s = reportSections(r, q);
   const line = (label: string, items: string[]) => (items.length ? `*${label}:* ${items.map(slackEscape).join(" · ")}` : "");
   const lines = [
-    `${s.alert ? ":rotating_light: " : ""}*${slackEscape(s.subject)}*`,
+    `*${slackEscape(s.subject)}*`,
     r.retake
-      ? `RETAKE ${r.points}/${r.maxPoints} (${RESULT_LABELS[r.result]}) · first try ${r.retake.first.points}/${r.retake.first.max} (official) · ${minutesText(r.timeSpent)}`
-      : `${RESULT_LABELS[r.result]} · first try ${r.points}/${r.maxPoints} · trend: ${slackEscape(trendText(r.trend))} · ${minutesText(r.timeSpent)}`,
+      ? `Retake ${scoreLine(r.points, r.maxPoints)} (${RESULT_LABELS[r.result]}) · first try ${scoreLine(r.retake.first.points, r.retake.first.max)} (official) · ${minutesText(r.timeSpent)}`
+      : `${RESULT_LABELS[r.result]} · ${scoreLine(r.points, r.maxPoints)}${r.retakeScore ? ` · retake ${scoreLine(r.retakeScore.points, r.retakeScore.max)}` : ""} · ${minutesText(r.timeSpent)}`,
     r.scope ? `VA's role: ${slackEscape(r.scope)}` : "",
+    line("What went well", s.wentWell.flatMap((g) => g.bullets)),
+    line("Focus on", s.focus),
+    line("Important to review", s.important),
+    line("Flags", s.flags),
+    line("Trello card suggestions", s.cardTips),
     r.retake
-      ? `*First try → retake* (bold = missed the first time): ${s.retakeLines
+      ? `*First try → retake* (bold = below full points the first time): ${s.retakeLines
           .map((l) => (l.missed ? `*${slackEscape(l.text)}*` : slackEscape(l.text)))
           .join(" · ")}`
       : "",
-    line("Repeated", s.repeated),
-    line("Critical (VA's words)", s.critical),
-    line(
-      "Weakest",
-      s.weakest.map((w) => (w.missed.length ? `${w.title} (missed: ${w.missed.join("; ")})` : w.title)),
-    ),
     line("Workflows", s.workflows),
-    line("Flags", s.flags),
     `<${link}|Review the attempt>`,
   ];
   return { text: lines.filter(Boolean).join("\n") };

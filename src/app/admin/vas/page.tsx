@@ -15,7 +15,7 @@ import { loadReminderBoard, type VaReminder } from "@/lib/reminders";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 import { resetDay } from "@/lib/va-admin-actions";
 import { applies } from "@/lib/interview";
-import { attemptLabel, officeProfile, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
+import { attemptLabel, officeProfile, oldLabelHint, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
 import { dayInScope, normalizeScope, scopeText } from "@/lib/va-scope";
 import { PROOF_BUCKET } from "@/lib/va-training";
 
@@ -244,7 +244,7 @@ async function Vas() {
                 <td className={td}>
                   {p.latest ? (
                     <span className="inline-flex flex-wrap items-center gap-1.5">
-                      {p.latest.schedule_day} <StatusBadge label={resultLabel(p.latest.result)} tone={LABEL_TONE[p.latest.result ?? ""]} />
+                      {p.latest.schedule_day} <StatusBadge label={resultLabel(p.latest.result)} tone={LABEL_TONE[p.latest.result ?? ""]} hint={oldLabelHint(p.latest.result)} />
                     </span>
                   ) : (
                     "–"
@@ -377,7 +377,7 @@ async function Vas() {
                               })()}
                           </td>
                           <td className={td}>
-                            <StatusBadge label={resultLabel(a.result)} tone={LABEL_TONE[a.result ?? ""]} />
+                            <StatusBadge label={resultLabel(a.result)} tone={LABEL_TONE[a.result ?? ""]} hint={oldLabelHint(a.result)} />
                           </td>
                           <td className={`${td} tabular-nums`}>
                             {repeats

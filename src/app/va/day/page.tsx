@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ButtonLink, EmptyState } from "@/components/ui";
-import { QuizDone } from "@/components/va/quiz-done";
+import { doneMessage, QuizDone } from "@/components/va/quiz-done";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
 import { percentOf, RESULT_LABELS } from "@/lib/va-flow";
@@ -51,24 +51,12 @@ function Finished({ result }: { result: FinishedDay }) {
   return (
     <QuizDone
       title={`${result.dayCode} complete`}
-      score={result.max > 0 ? `${percentOf(result.points, result.max)}%` : `${result.points}/${result.max}`}
-      scoreLabel={`First try: ${result.points}/${result.max}`}
+      score={`${result.points} of ${result.max} points`}
+      scoreLabel={result.max > 0 ? `${percentOf(result.points, result.max)}%` : undefined}
       result={result.result ? RESULT_LABELS[result.result] : null}
       attemptId={result.attemptId}
       retakeAllowed={retake}
-      message={
-        <>
-          {retake && (
-            <p>
-              {RESULT_LABELS[result.result!]}: you can retake this whole day once, with new details, from Today. It&apos;s optional
-              and doesn&apos;t block your next day.
-            </p>
-          )}
-          <p className="text-muted">
-            Your report with coaching tips will be ready in a few minutes (we&apos;ll email you). Read it, then go on to your next day.
-          </p>
-        </>
-      }
+      message={<p>{doneMessage(result.result)}</p>}
       extra={<ButtonLink href="/va/proof">Proof of work</ButtonLink>}
     />
   );

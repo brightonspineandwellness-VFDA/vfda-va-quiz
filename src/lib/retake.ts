@@ -113,4 +113,4 @@ export async function loadRetakeComparison(db: SupabaseClient, attemptId: string
 export const retakeLineText = (l: RetakeLine) =>
   `${l.code} (${l.workflow}): first try ${l.first === null ? "ungraded" : `${l.first}/${l.points}`}, retake ${
     l.retake === null ? "–" : `${l.retake}/${l.points}`
-  }${l.missedFirst ? " (missed first time)" : ""}`;
+  }${l.missedFirst ? " (below full points first time)" : ""}`;

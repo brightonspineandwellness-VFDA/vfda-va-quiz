@@ -3,6 +3,7 @@ import { TipTagBadge } from "@/components/reports/standards";
 import { Card, NumberBadge } from "@/components/ui";
 import type { NeedsWorkItem } from "@/lib/quiz-report";
 import { vaTipTags } from "@/lib/rule-source";
+import { groupStrengths } from "@/lib/va-report";
 import { createSessionClient } from "@/lib/supabase/server";
 
 // "Coaching tips given to the VA" on the admin and doctor attempt pages:
@@ -21,7 +22,7 @@ export async function VaTips({ attemptId, admin, items = [] }: { attemptId: stri
       description={
         data && !error ? (
           <>
-            What the VA sees on My report (no scenarios or answers).
+            What the VA sees on My report (no scenarios or answers): what went well, things to focus on, important to review.
             {data.source === "fallback" && " Written without Claude (fallback)."}
             {data.edited_at && ` Edited by VFDA ${new Date(data.edited_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}.`}
           </>
@@ -42,20 +43,29 @@ export async function VaTips({ attemptId, admin, items = [] }: { attemptId: stri
             <VaTipsEditor attemptId={attemptId} alerts={list(data.alerts)} tips={tips} strengths={list(data.strengths)} />
           ) : (
             <div className="flex flex-col gap-3 text-[0.9375rem]">
-              {list(data.alerts).length > 0 && (
-                <ul className="list-disc pl-5 font-medium text-danger">
-                  {list(data.alerts).map((a) => (
-                    <li key={a}>{a}</li>
-                  ))}
-                </ul>
-              )}
-              <TipList tips={tips} tags={tags} />
               {list(data.strengths).length > 0 && (
                 <>
-                  <p className="font-semibold text-success">What they did well</p>
+                  <p className="font-semibold text-success">What went well</p>
+                  {groupStrengths(list(data.strengths)).map((g, n) => (
+                    <div key={`${g.name}-${n}`} className="flex flex-col gap-1">
+                      {g.name && <p className="font-medium">{g.name}</p>}
+                      <ul className="list-disc pl-5">
+                        {g.bullets.map((t) => (
+                          <li key={t}>{t}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </>
+              )}
+              {tips.length > 0 && <p className="font-semibold">Things to focus on</p>}
+              <TipList tips={tips} tags={tags} />
+              {list(data.alerts).length > 0 && (
+                <>
+                  <p className="font-semibold text-warning">Important to review</p>
                   <ul className="list-disc pl-5">
-                    {list(data.strengths).map((t) => (
-                      <li key={t}>{t}</li>
+                    {list(data.alerts).map((a) => (
+                      <li key={a}>{a}</li>
                     ))}
                   </ul>
                 </>

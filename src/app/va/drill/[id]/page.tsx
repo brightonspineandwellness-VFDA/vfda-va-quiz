@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ButtonLink, EmptyState } from "@/components/ui";
-import { QuizDone } from "@/components/va/quiz-done";
+import { doneMessage, QuizDone } from "@/components/va/quiz-done";
 import { RetakeCompare } from "@/components/va/retake-compare";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
@@ -53,15 +53,17 @@ async function Drill({ params }: { params: Promise<{ id: string }> }) {
 async function Finished({ result }: { result: FinishedDay }) {
   // Only this VA's own attempt gets here (loadDrillScreen checked it).
   const retake = result.drill === "retake" ? await loadRetakeComparison(createAdminClient(), result.attemptId) : null;
-  const percent = retake ? retake.retake.percent : result.max > 0 ? percentOf(result.points, result.max) : null;
+  const points = retake ? retake.retake.points : result.points;
+  const max = retake ? retake.retake.max : result.max;
+  const label = retake?.retake.result ?? result.result;
   return (
     <QuizDone
       title={`${result.drill === "retake" ? "Retake done" : "Recheck done"}: ${result.dayCode}`}
-      score={percent !== null ? `${percent}%` : `${result.points}/${result.max}`}
-      scoreLabel={retake ? "Retake score" : `First try: ${result.points}/${result.max}`}
-      result={retake?.retake.result ? RESULT_LABELS[retake.retake.result] : result.result ? RESULT_LABELS[result.result] : null}
+      score={`${points} of ${max} points`}
+      scoreLabel={max > 0 ? `${percentOf(points, max)}%` : undefined}
+      result={label ? RESULT_LABELS[label] : null}
       attemptId={result.attemptId}
-      message={<p className="text-muted">Your report with coaching tips will be ready in a few minutes (we&apos;ll email you).</p>}
+      message={<p>{doneMessage(label)}</p>}
     >
       {retake && <RetakeCompare data={retake} />}
     </QuizDone>

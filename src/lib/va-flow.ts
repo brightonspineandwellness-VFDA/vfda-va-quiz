@@ -16,11 +16,28 @@ export type UnlockStatus = "locked" | "open" | "done";
 export type Version = "A" | "B";
 export type ResultLabel = "strong" | "needs_coaching" | "at_risk";
 
+// Same score bands as before; only the words changed (encouraging, everywhere:
+// app, PDFs, emails, Slack, Leads4Life). Admin pages may show the old word in
+// a tooltip (OLD_RESULT_LABELS).
 export const RESULT_LABELS: Record<ResultLabel, string> = {
+  strong: "Great work",
+  needs_coaching: "Building skills",
+  at_risk: "Needs extra support",
+};
+
+export const OLD_RESULT_LABELS: Record<ResultLabel, string> = {
   strong: "Strong",
   needs_coaching: "Needs coaching",
   at_risk: "At risk",
 };
+
+// "Formerly: Needs coaching", for an admin tooltip.
+export const oldLabelHint = (r: string | null | undefined) =>
+  r && r in OLD_RESULT_LABELS ? `Formerly: ${OLD_RESULT_LABELS[r as ResultLabel]}` : undefined;
+
+// "16 of 20 points (80%)"
+export const rawScoreText = (points: number | string | null, max: number | null) =>
+  `${Number(points ?? 0)} of ${max ?? 0} points (${percentOf(points, max)}%)`;
 
 // Older attempts may carry pass / review / retake until the SQL relabels them.
 export const resultLabel = (r: string | null | undefined) => (r && r in RESULT_LABELS ? RESULT_LABELS[r as ResultLabel] : "–");
@@ -229,6 +246,9 @@ export const formatOf = (type: string, own: AnswerFormat | null | undefined, day
 // What the VA's browser gets for one item. Display only: no answer keys.
 export type Feedback = {
   reason: string;
+  // What they did well (graded with the current rubric; older grades have none).
+  didWell?: string;
+  // "A few things to focus on next time" (at most 3 are shown).
   missedSteps: string[];
   repeatNext: boolean;
   ungraded: boolean;
@@ -354,9 +374,9 @@ export function withOverride<T extends Omit<GradedItem, "type" | "points">>(item
   };
 }
 
-// Strong: first try >= 80% and no critical error.
-// Needs coaching: first try 60-79%, or a repeat still below 2/2.
-// At risk: first try below 60%, or any critical error.
+// Great work (strong): first try >= 80% and no critical error.
+// Building skills (needs_coaching): first try 60-79%, or a repeat still below 2/2.
+// Needs extra support (at_risk): first try below 60%, or any critical error.
 // An answer the grader couldn't score counts toward neither points nor max
 // until VFDA scores it.
 export function dayResult(items: GradedItem[], rules: CertificationRules) {

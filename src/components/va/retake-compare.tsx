@@ -45,8 +45,8 @@ export function RetakeCompare({ data }: { data: RetakeComparison }) {
         </tbody>
       </Table>
       <p className="text-sm text-muted">
-        Highlighted: missed the first time ({data.fixed} of {data.missedFirst} got full points on the retake). The first try stays the
-        official score.
+        Highlighted: below full points the first time ({data.fixed} of {data.missedFirst} got full points on the retake). The first try
+        stays the official score.
       </p>
     </div>
   );

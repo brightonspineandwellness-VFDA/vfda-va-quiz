@@ -23,9 +23,9 @@ import {
   reportText,
   slackEscape,
   criticalCount,
+  finishedSubject,
   flagsText,
   repeatStats,
-  trendShort,
   type DayHistory,
   workflowStatus,
   type AttemptReport,
@@ -33,7 +33,7 @@ import {
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
 import { normalizeScope, scopeText } from "@/lib/va-scope";
-import { attemptLabel, percentOf, RESULT_LABELS, sinceStartText, todayIn, trend, withOverride, type ResultLabel } from "@/lib/va-flow";
+import { attemptLabel, percentOf, RESULT_LABELS, sinceStartText, todayIn, withOverride, type ResultLabel } from "@/lib/va-flow";
 
 const TIME_ZONE = process.env.TRAINING_TIME_ZONE || "America/New_York";
 
@@ -124,10 +124,6 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
   // them for the workflow statuses.
   const attemptRows = must(attempts) ?? [];
   const attemptIds = attemptRows.map((a) => a.id);
-  // First-try % of each training day up to this one.
-  const dayPercents = attemptRows
-    .filter((a) => a.kind === "day" && a.submitted_at! <= attempt.submitted_at!)
-    .map((a) => percentOf(a.first_try_points, a.max_points));
   const allItems =
     must(
       await db
@@ -188,7 +184,6 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
   // day, next to its first try.
   const drill = attempt.kind === "retrain" || attempt.kind === "recheck" ? (attempt.kind as "retrain" | "recheck") : null;
   const retake = attempt.kind === "retake" ? await loadRetakeComparison(db, attempt.id) : null;
-  const percents = drill ? [percentOf(attempt.first_try_points, attempt.max_points)] : dayPercents;
   const drillWorkflow = drill ? (mine[0]?.workflow ?? "") : "";
   const dayWorkflows = [...new Set(mine.map((i) => i.workflow))].sort();
   // Workflow statuses are first-try evidence: retakes don't count.
@@ -197,7 +192,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     .filter((i) => !retakeIds.has(i.attempt_id))
     .map(toItem)
     .filter((i): i is ReportItem => !!i);
-  // The trend: every training day taken up to this attempt, its retake beside it.
+  // Every training day taken up to this attempt, its retake beside it.
   const upTo = attemptRows.filter((a) => a.submitted_at! <= attempt.submitted_at!);
   const labelOf = (r: string | null) => (r && r in RESULT_LABELS ? (r as ResultLabel) : null);
   const history: DayHistory[] = upTo
@@ -219,6 +214,9 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     .map(toItem)
     .filter((i): i is ReportItem => !!i);
 
+  // A day the VA retook: the latest finished retake's raw score.
+  const myRetake = attempt.kind === "day" ? attemptRows.filter((a) => a.kind === "retake" && a.parent_attempt_id === attempt.id).at(-1) : undefined;
+
   const report: AttemptReport = {
     vaName: must(va)?.full_name || must(va)?.email || "VA",
     officeName: must(office)?.name ?? "Office",
@@ -227,7 +225,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     points: Number(attempt.first_try_points ?? 0),
     maxPoints: attempt.max_points ?? 0,
     result: attempt.result as ResultLabel,
-    trend: { direction: trend(percents), percents },
+    retakeScore: myRetake ? { points: Number(myRetake.first_try_points ?? 0), max: myRetake.max_points ?? 0 } : null,
     timeSpent: attempt.time_spent,
     fastFinish: attempt.fast_finish,
     pastes: Array.isArray(attempt.paste_log) ? attempt.paste_log.length : 0,
@@ -401,14 +399,15 @@ export async function sendTestLeads4Life(): Promise<{ status: number | null; tex
         va_name: "Test VA",
         day: "W1D1",
         topic: "Basics & VA Onboarding",
-        result: "Needs coaching",
+        result: "Building skills",
         first_try_score: "72%",
+        raw_score: "13/18",
         is_retake: "no",
         report_link: link,
         // Matches the sample PDF.
         critical_errors: 1,
         flags: "fast finish, 3 pasted answers",
-        trend: "improving, +12 pts",
+        email_subject: "Test VA finished W1D1: Building skills",
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -491,7 +490,6 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
   const loaded = await loadAttemptReport(db, attemptId);
   if (!loaded) return { sent: 0, failed: 0 };
   const { report, doctors } = loaded;
-  const subject = reportSections(report).subject;
   const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
   const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report);
   // Each send gets its own idempotency key, so Resend and Leads4Life don't drop it as a repeat.
@@ -500,6 +498,9 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
   const pdfNote = pdf ? "" : `The report PDF couldn't be made (${pdfError}). Download it from the attempt page.`;
   const attachments = pdf ? [{ filename: reportFileName({ ...report, retake: !!report.retake }), content: Buffer.from(pdf.bytes).toString("base64") }] : [];
   const percent = report.maxPoints ? Math.round((report.points * 100) / report.maxPoints) : 0;
+  // The email and Slack post show the PDF's sections (what went well first).
+  const content = pdf?.content ?? null;
+  const subject = reportSections(report, content).subject;
 
   // VFDA: the email with the PDF attached, and Slack with both links.
   const email = (to: string): Target => ({
@@ -509,13 +510,13 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
       sendEmail(
         to,
         subject,
-        reportHtml(report, link) + (pdfNote ? `<p style="color:#9b1c1c">${escapeHtml(pdfNote)}</p>` : ""),
-        reportText(report, link) + (pdfNote ? `\n\n${pdfNote}` : ""),
+        reportHtml(report, link, content) + (pdfNote ? `<p style="color:#9b1c1c">${escapeHtml(pdfNote)}</p>` : ""),
+        reportText(report, link, content) + (pdfNote ? `\n\n${pdfNote}` : ""),
         `attempt-${attemptId}-${to}${keySuffix}`,
         attachments,
       ),
   });
-  const slack = reportSlack(report, link);
+  const slack = reportSlack(report, link, content);
   // Each doctor: one Leads4Life POST with the PDF's 30-day link.
   const leads4life = (d: { email: string; name: string }): Target => ({
     channel: LEADS4LIFE,
@@ -533,11 +534,12 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
           topic: report.dayTitle,
           result: RESULT_LABELS[report.result],
           first_try_score: `${percent}%`,
+          raw_score: `${report.points}/${report.maxPoints}`,
           is_retake: report.retake ? "yes" : "no",
           report_link: stored.link,
           critical_errors: criticalCount(report),
           flags: flagsText(report),
-          trend: trendShort(report.history ?? []),
+          email_subject: finishedSubject(report),
         },
         `attempt-${attemptId}-${d.email}${keySuffix}`,
       );

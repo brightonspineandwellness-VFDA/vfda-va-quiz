@@ -8,7 +8,7 @@ import { requireRole } from "@/lib/auth";
 import { minutesText } from "@/lib/report";
 import { createSessionClient } from "@/lib/supabase/server";
 import { toneOf } from "@/lib/theme";
-import { loadMyVaReport, trendLine } from "@/lib/va-reports";
+import { loadMyVaReport } from "@/lib/va-reports";
 
 export default function MyReportPage({ params }: PageProps<"/va/results/[id]">) {
   return (
@@ -20,15 +20,15 @@ export default function MyReportPage({ params }: PageProps<"/va/results/[id]">) 
   );
 }
 
-// The VA-safe report: header, alerts in general terms, the VFDA standards
-// notice, trend, coaching tips. Never the scenarios, answers or answer keys
-// (src/lib/va-report.ts).
+// The VA-safe report, in order: score + label, What went well (grouped by
+// workflow), Things to focus on, Important to review (only with a critical
+// error), gentle flags, the VFDA standards notice, an encouraging last line.
+// Never the scenarios, answers or answer keys (src/lib/va-report.ts).
 async function MyReport({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireRole("va");
   const { id } = await params;
   const v = await loadMyVaReport(user, id, await createSessionClient());
   if (!v) notFound();
-  const max = Math.max(100, ...v.trend.rows.map((r) => r.percent));
 
   return (
     <>
@@ -48,82 +48,62 @@ async function MyReport({ params }: { params: Promise<{ id: string }> }) {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label={v.retake ? "Retake score" : "First-try score"} value={`${v.percent}%`} tone="primary" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatTile label="Result" value={<StatusBadge label={v.resultLabel} size="lg" />} />
-        <StatTile label="Time spent" value={minutesText(v.timeSpent)} />
-        {v.retakePercent !== null && <StatTile label="Retake" value={`${v.retakePercent}%`} tone="accent" />}
-        {v.firstTryPercent !== null && <StatTile label="First try was" value={`${v.firstTryPercent}%`} />}
+        <StatTile label={v.retake ? "Retake score" : "Score"} value={v.score} tone="primary" />
+        {v.otherScore ? <StatTile label={v.otherScore.caption} value={v.otherScore.text} tone="accent" /> : <StatTile label="Time spent" value={minutesText(v.timeSpent)} />}
       </div>
 
-      {!v.alerts.length && !v.flags.length ? (
-        <Notice tone="neutral" title="Alerts">
-          <p className="text-muted">No critical errors or flags.</p>
-        </Notice>
+      {!v.ready ? (
+        <EmptyState title="Your report is being written">Refresh this page in a few minutes.</EmptyState>
       ) : (
-        <Notice tone={v.alerts.length ? "danger" : "warning"} title="Alerts" role="alert">
-          {v.alerts.length > 0 && (
-            <>
-              <p className="font-semibold text-danger">Critical errors</p>
-              <ul className="list-disc pl-5 text-danger">
-                {v.alerts.map((a) => (
+        <>
+          <Card title="What went well" accent={toneOf("Great work")}>
+            {!v.wentWell.length && <p className="text-muted">You finished every question. Your strengths show up here as you build them.</p>}
+            <div className="flex flex-col gap-4">
+              {v.wentWell.map((g, n) => (
+                <div key={`${g.name}-${n}`} className="flex flex-col gap-1">
+                  {g.name && <p className="font-semibold">{g.name}</p>}
+                  <ul className="flex list-disc flex-col gap-1.5 pl-5">
+                    {g.bullets.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card title="Things to focus on" description="Each one names the card to review.">
+            {!v.tips.length && <p className="text-muted">Nothing this time: keep doing what you&apos;re doing.</p>}
+            <TipList tips={v.tips} tags={v.tipTags} />
+          </Card>
+
+          {v.important.length > 0 && (
+            <Notice tone="warning" title="Important to review">
+              <ul className="list-disc pl-5">
+                {v.important.map((a) => (
                   <li key={a}>{a}</li>
                 ))}
               </ul>
-            </>
+            </Notice>
           )}
+
           {v.flags.length > 0 && (
-            <>
-              <p className="font-semibold">Flags</p>
+            <Notice tone="neutral" title="Keep in mind">
               <ul className="list-disc pl-5">
                 {v.flags.map((f) => (
                   <li key={f}>{f}</li>
                 ))}
               </ul>
-            </>
+            </Notice>
           )}
-        </Notice>
+        </>
       )}
 
       <StandardsNotice rules={v.standards} audience="va" />
 
-      <Card title="Trend">
-        <ul className="flex flex-col gap-2 text-[0.9375rem]">
-          {v.trend.rows.map((r) => (
-            <li key={r.day} className="grid grid-cols-[3.5rem_1fr_5.5rem] items-center gap-3">
-              <span className={r.current ? "font-semibold" : ""}>{r.day}</span>
-              <span className="h-2.5 overflow-hidden rounded-full bg-surface-muted">
-                <span className={`block h-2.5 rounded-full ${r.current ? "bg-primary" : "bg-success"}`} style={{ width: `${(Math.min(r.percent, max) * 100) / max}%` }} />
-              </span>
-              <span className={`text-right tabular-nums ${r.current ? "font-semibold" : ""}`}>
-                {r.percent}%{r.current && " (this)"}
-              </span>
-            </li>
-          ))}
-        </ul>
-        <p className="font-medium">{trendLine(v)}</p>
-      </Card>
-
-      <Card title="Coaching tips" description="Most important first. Each tip names the card to review.">
-        {!v.ready ? (
-          <EmptyState title="Your coaching tips are being written">Refresh this page in a few minutes.</EmptyState>
-        ) : (
-          <>
-            {!v.tips.length && <p className="text-muted">Nothing to fix: every question got full points.</p>}
-            <TipList tips={v.tips} tags={v.tipTags} />
-          </>
-        )}
-      </Card>
-
-      {v.ready && v.strengths.length > 0 && (
-        <Card title="What you did well" accent={toneOf("Strong")}>
-          <ul className="flex list-disc flex-col gap-2 pl-5">
-            {v.strengths.map((t) => (
-              <li key={t}>{t}</li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {v.ready && <p className="text-lg font-semibold text-success">{v.closing}</p>}
     </>
   );
 }

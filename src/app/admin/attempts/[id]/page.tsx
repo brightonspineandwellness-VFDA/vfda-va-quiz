@@ -8,8 +8,8 @@ import { requireRole } from "@/lib/auth";
 import { attemptStandards } from "@/lib/quiz-reports";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
-// "Resend" sends the report while you wait.
-export const maxDuration = 60;
+// "Resend" sends the report, and "Re-grade with new rubric" grades again, while you wait.
+export const maxDuration = 300;
 
 const CRUMBS = [{ label: "VA training", href: "/admin/vas" }, { label: "Attempt" }];
 

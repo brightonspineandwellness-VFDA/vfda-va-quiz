@@ -29,7 +29,7 @@ type Palette = {
   primaryHover: string;
   primaryFg: string; // text on a primary button
   primarySoft: string; // selected answer, active row
-  accent: string; // teal: progress bar, "Try it again"
+  accent: string; // teal: progress bar, "Let's try one more"
   accentSoft: string;
   success: string;
   successSoft: string;
@@ -128,11 +128,13 @@ const TONE_OF: Record<string, Tone> = {
   done: "success",
   certified: "success",
   strong: "success",
+  "great work": "success",
   live: "success",
   accepted: "success",
   passed: "success",
   open: "info",
   "needs coaching": "warning",
+  "building skills": "warning",
   "needs review": "warning",
   pending: "warning",
   draft: "neutral",
@@ -140,13 +142,14 @@ const TONE_OF: Record<string, Tone> = {
   training: "primary",
   retake: "accent",
   "at risk": "danger",
+  "needs extra support": "danger",
   critical: "danger",
   failed: "danger",
   rejected: "danger",
   locked: "neutral",
 };
 
-// The tone of a status label ("Strong", "Needs coaching", ...); neutral when unknown.
+// The tone of a status label ("Great work", "Building skills", ...); neutral when unknown.
 export const toneOf = (label: string): Tone => TONE_OF[label.trim().toLowerCase()] ?? "neutral";
 
 // The CSS variables for the pages: light by default, dark only when the

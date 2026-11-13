@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth";
 import type { ActionResult } from "@/lib/interview-actions";
 import { createSessionClient } from "@/lib/supabase/server";
-import { linesOf, MAX_TIPS } from "@/lib/va-report";
+import { linesOf, MAX_STRENGTHS, MAX_TIPS } from "@/lib/va-report";
 import { backfillVaReports } from "@/lib/va-reports";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,8 +19,8 @@ export async function saveVaReport(attemptId: string, text: { alerts: string; ti
   if (user?.role !== "vfda_admin") return fail("VFDA admins only.");
   if (!UUID.test(attemptId)) return fail("Invalid request.");
   const tips = linesOf(text.tips, MAX_TIPS);
-  const strengths = linesOf(text.strengths, 2);
-  if (!tips.length && !strengths.length) return fail("Write at least one coaching tip or one thing they did well.");
+  const strengths = linesOf(text.strengths, MAX_STRENGTHS);
+  if (!tips.length && !strengths.length) return fail("Write at least one thing that went well or one thing to focus on.");
   const supabase = await createSessionClient();
   const { data, error } = await supabase
     .from("va_reports")

@@ -26,9 +26,9 @@ export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId
   );
   return (
     <div className="flex flex-col gap-3">
-      {box("alerts", "Critical errors, in general terms (one per line)", Math.max(2, alerts.length + 1))}
-      {box("tips", "Coaching tips, most important first (one per line)", Math.max(4, tips.length + 2))}
-      {box("strengths", "What they did well (one or two lines)", 2)}
+      {box("strengths", "What went well, 4-8 lines (start a line with [Workflow name] to group it)", Math.max(5, strengths.length + 1))}
+      {box("tips", "Things to focus on, most important first, 2-5 lines (end each with \"Review: <card>\")", Math.max(3, tips.length + 1))}
+      {box("alerts", "Important to review: critical errors only, calm, general terms (one per line)", Math.max(2, alerts.length + 1))}
       <span className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -41,7 +41,7 @@ export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId
           }
           className={buttonClass("primary")}
         >
-          {pending ? "Saving…" : "Save tips"}
+          {pending ? "Saving…" : "Save report text"}
         </button>
         {message && (
           <span className={`text-sm ${message.ok ? "font-medium text-success" : "font-medium text-danger"}`}>{message.text}</span>

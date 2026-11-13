@@ -8,6 +8,7 @@
 
 export type MockGrade = {
   score: 0 | 1 | 2;
+  did_well: string;
   reason: string;
   missed_steps: string[];
   critical_error: boolean;
@@ -52,15 +53,19 @@ export function mockGrade(correctResponse: unknown, answerText: string): MockGra
   const answer = new Set(words(answerText));
   const missed = steps.filter((s) => !covers(answer, s));
   const criticalLine = answerText.split("\n").find((l) => l.includes("#critical"));
-  const score: 0 | 1 | 2 = criticalLine ? 0 : missed.length === 0 ? 2 : missed.length * 2 <= steps.length ? 1 : 0;
+  // The lenient rubric (src/lib/ai.ts GRADING_RUBRIC): 2 = about 80% of the
+  // steps covered, 1 = 40-79%, 0 = under 40%. A critical error is never 2.
+  const covered = steps.length ? (steps.length - missed.length) / steps.length : 1;
+  const score: 0 | 1 | 2 = criticalLine ? 0 : covered >= 0.8 ? 2 : covered >= 0.4 ? 1 : 0;
   return {
     score,
+    did_well: covered > 0 ? "Mock grade: you covered several of the key steps." : "Mock grade: you gave the question a full try.",
     reason: criticalLine
       ? "Mock grade: this answer did something the scenario lists as a critical fail."
       : score === 2
-        ? "Mock grade: every required step is there."
-        : `Mock grade: ${missed.length} of ${steps.length} required steps are missing.`,
-    missed_steps: score === 2 ? [] : missed.length ? missed : ["(mock) a required step"],
+        ? "Mock grade: you covered the key steps."
+        : `Mock grade: ${steps.length - missed.length} of ${steps.length} key steps covered.`,
+    missed_steps: score === 2 ? [] : (missed.length ? missed : ["(mock) a key step"]).slice(0, 3),
     critical_error: !!criticalLine,
     critical_quote: criticalLine?.trim() ?? null,
     confidence: answerText.includes("#low") || answerText.trim().length < 20 ? "low" : "high",

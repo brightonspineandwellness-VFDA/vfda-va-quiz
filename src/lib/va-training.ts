@@ -8,7 +8,7 @@ import "server-only";
 // checks the VA itself and returns only what the VA may see: never answer,
 // correct_response, critical_fail or options_rule.
 
-import { aiErrorMessage, CONFIDENCE_VALUE, gradeSituational } from "@/lib/ai";
+import { aiErrorMessage, CONFIDENCE_VALUE, gradeSituational, RUBRIC_VERSION } from "@/lib/ai";
 import type { CurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import { writeRetakeVariants } from "@/lib/scenario-ai";
@@ -371,12 +371,14 @@ async function repeatScenario(ctx: DayContext, id: string) {
   return data as DisplayScenario | null;
 }
 
-// attempt_items keeps feedback as {reason, missed_steps}.
-type StoredFeedback = { reason?: string; missed_steps?: string[]; ungraded?: boolean };
+// attempt_items keeps feedback as {reason, did_well, missed_steps, rubric}.
+// rubric: the grading rubric version (src/lib/ai.ts RUBRIC_VERSION); older grades have none.
+export type StoredFeedback = { reason?: string; did_well?: string; missed_steps?: string[]; ungraded?: boolean; rubric?: number };
 
 const storedFeedback = (f: StoredFeedback | null): Feedback | null =>
   f && {
     reason: f.reason ?? "",
+    didWell: f.did_well || undefined,
     missedSteps: f.missed_steps ?? [],
     repeatNext: true,
     ungraded: !!f.ungraded,
@@ -440,13 +442,12 @@ export type SubmitOutcome = { feedback: Feedback | null; repeat: ServedItem | nu
 
 const MAX_BOX_CHARS = 5000;
 
-async function gradingSettings(db: Db) {
+export async function gradingSettings(db: Db) {
   const rows = must(await db.from("settings").select("key, value").in("key", ["grading", "certification"])) ?? [];
   const grading = (settingValue(rows, "grading") ?? {}) as Record<string, unknown>;
   const certification = (settingValue(rows, "certification") ?? {}) as Record<string, unknown>;
   return {
     rules: certificationRules(grading),
-    rubric: String(grading.situational_rubric ?? ""),
     gradingRules: Array.isArray(grading.rules) ? grading.rules.map(String) : [],
     navigationRule: String(certification.navigation_rule ?? "Don't grade exact buttons or click paths."),
   };
@@ -580,7 +581,6 @@ export async function submitAnswer(
     criticalFail: key.critical_fail,
     escalationLevel: key.escalation_level,
     officeRules: await officeRulesFor(ctx.db, ctx.user.officeId, key.workflow, key.source_document_id),
-    rubric: settings.rubric,
     rules: settings.gradingRules,
     navigationRule: settings.navigationRule,
   });
@@ -603,6 +603,7 @@ export async function submitAnswer(
   const feedback: Feedback = grade
     ? {
         reason: grade.reason,
+        didWell: grade.did_well,
         missedSteps: grade.score < 2 ? grade.missed_steps : [],
         repeatNext: !!repeat,
         ungraded: false,
@@ -610,7 +611,7 @@ export async function submitAnswer(
         review: isVfdaSourceCard(key.source_card) ? null : key.source_card,
       }
     : UNGRADED;
-  const stamp = { reason: feedback.reason, missed_steps: feedback.missedSteps };
+  const stamp = { reason: feedback.reason, did_well: feedback.didWell ?? "", missed_steps: feedback.missedSteps, rubric: RUBRIC_VERSION };
   const confidence = grade ? CONFIDENCE_VALUE[grade.confidence] : null;
   const update =
     phase === "first"
@@ -800,7 +801,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
 }
 
 // ---------------------------------------------------------------------------
-// One optional retake of a whole day (Needs coaching or At risk). Never
+// One optional retake of a whole day (Building skills or Needs extra support). Never
 // blocks the next day; the first try stays the official score.
 // ---------------------------------------------------------------------------
 
@@ -905,7 +906,7 @@ export async function startRetake(user: CurrentUser, parentId: string): Promise<
     build_version: number | null;
   } | null;
   if (!parent || parent.kind !== "day" || !parent.submitted_at || parent.archived_at) return { error: "There's no finished day to retake here." };
-  if (!RETAKE_LABELS.includes(parent.result as ResultLabel)) return { error: "Only a day labeled Needs coaching or At risk can be retaken." };
+  if (!RETAKE_LABELS.includes(parent.result as ResultLabel)) return { error: "Only a day labeled Building skills or Needs extra support can be retaken." };
 
   // Once per day. A retake whose preparation died is started again.
   const existing = must(

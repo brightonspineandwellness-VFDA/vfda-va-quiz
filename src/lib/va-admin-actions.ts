@@ -12,8 +12,10 @@ import { getCurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
 import { refreshQuizReport } from "@/lib/quiz-report-download";
+import { regradeAttempt, regradeOffice } from "@/lib/regrade";
 import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestLeads4Life, sendTestSlack } from "@/lib/reports";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
+import { RESULT_LABELS, type ResultLabel } from "@/lib/va-flow";
 
 const DAY_CODE = /^W\dD\d$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -127,6 +129,45 @@ export async function overrideScore(itemId: string, input: OverrideInput): Promi
     return fail("Saved, but the label couldn't be worked out again. Reload the page.");
   }
   return { ok: true, data: null };
+}
+
+// ---------------------------------------------------------------------------
+// "Re-grade with new rubric": scores again, rebuilds the reports, sends nothing.
+// ---------------------------------------------------------------------------
+
+const labelText = (r: string | null) => (r ? (RESULT_LABELS[r as ResultLabel] ?? r) : "–");
+
+export async function regradeAttemptAction(attemptId: string): Promise<ActionResult<string>> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(attemptId)) return fail("Invalid request.");
+  try {
+    const r = await regradeAttempt(attemptId);
+    return {
+      ok: true,
+      data: `Re-graded ${r.regraded} answer${r.regraded === 1 ? "" : "s"}${r.failed ? ` (${r.failed} couldn't be graded, kept as they were)` : ""}: ${r.before.points}/${r.before.max} ${labelText(r.before.result)} → ${r.after.points}/${r.after.max} ${labelText(r.after.result)}. Reports rebuilt; nothing was sent.`,
+    };
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+export async function regradeOfficeAction(officeId: string): Promise<ActionResult<string>> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(officeId)) return fail("Invalid request.");
+  try {
+    const r = await regradeOffice(officeId);
+    const text = [
+      `${r.done} attempt${r.done === 1 ? "" : "s"} re-graded`,
+      r.skipped ? `${r.skipped} already on the new rubric` : null,
+      r.left ? `${r.left} left: press the button again to carry on` : null,
+      r.errors.length ? `${r.errors.length} failed (${r.errors.join("; ")})` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return r.errors.length ? fail(`${text}.`) : { ok: true, data: `${text}. Reports rebuilt; nothing was sent.` };
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
 }
 
 // ---------------------------------------------------------------------------

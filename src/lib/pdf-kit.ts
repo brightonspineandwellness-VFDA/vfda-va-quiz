@@ -445,5 +445,6 @@ export class Pdf {
   }
 }
 
-// The tone of a result label ("Strong", "Needs coaching", "At risk").
-export const resultTone = (label: string): Tone => (/strong|pass/i.test(label) ? "success" : /risk|fail/i.test(label) ? "danger" : "warning");
+// The tone of a result label ("Great work", "Building skills", "Needs extra support"; older: Strong, Needs coaching, At risk).
+export const resultTone = (label: string): Tone =>
+  /great work|strong|pass/i.test(label) ? "success" : /extra support|risk|fail/i.test(label) ? "danger" : "warning";

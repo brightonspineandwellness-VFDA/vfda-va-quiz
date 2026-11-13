@@ -17,7 +17,7 @@ export function ScenarioRunner({ initial }: { initial: ServedItem }) {
     return (
       <div className="flex flex-col gap-4">
         <QuizProgress item={item} />
-        <FeedbackCard feedback={feedback} title={feedback.missedSteps.length ? "What you missed" : "Saved"} />
+        <FeedbackCard feedback={feedback} title={feedback.ungraded ? "Saved" : "Your feedback"} />
         <div className="flex justify-end">
           <button type="button" onClick={() => router.refresh()} className={buttonClass("primary")}>
             Next →
@@ -67,9 +67,14 @@ function QuizProgress({ item }: { item: ServedItem }) {
   );
 }
 
-// After a situation: the points, what was good, what was missed.
+// After a situation: the points, what they did well first, then at most three
+// things to focus on next time and the card to review. Never "wrong",
+// "failed" or "missed" on VA screens.
 function FeedbackCard({ feedback, title }: { feedback: Feedback; title: string }) {
-  const full = !feedback.ungraded && feedback.missedSteps.length === 0;
+  const focus = feedback.missedSteps.slice(0, 3);
+  const full = !feedback.ungraded && focus.length === 0;
+  // Older grades have no "did well" line; their reason is shown instead.
+  const good = feedback.didWell?.trim() || (full ? feedback.reason : "");
   return (
     <Card
       title={title}
@@ -78,35 +83,35 @@ function FeedbackCard({ feedback, title }: { feedback: Feedback; title: string }
         feedback.ungraded ? (
           <Badge tone="neutral">Waiting for VFDA</Badge>
         ) : (
-          <Badge tone={full ? "success" : feedback.score === 0 ? "danger" : "warning"}>
+          <Badge tone={full ? "success" : feedback.score === 0 ? "warning" : "info"}>
             {typeof feedback.score === "number" ? `${feedback.score}/2` : full ? "2/2" : "Under 2/2"}
           </Badge>
         )
       }
     >
-      {feedback.reason && (
+      {feedback.ungraded && feedback.reason && <p className="text-[0.9375rem]">{feedback.reason}</p>}
+      {!feedback.ungraded && good && (
         <div className="flex flex-col gap-1">
-          {/* The grader's reason; it's only labelled "Good:" when nothing was missed. */}
-          {full && <p className="text-sm font-semibold text-success">Good:</p>}
-          <p className="text-[0.9375rem]">{feedback.reason}</p>
+          <p className="text-sm font-semibold text-success">What you did well</p>
+          <p className="text-[0.9375rem]">{good}</p>
         </div>
       )}
-      {feedback.missedSteps.length > 0 && (
+      {focus.length > 0 && (
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-semibold text-danger">Missed:</p>
+          <p className="text-sm font-semibold text-foreground">A few things to focus on next time:</p>
           <ul className="ml-5 flex list-disc flex-col gap-1 text-[0.9375rem]">
-            {feedback.missedSteps.map((s, i) => (
+            {focus.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
           </ul>
         </div>
       )}
-      {feedback.review && (
+      {feedback.review && focus.length > 0 && (
         <p className="text-[0.9375rem]">
           <span className="font-semibold">Review:</span> {feedback.review}
         </p>
       )}
-      {!feedback.ungraded && feedback.missedSteps.length > 0 && !feedback.repeatNext && (
+      {!feedback.ungraded && focus.length > 0 && !feedback.repeatNext && (
         <p className="text-sm text-muted">VFDA will go over this one with you.</p>
       )}
     </Card>
@@ -221,12 +226,12 @@ function AnswerForm({
       }}
     >
       <QuizProgress item={item} />
-      {item.priorFeedback && <FeedbackCard feedback={item.priorFeedback} title="What you missed on the first try" />}
+      {item.priorFeedback && <FeedbackCard feedback={item.priorFeedback} title="Your feedback on the first try" />}
 
       <Card
         accent={repeat ? "accent" : undefined}
-        title={repeat ? "Try it again" : item.partTitle || typeLabel(item)}
-        description={repeat ? "Same skill, new details." : undefined}
+        title={repeat ? "Let's try one more" : item.partTitle || typeLabel(item)}
+        description={repeat ? "Same skill, new details. Use the tips above." : undefined}
         headingAs="h2"
         actions={<Badge tone={repeat ? "accent" : "primary"}>{typeLabel(item)}</Badge>}
       >

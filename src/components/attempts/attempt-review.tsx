@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { OverrideForm } from "@/components/attempts/override-form";
 import { StandardsNotice } from "@/components/reports/standards";
+import { TestButton } from "@/components/settings/test-button";
 import { ActionButton } from "@/components/setup/action-button";
 import { Badge, ButtonAnchor, Card, Notice, PageHeader, StatusBadge, type Crumb } from "@/components/ui";
 import { RetakeCompare } from "@/components/va/retake-compare";
@@ -8,8 +9,8 @@ import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
 import { minutesText } from "@/lib/report";
 import type { RetakeComparison } from "@/lib/retake";
-import { resendAttemptReport, sendReportAgain } from "@/lib/va-admin-actions";
-import { attemptLabel, percentOf, resultLabel } from "@/lib/va-flow";
+import { regradeAttemptAction, resendAttemptReport, sendReportAgain } from "@/lib/va-admin-actions";
+import { attemptLabel, oldLabelHint, percentOf, resultLabel } from "@/lib/va-flow";
 
 // One attempt, item by item. `admin` adds score overrides (they change only
 // the label) and the report status; the doctor's view is read-only.
@@ -138,7 +139,13 @@ function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
     <>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[0.9375rem]">
         <dt className="text-muted">Label</dt>
-        <dd>{attempt.submitted_at ? <StatusBadge label={resultLabel(attempt.result)} /> : <StatusBadge label="Not finished" tone="neutral" />}</dd>
+        <dd>
+          {attempt.submitted_at ? (
+            <StatusBadge label={resultLabel(attempt.result)} hint={admin ? oldLabelHint(attempt.result) : undefined} />
+          ) : (
+            <StatusBadge label="Not finished" tone="neutral" />
+          )}
+        </dd>
         <dt className="text-muted">{attempt.kind === "retake" ? "Score" : "First try"}</dt>
         <dd className="font-semibold tabular-nums">
           {attempt.first_try_points === null
@@ -165,6 +172,12 @@ function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
         <div className="flex flex-col gap-2 border-t border-line pt-3">
           <ReportStatus attemptId={attempt.id} rows={data.notifications.filter((n) => n.event === "")} />
           {attempt.submitted_at && <SendAgain attemptId={attempt.id} rows={data.notifications.filter((n) => n.event.startsWith("again:"))} />}
+          {attempt.submitted_at && (
+            <div className="flex flex-col gap-1 text-sm">
+              <TestButton action={regradeAttemptAction.bind(null, attempt.id)} label="Re-grade with new rubric" pendingLabel="Re-grading…" />
+              <span className="text-muted">Scores the written answers again, rebuilds the VA report and the PDF. No emails or posts.</span>
+            </div>
+          )}
           {alerts.length > 0 && <p className="text-sm text-muted">Critical error alert sent to {[...new Set(alerts.map((n) => n.recipient))].join(", ")}</p>}
         </div>
       )}
