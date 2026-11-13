@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { OverrideForm } from "@/components/attempts/override-form";
+import { ReportButtons } from "@/components/reports/report-buttons";
 import { StandardsNotice } from "@/components/reports/standards";
 import { TestButton } from "@/components/settings/test-button";
 import { ActionButton } from "@/components/setup/action-button";
-import { Badge, ButtonAnchor, Card, Notice, PageHeader, StatusBadge, type Crumb } from "@/components/ui";
+import { Badge, Card, Notice, PageHeader, StatusBadge, type Crumb } from "@/components/ui";
 import { RetakeCompare } from "@/components/va/retake-compare";
 import { ITEM_TYPE_LABELS } from "@/lib/day-rules";
 import type { AttemptReviewData, ReviewAnswer, ReviewItem } from "@/lib/attempt-review";
@@ -167,7 +168,7 @@ function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
             .join(", ") || "–"}
         </dd>
       </dl>
-      {attempt.submitted_at && <ReportPdfLink attemptId={attempt.id} area={admin ? "admin" : "doctor"} />}
+      {attempt.submitted_at && <ReportButtons attemptId={attempt.id} area={admin ? "admin" : "doctor"} />}
       {admin && (
         <div className="flex flex-col gap-2 border-t border-line pt-3">
           <ReportStatus attemptId={attempt.id} rows={data.notifications.filter((n) => n.event === "")} />
@@ -306,15 +307,6 @@ function SendAgain({ attemptId, rows }: { attemptId: string; rows: Pick<NoteRow,
         </span>
       ))}
     </div>
-  );
-}
-
-// "Download report PDF": the attempt's quiz report (made the first time it's asked for).
-export function ReportPdfLink({ attemptId, area }: { attemptId: string; area: "admin" | "doctor" }) {
-  return (
-    <ButtonAnchor href={`/${area}/attempts/${attemptId}/report-pdf`} size="sm" className="self-start">
-      Download report PDF
-    </ButtonAnchor>
   );
 }
 

@@ -5,8 +5,8 @@ import { quizReportDownload } from "@/lib/quiz-report-download";
 // Making it the first time asks Claude for the coaching tips.
 export const maxDuration = 120;
 
-export async function GET(_request: Request, { params }: RouteContext<"/admin/attempts/[id]/report-pdf">) {
+export async function GET(request: Request, { params }: RouteContext<"/admin/attempts/[id]/report-pdf">) {
   const user = await getCurrentUser();
   if (user?.role !== "vfda_admin") return new Response("Not allowed.", { status: 403 });
-  return quizReportDownload(user, (await params).id);
+  return quizReportDownload(user, (await params).id, new URL(request.url).searchParams.get("view") === "1");
 }

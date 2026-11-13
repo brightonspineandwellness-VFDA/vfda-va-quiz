@@ -1,5 +1,6 @@
 import { Suspense } from "react";
-import { AttemptLink, ReportPdfLink } from "@/components/attempts/attempt-review";
+import { AttemptLink } from "@/components/attempts/attempt-review";
+import { ReportButtons } from "@/components/reports/report-buttons";
 import { CertGrid } from "@/components/certs/cert-grid";
 import { StandardsNotice } from "@/components/reports/standards";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
@@ -106,7 +107,7 @@ async function Grid() {
                   <td className={td}>
                     <span className="flex flex-wrap items-center gap-3">
                       <AttemptLink id={a.id} area="doctor" />
-                      <ReportPdfLink attemptId={a.id} area="doctor" />
+                      <ReportButtons attemptId={a.id} area="doctor" compact />
                     </span>
                   </td>
                 </tr>

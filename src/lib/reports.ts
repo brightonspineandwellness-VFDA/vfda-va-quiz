@@ -556,6 +556,30 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
   ]);
 }
 
+// A test send of one attempt's report: the same email and PDF VFDA gets, to
+// one address, subject marked [TEST]. Nothing is recorded and nothing else
+// is sent (no Slack, no Leads4Life).
+export async function sendTestAttemptEmail(attemptId: string, to: string): Promise<string | null> {
+  const db = createAdminClient();
+  const loaded = await loadAttemptReport(db, attemptId);
+  if (!loaded) return "This attempt isn't finished yet.";
+  const { report } = loaded;
+  const { pdf, error: pdfError } = await attemptPdf(db, attemptId, report);
+  const content = pdf?.content ?? null;
+  const link = attemptLink(attemptId, "admin");
+  const pdfNote = pdf ? "" : `The report PDF couldn't be made (${pdfError}).`;
+  return tryTwice(() =>
+    sendEmail(
+      to,
+      `[TEST] ${reportSections(report, content).subject}`,
+      reportHtml(report, link, content) + (pdfNote ? `<p style="color:#9b1c1c">${escapeHtml(pdfNote)}</p>` : ""),
+      reportText(report, link, content) + (pdfNote ? `\n\n${pdfNote}` : ""),
+      `test-attempt-${attemptId}-${to}-${Date.now()}`,
+      pdf ? [{ filename: reportFileName({ ...report, retake: !!report.retake }), content: Buffer.from(pdf.bytes).toString("base64") }] : [],
+    ),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // A critical error: sent at once to VFDA and every doctor of the office, with the
 // VA's exact words. The VA keeps going.

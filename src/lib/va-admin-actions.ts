@@ -13,7 +13,7 @@ import { recalculateCertifications } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
 import { refreshQuizReport } from "@/lib/quiz-report-download";
 import { regradeAttempt, regradeOffice } from "@/lib/regrade";
-import { sendAttemptReport, sendSopNotice, sendTestEmail, sendTestLeads4Life, sendTestSlack } from "@/lib/reports";
+import { sendAttemptReport, sendSopNotice, sendTestAttemptEmail, sendTestEmail, sendTestLeads4Life, sendTestSlack } from "@/lib/reports";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 import { RESULT_LABELS, type ResultLabel } from "@/lib/va-flow";
 
@@ -80,6 +80,22 @@ export async function sendReportAgain(attemptId: string): Promise<ActionResult> 
   const { sent, failed } = await sendAttemptReport(attemptId, { again: new Date().toISOString() });
   if (!sent && !failed) return fail("This attempt isn't finished yet.");
   return failed ? fail(`${failed} couldn't be sent. See the errors under "Sent again".`) : { ok: true, data: null };
+}
+
+// "Send report" on the Reports page: to the doctor (the full send again: VFDA
+// email, Slack and Leads4Life to every doctor), or a test email to one address.
+export async function sendReportTo(attemptId: string, target: "doctor" | "test", email = ""): Promise<ActionResult<string>> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(attemptId)) return fail("Invalid request.");
+  if (target === "test") {
+    const to = email.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return fail("Enter an email address.");
+    const error = await sendTestAttemptEmail(attemptId, to);
+    return error ? fail(error) : { ok: true, data: `Test email sent to ${to}.` };
+  }
+  const { sent, failed } = await sendAttemptReport(attemptId, { again: new Date().toISOString() });
+  if (!sent && !failed) return fail("This attempt isn't finished yet.");
+  return failed ? fail(`${sent} sent, ${failed} couldn't be sent. See the delivery column.`) : { ok: true, data: `Sent (${sent}): VFDA email, Slack and Leads4Life.` };
 }
 
 // ---------------------------------------------------------------------------
