@@ -140,7 +140,10 @@ const clip = (s: string, n: number) => {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length <= n ? t : `${t.slice(0, n - 1).trimEnd()}…`;
 };
-const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+// Lower-case the first letter, unless it starts an acronym ("VA Onboarding").
+const lower = (s: string) => (/^[A-Z]{2}/.test(s) ? s : s.charAt(0).toLowerCase() + s.slice(1));
+// "the Master Phone Script", "the VA Onboarding Card" (never "card card").
+const theCard = (card: string) => `the ${card.trim()}${/\bcard$/i.test(card.trim()) ? "" : " card"}`;
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const sentence = (s: string) => s.trim().replace(/[.\s]+$/, "") + ".";
 
@@ -161,15 +164,15 @@ export function orderNeedsWork<T extends Pick<NeedsWorkItem, "critical" | "score
 export const cardOf = (i: Pick<NeedsWorkItem, "sourceCard" | "workflowName">) => i.sourceCard?.trim() || `${i.workflowName} card`;
 const topicOf = (i: Pick<NeedsWorkItem, "partTitle" | "workflowName">) => i.partTitle?.trim() || i.workflowName;
 
-// "you handled" -> "handled": the grader's lines are to the VA; the doctor's bullets start with the skill.
+// The grader's lines are to the VA ("you"); the doctor's bullets are about the VA.
 const thirdPerson = (s: string) =>
   upper(
     s
       .trim()
       .replace(/^(great job|nice work|well done|good job)[,!:]?\s*/i, "")
       .replace(/^you\s+(did a (great|good) job\s+)?/i, "")
-      .replace(/\byour\b/gi, "their")
-      .replace(/\byou\b/gi, "they"),
+      .replace(/\byour\b/gi, "the VA's")
+      .replace(/\byou\b/gi, "the VA"),
   );
 
 // AI_MODE=mock, or when Claude's answer can't be used: tips from the grading itself.
@@ -178,7 +181,7 @@ export function mockTips(needsWork: NeedsWorkItem[], doneWell: DoneWellItem[]): 
   const add = (workflow: string, line: string) => strengths.set(workflow, [...(strengths.get(workflow) ?? []), line]);
   for (const d of doneWell) {
     const skill = d.partTitle.trim() || d.correct[0] || d.workflowName;
-    add(d.workflow, `Handled ${lower(skill)} with every key step${d.sourceCard?.trim() ? `, just like the ${d.sourceCard.trim()} card` : ""}`);
+    add(d.workflow, d.didWell?.trim() ? thirdPerson(d.didWell) : `Handled ${lower(skill)} with every key step${d.sourceCard?.trim() ? `, just like ${theCard(d.sourceCard)}` : ""}`);
   }
   for (const i of needsWork) if (i.didWell.trim()) add(i.workflow, thirdPerson(i.didWell));
   return {
@@ -219,12 +222,27 @@ function capBullets(groups: { workflow: string; bullets: string[] }[], max: numb
 // comes from the mock tips.
 export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneWellItem[], resultLabel = ""): Tips {
   const fallback = mockTips(needsWork, doneWell);
-  const workflows = [...new Set([...doneWell.map((d) => d.workflow), ...needsWork.map((i) => i.workflow)])];
-  const strengths = workflows
-    .map((w) => {
-      const bullets = (raw.strengths.find((s) => s.workflow === w)?.bullets ?? []).map((b) => clip(b, MAX_BULLET)).filter(Boolean);
-      return { workflow: w, bullets: (bullets.length ? bullets : (fallback.strengths.find((s) => s.workflow === w)?.bullets ?? [])).slice(0, PER_WORKFLOW) };
-    })
+  const all = [...doneWell, ...needsWork];
+  const workflows = [...new Set(all.map((d) => d.workflow))];
+  const nameOf = new Map(all.map((d) => [d.workflow, d.workflowName.toLowerCase()]));
+  // Claude may answer "WF04", "WF04 Phone handling" or "Phone handling".
+  const matches = (given: string, w: string) => {
+    const g = given.trim().toLowerCase();
+    return g === w.toLowerCase() || g.startsWith(`${w.toLowerCase()} `) || g === nameOf.get(w);
+  };
+  const fromClaude = workflows.map((w) => ({
+    workflow: w,
+    bullets: raw.strengths
+      .filter((s) => matches(s.workflow, w))
+      .flatMap((s) => s.bullets)
+      .map((b) => clip(b, MAX_BULLET))
+      .filter(Boolean)
+      .slice(0, PER_WORKFLOW),
+  }));
+  // Enough from Claude: use only those. Otherwise fill the empty workflows from the grading.
+  const enough = fromClaude.reduce((n, g) => n + g.bullets.length, 0) >= wentWellRange(resultLabel).min;
+  const strengths = fromClaude
+    .map((g) => (g.bullets.length || enough ? g : { workflow: g.workflow, bullets: (fallback.strengths.find((s) => s.workflow === g.workflow)?.bullets ?? []).slice(0, PER_WORKFLOW) }))
     .filter((g) => g.bullets.length);
   return {
     items: fallback.items.map((f) => {

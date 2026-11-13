@@ -87,8 +87,9 @@ strengths ("What went well", the biggest section): {MIN}-{MAX} bullets, grouped 
 "You offered two appointment times, just like the Master Phone Script." Use <done_well> (full points) and the did_well notes on
 <needs_work> items (partial credit counts). Start some bullets with "You did a great job..." when it fits.
 
-tips ("Things to focus on"): only for items in <needs_work> without critical="true". Group items on the same card into ONE tip
-(list all their keys). Most important first, at most {TIPS} tips. text: what to do next time, warm and concrete, at most 40 words,
+tips ("Things to focus on"): only for items in <needs_work> without critical="true". Aim for 2-{TIPS} tips (fewer only when
+there are fewer items). Items on the same card AND the same topic become ONE tip (list all their keys); different topics on the
+same card are separate tips. Most important first, at most {TIPS} tips. text: what to do next time, warm and concrete, at most 40 words,
 naming the 1-2 most important points. card: exactly one of the names in <cards>. section: which part of that card to review.
 
 alerts ("Important to review"): one per item marked critical="true", with its key. One calm sentence on what to always do when
@@ -119,7 +120,7 @@ ${cards.map((c) => `- ${c}`).join("\n") || "(none)"}
 <needs_work>
 ${needsWork
   .map(
-    (i) => `<item key="${i.key}" workflow="${i.workflowName}" card="${cardOf(i)}" topic="${i.partTitle || i.workflowName}"${i.critical ? ' critical="true"' : ""}>
+    (i) => `<item key="${i.key}" workflow="${i.workflowName}" card="${cardOf(i)}" topic="${i.partTitle || i.workflowName}" points="${i.score ?? "ungraded"}/${i.points}"${i.critical ? ' critical="true"' : ""}>
 <scenario>${i.scenario}</scenario>
 <correct>${i.correct.join("; ")}</correct>
 <va_answer>${i.answer || "(left empty)"}</va_answer>

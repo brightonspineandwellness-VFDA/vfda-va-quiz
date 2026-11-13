@@ -201,7 +201,7 @@ const TipsSchema = z.object({
   ),
   strengths: z.array(
     z.object({
-      workflow: z.string(),
+      workflow: z.string().describe('The workflow code only, e.g. "WF04"'),
       bullets: z.array(z.string()).describe("Specific skills shown, each naming the card it matches. No scenarios, no answers"),
     }),
   ),
@@ -211,7 +211,8 @@ const TIPS_SYSTEM = `You write the report for a virtual assistant (VA) in traini
 The doctor and VFDA read it. Practice scenarios use fake patients only. Tone: warm, specific, encouraging, never shaming.
 Never use the words "wrong", "failed" or "missed".
 
-strengths ("What went well", the biggest part of the report): {MIN}-{MAX} bullets in all, grouped by workflow code.
+strengths ("What went well", the biggest part of the report): {MIN}-{MAX} bullets in all, grouped by workflow. workflow is the
+code only, exactly as given (e.g. "WF04"); cover every workflow that has something done well.
 - Each bullet names a specific skill the VA showed and the card it matches, starting with a verb, e.g.
   "Offered two appointment times, just like the Master Phone Script" or "Verified the patient's date of birth before sharing
   details, as the HIPAA card asks".

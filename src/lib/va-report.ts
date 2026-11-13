@@ -89,14 +89,16 @@ export function groupStrengths(lines: string[]): WentWellGroup[] {
   return groups;
 }
 
-// Items below full points that aren't critical errors, grouped by the card to review, most important first.
+// Items below full points that aren't critical errors, grouped by the card to
+// review and the topic (so one card can give several focus tips), most important first.
 export function tipGroups(needsWork: NeedsWorkItem[]) {
-  const groups: { card: string; items: NeedsWorkItem[] }[] = [];
+  const groups: { card: string; topic: string; items: NeedsWorkItem[] }[] = [];
   for (const i of orderNeedsWork(needsWork).filter((x) => !x.critical)) {
     const card = cardOf(i);
-    const g = groups.find((x) => x.card === card);
+    const topic = topicOf(i);
+    const g = groups.find((x) => x.card === card && x.topic.toLowerCase() === topic.toLowerCase());
     if (g) g.items.push(i);
-    else groups.push({ card, items: [i] });
+    else groups.push({ card, topic, items: [i] });
   }
   return groups;
 }
@@ -120,9 +122,8 @@ export function fallbackVaTips(needsWork: NeedsWorkItem[], doneWell: DoneWellIte
       .slice(0, MAX_TIPS)
       .map((g) => {
         const first = g.items.flatMap((i) => i.missed)[0];
-        const topics = [...new Set(g.items.map(topicOf))];
-        const what = first ? lower(first.replace(/[.\s]+$/, "")) : `go through the card's steps for ${lower(topics[0])} in order`;
-        return `Next time, ${what}. Review: ${g.card} – the steps for ${topics.length === 1 ? lower(topics[0]) : "these topics"}.`;
+        const what = first ? lower(first.replace(/[.\s]+$/, "")) : `go through the card's steps for ${lower(g.topic)} in order`;
+        return `Next time, ${what}. Review: ${g.card} – ${lower(g.topic)}.`;
       }),
     strengths: unique,
   };
@@ -185,19 +186,22 @@ export function checkVaTips(raw: RawVaTips, needsWork: NeedsWorkItem[], doneWell
 
   const groups = tipGroups(needsWork);
   const cards = new Set(groups.map((g) => g.card.toLowerCase()));
-  const used = new Set<string>();
+  const focusKeys = new Set(groups.flatMap((g) => g.items.map((i) => i.key)));
+  const covered = new Set<string>();
   const tips: string[] = [];
   for (const t of raw.tips) {
     const text = safe(t.text);
     const card = t.card?.trim();
-    if (!text || !card || !cards.has(card.toLowerCase()) || used.has(card.toLowerCase())) continue;
-    used.add(card.toLowerCase());
+    const keys = (t.keys ?? []).filter((k) => focusKeys.has(k));
+    // A tip must name one of the VA's cards and cover something not covered yet.
+    if (!text || !card || !cards.has(card.toLowerCase()) || !keys.length || keys.every((k) => covered.has(k))) continue;
+    keys.forEach((k) => covered.add(k));
     const section = t.section?.trim() ? ` – ${clip(t.section, 120)}` : "";
     tips.push(`${text.replace(/\s*review:.*$/i, "").replace(/[.\s]+$/, "")}. Review: ${card}${section}.`);
   }
-  // A card Claude left out gets the fallback line.
+  // A group Claude left out gets the fallback line.
   groups.forEach((g, n) => {
-    if (!used.has(g.card.toLowerCase())) tips.push(fallback.tips[n] ?? fallbackVaTips([...g.items], []).tips[0]);
+    if (!g.items.some((i) => covered.has(i.key))) tips.push(fallback.tips[n] ?? fallbackVaTips([...g.items], []).tips[0]);
   });
   return { alerts, tips: tips.slice(0, MAX_TIPS), strengths: finalStrengths };
 }
