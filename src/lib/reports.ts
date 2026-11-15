@@ -408,6 +408,7 @@ export async function sendTestLeads4Life(): Promise<{ status: number | null; tex
         critical_errors: 1,
         flags: "fast finish, 3 pasted answers",
         email_subject: "Test VA finished W1D1: Building skills",
+        report_type: "quiz_report",
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -517,7 +518,7 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
       ),
   });
   const slack = reportSlack(report, link, content);
-  // Each doctor: one Leads4Life POST with the PDF's 30-day link.
+  // Each doctor: one Leads4Life POST with the PDF's permanent link.
   const leads4life = (d: { email: string; name: string }): Target => ({
     channel: LEADS4LIFE,
     recipient: d.email,
@@ -536,10 +537,11 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
           first_try_score: `${percent}%`,
           raw_score: `${report.points}/${report.maxPoints}`,
           is_retake: report.retake ? "yes" : "no",
-          report_link: stored.link,
+          report_link: stored.permanent,
           critical_errors: criticalCount(report),
           flags: flagsText(report),
           email_subject: finishedSubject(report),
+          report_type: "quiz_report",
         },
         `attempt-${attemptId}-${d.email}${keySuffix}`,
       );
@@ -550,7 +552,7 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
     {
       channel: "slack",
       recipient: SLACK_RECIPIENT,
-      send: () => postSlack({ text: pdf ? `${slack.text}\n<${pdf.link}|Report PDF> (link valid 30 days)` : slack.text }),
+      send: () => postSlack({ text: pdf ? `${slack.text}\n<${pdf.permanent}|Report PDF>` : slack.text }),
     },
     ...doctors.map(leads4life),
   ]);

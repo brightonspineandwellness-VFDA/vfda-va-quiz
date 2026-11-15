@@ -1,9 +1,13 @@
 import { openDueRechecks } from "@/lib/certifications";
+import { sendDueHandoffGuides } from "@/lib/handoff-guide";
 import { runReminders } from "@/lib/reminders";
 import { todayIn } from "@/lib/va-flow";
+import { sendWeeklySummaries } from "@/lib/weekly-summary";
 
 // Daily (vercel.json): opens a recheck for every certification past its
-// recheck date, then reminds VAs who are behind (src/lib/reminders.ts).
+// recheck date, then reminds VAs who are behind (src/lib/reminders.ts),
+// sends the Friday weekly summaries (src/lib/weekly-summary.ts) and the
+// handoff guide of every VA who just finished training (src/lib/handoff-guide.ts).
 // Vercel sends CRON_SECRET as a bearer token; nothing else may run it.
 export const maxDuration = 300;
 
@@ -20,5 +24,11 @@ export async function GET(request: Request) {
     console.error("Reminders failed:", e);
     return { error: e instanceof Error ? e.message : String(e) };
   });
-  return Response.json({ today, due: result.due, opened: result.opened.length, errors: result.errors.length, reminders });
+  const failedWith = (what: string) => (e: unknown) => {
+    console.error(`${what} failed:`, e);
+    return { error: e instanceof Error ? e.message : String(e) };
+  };
+  const weekly = await sendWeeklySummaries().catch(failedWith("Weekly summaries"));
+  const handoff = await sendDueHandoffGuides().catch(failedWith("Handoff guides"));
+  return Response.json({ today, due: result.due, opened: result.opened.length, errors: result.errors.length, reminders, weekly, handoff });
 }

@@ -41,6 +41,10 @@ export type VaReminder = {
   officeName: string;
   // The next quiz ("W1D3: Phone basics"), null when there is none to nag about.
   next: string | null;
+  // Every training day of the VA's path is done (the handoff guide is due).
+  finished: boolean;
+  // When the VA's last day quiz was submitted (ISO), null before the first.
+  lastSubmitted: string | null;
   activity: Activity;
   state: ReminderState;
   anchor: { key: string; reason: string } | null;
@@ -143,6 +147,13 @@ export async function loadReminderBoard(db: Db, now = new Date()): Promise<VaRem
       officeId: va.office_id,
       officeName: office.name,
       next: eligible ? `${today_.current.day.code}: ${today_.current.day.title}` : null,
+      finished: today_.kind === "finished",
+      lastSubmitted:
+        quizzes
+          .map((a) => a.submitted_at)
+          .filter((t): t is string => !!t)
+          .sort()
+          .pop() ?? null,
       activity: act,
       state: ep.state,
       anchor: ep.anchor,
