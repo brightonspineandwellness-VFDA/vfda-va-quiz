@@ -13,7 +13,7 @@ import "server-only";
 
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
-import { candidatesOf, interleave, MEETINGS, mockMeetings, PER_MEETING, whyTest, type Candidate, type Dated } from "@/lib/handoff-guide-core";
+import { candidatesOf, interleave, MEETINGS, mockMeetings, PER_MEETING, whyTest, byDay, type Candidate, type Dated } from "@/lib/handoff-guide-core";
 import { handoffGuidePdf, type GuideSkill, type HandoffGuide } from "@/lib/handoff-guide-pdf";
 import { cardsTested as cardsOf, type DoneWellItem, type NeedsWorkItem } from "@/lib/quiz-report";
 import { loadItems, QUIZ_REPORT_BUCKET } from "@/lib/quiz-reports";
@@ -47,10 +47,10 @@ const GuideSchema = z.object({
         z.object({
           key: z.string().describe("The skill's key, exactly as given"),
           title: z.string().describe("The skill in 3-8 words"),
-          showMe: z.string().describe('One "Show me how you..." request the VA can do on screen in a few minutes'),
-          why: z.string().describe("One follow-up asking why they do it that way"),
-          couldGoWrong: z.string().describe("One question about what could go wrong and how they'd handle it"),
-          bestPractices: z.array(z.string()).describe("2-4 short things the doctor checks while watching, from the steps"),
+          showMe: z.string().describe('One "Show me how you..." request the VA can do on screen in a few minutes. At most 30 words'),
+          why: z.string().describe("One follow-up asking why they do it that way. At most 15 words"),
+          couldGoWrong: z.string().describe("One question about what could go wrong and how they'd handle it. At most 25 words"),
+          bestPractices: z.array(z.string()).describe("3 short things the doctor checks while watching, from the steps. At most 10 words each"),
         }),
       ),
     }),
@@ -69,8 +69,10 @@ Pick skills from <skills> (by key) and plan ${MEETINGS} meetings of 3-${PER_MEET
 - The doctor is not a trained trainer. Make each prompt say exactly what to ask for and what a good answer shows.
 - <history> says when the skill came up in training and whether the VA got it right. For a skill they had trouble with,
   aim showMe and couldGoWrong at the part in <to_practice>, so the doctor checks that exact piece is solid now.
+  <to_practice> comes from quiz scenarios: turn it into the general rule and never use the scenario's patient names.
 - Each prompt is concrete for a chiropractic front desk and doable on screen. Use the steps given; never invent office policies.
 - Tone: warm and practical, never shaming. Never use "wrong" or "failed".
+- Keep it short and plain: the doctor reads it during the meeting. Never use the quiz scenarios' patient names.
 - bestPractices: what good looks like, taken from the steps (and <to_practice> for building skills).`;
 
 async function guideMeetings(candidates: Candidate[]): Promise<HandoffGuide["meetings"]> {
@@ -83,7 +85,7 @@ ${pool
     (c) => `<skill key="${c.key}" mix="${c.mix}" workflow="${c.workflowName}" card="${c.card}">
 <topic>${c.topic}</topic>
 <steps>${c.steps.join("; ") || "(none listed)"}</steps>
-${c.seen.length ? `<history>${c.seen.map((x) => `${x.day}: ${x.ok ? "got it right" : "needed help"}`).join("; ")}</history>` : ""}
+${c.seen.length ? `<history>${byDay(c).map((x) => `${x.day}: ${x.right} of ${x.total} right`).join("; ")}</history>` : ""}
 ${c.toPractice.length ? `<to_practice>${c.toPractice.join("; ")}</to_practice>` : ""}
 </skill>`,
   )

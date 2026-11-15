@@ -28,8 +28,10 @@ const tagBadge = (t: TipTag | null | undefined) =>
     : null;
 
 // "From your Trello cards" / "VFDA standard: not on your cards yet".
-export function sourcesSection(pdf: Pdf, r: Pick<QuizReport, "cardsTested" | "standards">, o: { when?: string } = {}) {
+export function sourcesSection(pdf: Pdf, r: Pick<QuizReport, "cardsTested" | "standards">, o: { when?: string; max?: number } = {}) {
   const when = o.when ?? "today's";
+  const shown = o.max ? r.standards.slice(0, o.max) : r.standards;
+  const more = r.standards.length - shown.length;
   pdf.heading("Your cards vs. VFDA standard", { keep: 90 });
   const cards = r.cardsTested ?? [];
   pdf.box("primary", [
@@ -51,7 +53,8 @@ export function sourcesSection(pdf: Pdf, r: Pick<QuizReport, "cardsTested" | "st
         size: 9.5,
         gap: 4,
       },
-      ...r.standards.map((s) => ({ text: `- ${s}`, size: 9.5, indent: 6, gap: 1 })),
+      ...shown.map((s) => ({ text: `- ${s}`, size: 9.5, indent: 6, gap: 1 })),
+      ...(more > 0 ? [{ text: `+ ${more} more (each daily quiz report lists the ones that day used)`, size: 9.5, color: muted, indent: 6, gap: 1 }] : []),
     ]);
   } else {
     pdf.text(`Everything in ${when} quiz came from your cards.`, { size: 9.5, color: muted, gap: 4 });

@@ -77,10 +77,10 @@ export async function handoffGuidePdf(g: HandoffGuide): Promise<Uint8Array> {
     },
   ]);
 
-  sourcesSection(pdf, g, { when: "the training's" });
+  sourcesSection(pdf, g, { when: "the training's", max: 8 });
 
   g.meetings.forEach((m, n) => {
-    if (n > 0 || pdf.y < 380) pdf.newPage();
+    if (n === 0 || pdf.y < 300) pdf.newPage();
     pdf.heading(`Meeting ${n + 1}${m.title ? `: ${m.title}` : ""}`, { number: n + 1, keep: 120 });
     m.skills.forEach((s, i) => {
       pdf.numbered(i + 1, s.title, MIX_LABEL[s.mix], [

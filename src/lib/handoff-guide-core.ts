@@ -62,42 +62,59 @@ export function candidatesOf(items: { item: Dated<NeedsWorkItem> | Dated<DoneWel
     });
   };
   for (const { item, building } of items) add(item, building);
-  // A skill they had trouble with but then got right every time since is
-  // building no more than it's a strength: keep it "building" so the doctor
-  // checks it held, but the reason says it came good.
   return [...out.values()];
 }
 
-const days = (d: string[]) => {
-  const u = [...new Set(d)];
-  return u.length > 2 ? `${u.slice(0, -1).join(", ")} and ${u[u.length - 1]}` : u.join(" and ");
-};
+// "W1D3" -> "Week 1 Day 3" (doctors don't know the codes); "W1D3 retake" too.
+export const dayLabel = (d: string) => d.replace(/^W(\d+)D(\d+)/, "Week $1 Day $2");
+const list = (raw: string[]) => { const d = raw.map(dayLabel); return d.length > 2 ? `${d.slice(0, -1).join(", ")} and ${d[d.length - 1]}` : d.join(" and "); };
+
+// The skill's training history by day, in order: questions right of asked.
+export function byDay(c: Candidate) {
+  const out: { day: string; right: number; total: number }[] = [];
+  for (const s of c.seen) {
+    let d = out.find((x) => x.day === s.day);
+    if (!d) out.push((d = { day: s.day, right: 0, total: 0 }));
+    d.total++;
+    if (s.ok) d.right++;
+  }
+  return out;
+}
 
 // "Why we're testing this": plain words for a doctor who isn't a trainer,
-// from the skill's history in training.
+// from the skill's history in training (the prompts say what to look for).
 export function whyTest(c: Candidate): string {
-  const missed = c.seen.filter((s) => !s.ok).map((s) => s.day);
-  const right = c.seen.filter((s) => s.ok).map((s) => s.day);
-  const lastMiss = c.seen.map((s) => s.ok).lastIndexOf(false);
-  const fixedLater = lastMiss >= 0 && c.seen.slice(lastMiss + 1).some((s) => s.ok);
-  const watch = c.toPractice[0] ? ` Watch for: ${lower(c.toPractice[0]).replace(/\.$/, "")}.` : "";
+  const d = byDay(c);
+  const trouble = d.filter((x) => x.right < x.total);
+  const lastTrouble = d.map((x) => x.right < x.total).lastIndexOf(true);
+  const solidAfter = lastTrouble >= 0 ? d.slice(lastTrouble + 1).filter((x) => x.right === x.total) : [];
+  const q = (n: number) => `${n} question${n === 1 ? "" : "s"}`;
   let history = "";
-  if (missed.length && fixedLater) {
-    history = `Missed this early in training (${days(missed)}), then got it right (${days(c.seen.slice(lastMiss + 1).filter((s) => s.ok).map((s) => s.day))}). Ask again so it's solid.`;
-  } else if (missed.length > 1) {
-    history = `Needed help with this more than once (${days(missed)}). Have them walk you through it slowly so it's solid.${watch}`;
-  } else if (missed.length) {
-    history = `Missed this in training (${missed[0]}) and it didn't come up again, so it hasn't been re-checked. Ask so it's solid.${watch}`;
-  } else if (right.length > 1) {
-    history = `Got this right every time it came up (${days(right)}). A quick win: let them show off.`;
-  } else if (right.length) {
-    history = `Got this right in training (${right[0]}). A quick win: let them show you.`;
+  if (!d.length) history = "";
+  else if (!trouble.length) {
+    const n = d.reduce((t, x) => t + x.total, 0);
+    history = d.length > 1 ? `Got this right every time it came up (${list(d.map((x) => x.day))}). A quick win: let them show off.` : `Got ${n > 1 ? `all ${q(n)}` : "this"} right on ${dayLabel(d[0].day)}. A quick win: let them show off.`;
+  } else if (solidAfter.length) {
+    history = `Missed this early in training (${list(trouble.map((x) => x.day))}), then got it right (${list(solidAfter.map((x) => x.day))}). Ask again so it's solid.`;
+  } else if (trouble.length > 1) {
+    history = `Needed help with this on more than one day (${list(trouble.map((x) => x.day))}). Have them walk you through it slowly so it's solid.`;
+  } else {
+    const t = trouble[0];
+    history =
+      t.total === 1
+        ? `Missed this on ${dayLabel(t.day)} and it hasn't come up since. Ask so it's solid.`
+        : t.right
+          ? `Got ${t.right} of ${t.total} questions right on ${dayLabel(t.day)}. Ask so the rest is solid too.`
+          : `Had trouble with this on ${dayLabel(t.day)} (${q(t.total)}). Ask so it's solid.`;
   }
   if (c.mix === "not_on_cards") {
-    const cards = "This one isn't on your Trello cards, so we trained your VA on the VFDA standard. Make sure it matches how your office does it. If not, show them your way and add it to the card.";
+    const cards =
+      c.card === "VFDA standard"
+        ? "Not on your Trello cards, so we trained it on the VFDA standard. Check it's how your office does it; if not, show them your way and add it to a card."
+        : `Partly not on your "${c.card}" card, so that part was trained on the VFDA standard. Check it's how your office does it; if not, add your way to the card.`;
     return history ? `${history} ${cards}` : cards;
   }
-  return history || (c.mix === "building" ? `Still building.${watch}` : "A strength from training: let them show you.");
+  return history || (c.mix === "building" ? "Still building: ask so it's solid." : "A strength from training: let them show you.");
 }
 
 // Mixes the kinds across meetings: each meeting takes one of each in turn.
