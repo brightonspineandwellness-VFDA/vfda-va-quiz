@@ -25,6 +25,7 @@ import {
   type Tips,
 } from "@/lib/quiz-report";
 import { quizReportPdf } from "@/lib/quiz-report-pdf";
+import { permanentReportLink } from "@/lib/report-links";
 import type { AttemptReport } from "@/lib/report";
 import { standardsUsed } from "@/lib/rule-source";
 import { itemRuleSources } from "@/lib/rule-sources";
@@ -328,7 +329,9 @@ async function storedVaTips(db: Db, attemptId: string): Promise<VaTips | null> {
   return { alerts: list(data.alerts), tips: list(data.tips), strengths: list(data.strengths) };
 }
 
-export type StoredQuizReport = { path: string; bytes: Uint8Array; link: string; content: QuizReport };
+// link: the 30-day signed link (kept in attempt_reports); permanent: the
+// no-expiry /r/ link sent to doctors and Slack (src/lib/report-links.ts).
+export type StoredQuizReport = { path: string; bytes: Uint8Array; link: string; permanent: string; content: QuizReport };
 
 // The attempt's PDF, made from the current data, stored (replacing the old
 // copy) with a new 30-day signed link. The content comes back too, for the
@@ -356,7 +359,7 @@ export async function makeQuizReport(db: Db, attemptId: string, r: AttemptReport
       )
       .select("attempt_id"),
   );
-  return { path, bytes, link: data.signedUrl, content };
+  return { path, bytes, link: data.signedUrl, permanent: permanentReportLink(path), content };
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +368,11 @@ export async function makeQuizReport(db: Db, attemptId: string, r: AttemptReport
 // ---------------------------------------------------------------------------
 
 export async function sampleQuizReportLink(db: Db): Promise<string> {
+  return permanentReportLink(await storeSampleQuizReport(db));
+}
+
+// The sample report PDF, stored; its path.
+async function storeSampleQuizReport(db: Db): Promise<string> {
   const needsWork: NeedsWorkItem[] = [
     {
       key: "0",
@@ -459,7 +467,5 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
   const storage = db.storage.from(QUIZ_REPORT_BUCKET);
   const { error } = await storage.upload(path, await quizReportPdf(report), { contentType: "application/pdf", upsert: true });
   if (error) throw new Error(`The sample PDF couldn't be stored: ${error.message}`);
-  const { data, error: signError } = await storage.createSignedUrl(path, LINK_SECONDS);
-  if (signError || !data) throw new Error(`The sample link couldn't be made: ${signError?.message ?? "no link"}`);
-  return data.signedUrl;
+  return path;
 }

@@ -311,6 +311,17 @@ async function Vas() {
               {scopeText(normalizeScope(va.va_scope))}
             </p>
             <p className="text-sm">
+              <span className="font-semibold">For the doctor: </span>
+              <a href={`/admin/vas/${va.id}/weekly-summary`} target="_blank" rel="noreferrer" className={linkClass}>
+                Weekly summary (PDF)
+              </a>
+              {" · "}
+              <a href={`/admin/vas/${va.id}/handoff-guide`} target="_blank" rel="noreferrer" className={linkClass}>
+                Show-me guide (PDF)
+              </a>
+              <span className="text-muted"> (made now; nothing is sent)</span>
+            </p>
+            <p className="text-sm">
               <span className="font-semibold">Days: </span>
               {days.length
                 ? days

@@ -1,16 +1,18 @@
 // The doctor/VFDA quiz report PDF (src/lib/quiz-report.ts), in order:
-// a) score + label (raw score, and the retake beside it), b) What went well
+// a) score + label (raw score, and the retake beside it), a2) Your cards vs.
+// VFDA standard (what came from the office's cards, and what isn't on a
+// card yet), b) What went well
 // (grouped by workflow, the biggest section), c) Things to focus on (each
 // with its card and "VFDA standard" tag), d) Important to review (critical
-// errors only, with the VA's words), e) Flags, f) the VFDA standards notice,
+// errors only, with the VA's words), e) Flags,
 // g) Trello card suggestions and the coaching tips given to the VA.
 // No scenarios and no VA answers (the attempt page in the app has them).
 // Drawn with src/lib/pdf-kit.ts.
 
-import { muted, Pdf, resultTone, toneColor, type Para } from "@/lib/pdf-kit";
+import { muted, Pdf, primary, resultTone, toneColor, type Para } from "@/lib/pdf-kit";
 import { scoreLine, type QuizReport } from "@/lib/quiz-report";
 import { minutesText } from "@/lib/report";
-import { STANDARDS_NOTICE, tipTagText, type TipTag } from "@/lib/rule-source";
+import { tipTagText, type TipTag } from "@/lib/rule-source";
 
 const cut = (s: string, n: number) => {
   const t = s.trim();
@@ -24,6 +26,37 @@ const tagBadge = (t: TipTag | null | undefined) =>
         tone: t.kind === "vfda_standard" ? ("info" as const) : ("neutral" as const),
       }
     : null;
+
+// "From your Trello cards" / "VFDA standard: not on your cards yet".
+export function sourcesSection(pdf: Pdf, r: Pick<QuizReport, "cardsTested" | "standards">, o: { when?: string } = {}) {
+  const when = o.when ?? "today's";
+  pdf.heading("Your cards vs. VFDA standard", { keep: 90 });
+  const cards = r.cardsTested ?? [];
+  pdf.box("primary", [
+    { text: "From your Trello cards", font: "bold", size: 10.5, color: primary, gap: 2 },
+    ...(cards.length
+      ? cards.map((c) => ({
+          text: `- ${c.card}: ${c.questions} question${c.questions === 1 ? "" : "s"}${c.fullMarks ? ` (${c.fullMarks} with full points)` : ""}`,
+          size: 9.5,
+          indent: 6,
+          gap: 1,
+        }))
+      : [{ text: `None of ${when} questions came from your cards.`, size: 9.5, color: muted }]),
+  ]);
+  if (r.standards.length) {
+    pdf.box("info", [
+      { text: "VFDA standard: not on your cards yet", font: "bold", size: 10.5, color: toneColor("info"), gap: 2 },
+      {
+        text: "Your cards don't cover these yet, so your VA learned VFDA's standard way. If your office does it differently, add it to the card and your VA will learn your way from then on.",
+        size: 9.5,
+        gap: 4,
+      },
+      ...r.standards.map((s) => ({ text: `- ${s}`, size: 9.5, indent: 6, gap: 1 })),
+    ]);
+  } else {
+    pdf.text(`Everything in ${when} quiz came from your cards.`, { size: 9.5, color: muted, gap: 4 });
+  }
+}
 
 export async function quizReportPdf(r: QuizReport): Promise<Uint8Array> {
   const pdf = await Pdf.create({
@@ -53,6 +86,11 @@ export async function quizReportPdf(r: QuizReport): Promise<Uint8Array> {
     ...(r.otherScore ? [{ caption: r.otherScore.caption, text: scoreLine(r.otherScore.points, r.otherScore.max), tone: "accent" as const }] : []),
     { caption: "Time spent", text: minutesText(r.timeSpent), tone: "neutral" },
   ]);
+
+  // a2) Where the questions came from: the office's own cards vs. VFDA's
+  // standard (what isn't written on a card yet), so the doctor sees what
+  // the VA was taught from their cards and what still needs a card.
+  sourcesSection(pdf, r);
 
   // b) What went well: the biggest section.
   pdf.heading("What went well", { keep: 60, color: success });
@@ -89,15 +127,6 @@ export async function quizReportPdf(r: QuizReport): Promise<Uint8Array> {
     pdf.box("neutral", [
       { text: "Flags", font: "bold", size: 10.5, gap: 2 },
       ...r.flags.map((f) => ({ text: `- ${f}`, size: 9.5, indent: 6, gap: 1 })),
-    ]);
-  }
-
-  // f) The rules checked against a VFDA standard because the cards didn't cover them.
-  if (r.standards.length) {
-    pdf.box("info", [
-      { text: STANDARDS_NOTICE.title, font: "bold", size: 11, color: toneColor("info"), gap: 3 },
-      { text: STANDARDS_NOTICE.doctor, size: 9.5, gap: 4 },
-      ...r.standards.map((s) => ({ text: `- ${s}`, size: 9.5, indent: 6, gap: 1 })),
     ]);
   }
 

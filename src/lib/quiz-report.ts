@@ -11,7 +11,7 @@
 // attempt page in the app shows those. Warm, never shaming.
 
 import { requiredSteps } from "@/lib/mock-grade";
-import { standardsUsed, tipTagOf, vaTipTags, type ItemRuleSource, type TipTag } from "@/lib/rule-source";
+import { isVfdaSourceCard, standardsUsed, tipTagOf, vaTipTags, type ItemRuleSource, type TipTag } from "@/lib/rule-source";
 
 export type NeedsWorkItem = {
   key: string; // the item's position, for matching Claude's tips
@@ -89,12 +89,35 @@ export type QuizReport = {
   flags: string[];
   // The VFDA standard rules any item relied on (the notice); empty: no notice.
   standards: string[];
+  // "From your Trello cards": each office card the quiz tested, with how
+  // many questions came from it and how many got full points.
+  cardsTested: CardTested[];
   // Trello card suggestions for the doctor (short list).
   cardTips: string[];
   // "Coaching tips given to the VA" (va_reports); null before they're written.
   // tags: each tip's "VFDA standard" / "Card: ..." tag.
   vaTips: { alerts: string[]; tips: string[]; strengths: string[]; tags?: (TipTag | null)[] } | null;
 };
+
+export type CardTested = { card: string; questions: number; fullMarks: number };
+
+// The office cards an attempt's questions came from (not VFDA standards or
+// the master bank), most questions first.
+export function cardsTested(needsWork: NeedsWorkItem[], doneWell: DoneWellItem[]): CardTested[] {
+  const out = new Map<string, CardTested>();
+  const add = (i: { sourceCard?: string | null; ruleSource?: ItemRuleSource | null }, full: boolean) => {
+    const card = i.ruleSource?.card?.trim() || (isVfdaSourceCard(i.sourceCard) ? "" : i.sourceCard!.trim());
+    if (!card) return;
+    const key = card.toLowerCase();
+    const row = out.get(key) ?? { card, questions: 0, fullMarks: 0 };
+    row.questions++;
+    if (full) row.fullMarks++;
+    out.set(key, row);
+  };
+  for (const d of doneWell) add(d, true);
+  for (const n of needsWork) add(n, false);
+  return [...out.values()].sort((a, b) => b.questions - a.questions || a.card.localeCompare(b.card));
+}
 
 export type FlagInput = {
   retake: boolean;
@@ -264,7 +287,7 @@ export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneW
 export const withReview = (text: string, card: string) => (/review:/i.test(text) ? sentence(text) : `${sentence(text)} Review: ${card}.`);
 
 export function buildQuizReport(
-  head: Omit<QuizReport, "wentWell" | "focus" | "moreFocus" | "important" | "flags" | "standards" | "cardTips" | "vaTips">,
+  head: Omit<QuizReport, "wentWell" | "focus" | "moreFocus" | "important" | "flags" | "standards" | "cardsTested" | "cardTips" | "vaTips">,
   needsWork: NeedsWorkItem[],
   doneWell: DoneWellItem[],
   tips: Tips,
@@ -279,6 +302,7 @@ export function buildQuizReport(
     ...head,
     vaTips: vaTips && { ...vaTips, tags: vaTipTags(vaTips.tips, needsWork) },
     standards: standardsUsed([...needsWork, ...doneWell].map((i) => i.ruleSource)),
+    cardsTested: cardsTested(needsWork, doneWell),
     wentWell: tips.strengths
       .filter((s) => s.bullets.length)
       .map((s) => ({ workflow: s.workflow, name: names.get(s.workflow) ?? s.workflow, bullets: s.bullets })),
@@ -327,6 +351,9 @@ export type Leads4LifePayload = {
   flags: string; // short, e.g. "fast finish, 3 pasted answers"; "none" when there are none
   // For the doctor's email: "[VA name] finished [day]: [label]".
   email_subject: string;
+  // Which PDF report_link opens, so GHL sends the right email: a day's quiz
+  // report, the Friday weekly summary, or the handoff "show me" guide.
+  report_type: "quiz_report" | "weekly_summary" | "handoff_guide";
 };
 
 export const reportFileName = (r: Pick<QuizReport, "vaName" | "dayCode" | "retake">) =>
