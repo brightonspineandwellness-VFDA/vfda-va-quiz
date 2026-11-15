@@ -17,6 +17,7 @@ export type GuideSkill = {
   title: string; // "Rescheduling a patient by phone"
   card: string; // the card to look at, or "VFDA standard"
   mix: GuideMix;
+  whyTest: string; // why the doctor is checking this one, from the training history
   showMe: string;
   why: string;
   couldGoWrong: string;
@@ -62,10 +63,11 @@ export async function handoffGuidePdf(g: HandoffGuide): Promise<Uint8Array> {
   pdf.box("primary", [
     { text: "How to run each check-in (15-20 minutes)", font: "bold", size: 10.5, color: toneColor("primary"), gap: 3 },
     ...[
-      "1. Don't teach anything new. Ask your VA to show you, on screen, how they do it.",
-      "2. Ask the follow-ups: why they do it that way, and what could go wrong.",
-      "3. Check what you see against the best practices listed for that skill.",
-      "4. Anything your office does differently? Write it on the line and add it to the Trello card.",
+      "1. Read \"Why we're testing this\" first: it says what happened in training and what to look for.",
+      "2. Don't teach anything new. Ask your VA to show you, on screen, how they do it.",
+      "3. Ask the follow-ups: why they do it that way, and what could go wrong.",
+      "4. Check what you see against the best practices listed for that skill.",
+      "5. Anything your office does differently? Write it on the line and add it to the Trello card.",
     ].map((t) => ({ text: t, size: 9.5, indent: 4, gap: 2 })),
     {
       text: "Each meeting mixes skills your VA already does well, skills still building, and VFDA standards that aren't on your cards yet.",
@@ -83,6 +85,7 @@ export async function handoffGuidePdf(g: HandoffGuide): Promise<Uint8Array> {
     m.skills.forEach((s, i) => {
       pdf.numbered(i + 1, s.title, MIX_LABEL[s.mix], [
         { text: `Card: ${s.card}`, size: 8.5, color: muted, gap: 3 },
+        ...pdf.field("WHY WE'RE TESTING THIS", s.whyTest, { color: toneColor(MIX_LABEL[s.mix].tone) }),
         ...pdf.field("SHOW ME", s.showMe),
         ...pdf.field("WHY DID YOU DO IT THAT WAY?", s.why),
         ...pdf.field("WHAT COULD GO WRONG?", s.couldGoWrong),

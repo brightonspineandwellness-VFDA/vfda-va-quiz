@@ -13,7 +13,7 @@ import "server-only";
 
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
-import { candidatesOf, interleave, MEETINGS, mockMeetings, PER_MEETING, type Candidate } from "@/lib/handoff-guide-core";
+import { candidatesOf, interleave, MEETINGS, mockMeetings, PER_MEETING, whyTest, type Candidate, type Dated } from "@/lib/handoff-guide-core";
 import { handoffGuidePdf, type GuideSkill, type HandoffGuide } from "@/lib/handoff-guide-pdf";
 import { cardsTested as cardsOf, type DoneWellItem, type NeedsWorkItem } from "@/lib/quiz-report";
 import { loadItems, QUIZ_REPORT_BUCKET } from "@/lib/quiz-reports";
@@ -66,8 +66,11 @@ Pick skills from <skills> (by key) and plan ${MEETINGS} meetings of 3-${PER_MEET
   (still building: <to_practice> says what to watch), and mix="not_on_cards" (graded on a VFDA standard because the office's cards
   don't cover it; the doctor should confirm it's how their office does it).
 - Put safety skills (emergencies, red flags, patient identity, privacy) in the first meetings.
+- The doctor is not a trained trainer. Make each prompt say exactly what to ask for and what a good answer shows.
+- <history> says when the skill came up in training and whether the VA got it right. For a skill they had trouble with,
+  aim showMe and couldGoWrong at the part in <to_practice>, so the doctor checks that exact piece is solid now.
 - Each prompt is concrete for a chiropractic front desk and doable on screen. Use the steps given; never invent office policies.
-- Tone: warm and practical, never shaming. Never use "wrong", "failed" or "missed".
+- Tone: warm and practical, never shaming. Never use "wrong" or "failed".
 - bestPractices: what good looks like, taken from the steps (and <to_practice> for building skills).`;
 
 async function guideMeetings(candidates: Candidate[]): Promise<HandoffGuide["meetings"]> {
@@ -80,6 +83,7 @@ ${pool
     (c) => `<skill key="${c.key}" mix="${c.mix}" workflow="${c.workflowName}" card="${c.card}">
 <topic>${c.topic}</topic>
 <steps>${c.steps.join("; ") || "(none listed)"}</steps>
+${c.seen.length ? `<history>${c.seen.map((x) => `${x.day}: ${x.ok ? "got it right" : "needed help"}`).join("; ")}</history>` : ""}
 ${c.toPractice.length ? `<to_practice>${c.toPractice.join("; ")}</to_practice>` : ""}
 </skill>`,
   )
@@ -101,6 +105,7 @@ ${c.toPractice.length ? `<to_practice>${c.toPractice.join("; ")}</to_practice>` 
               title: s.title.trim() || c.topic,
               card: c.card,
               mix: c.mix,
+              whyTest: whyTest(c),
               showMe: s.showMe.trim(),
               why: s.why.trim(),
               couldGoWrong: s.couldGoWrong.trim(),
@@ -144,12 +149,17 @@ export async function buildHandoffGuide(db: Db, vaId: string): Promise<{ guide: 
   if (!rows.length) return null;
   const needsWork: NeedsWorkItem[] = [];
   const doneWell: DoneWellItem[] = [];
+  // Oldest first, each item tagged with its day, for "why we're testing this".
+  const dated: { item: Dated<NeedsWorkItem> | Dated<DoneWellItem>; building: boolean }[] = [];
   for (const a of rows) {
     const items = await loadItems(db, a.id);
+    const day = a.kind === "retake" ? `${a.schedule_day} retake` : a.schedule_day;
     needsWork.push(...items.needsWork);
     doneWell.push(...items.doneWell);
+    for (const i of items.doneWell) dated.push({ item: { ...i, day }, building: false });
+    for (const i of items.needsWork) dated.push({ item: { ...i, day }, building: true });
   }
-  const meetings = await guideMeetings(candidatesOf(needsWork, doneWell));
+  const meetings = await guideMeetings(candidatesOf(dated));
   return {
     officeId,
     guide: {
