@@ -48,6 +48,7 @@ async function AdminHome() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Tile href="/admin/offices" title="Offices" detail="Setup, cards, rules and scenarios for each office" count={count ?? 0} />
         <Tile href="/admin/vas" title="VA progress" detail="Scores, flags, certifications, proof of work" />
+        <Tile href="/admin/training" title="Training programs" detail="4-week doctor training programs: training banks, sheets, sessions done" />
         <Tile href="/admin/reports" title="Reports" detail="Every finished quiz: doctor and VA reports, delivery status" />
         <Tile href="/admin/sops" title="SOPs to confirm" detail="SOPs VAs have submitted for review" count={sops ?? 0} />
         <Tile href="/admin/logs" title="System log" detail="Scenario checks" />

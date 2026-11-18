@@ -44,6 +44,7 @@ async function DoctorHome() {
       <Card title="Your VA" description="Training progress, workflow certifications and Trello card tips.">
         <div className="flex flex-wrap gap-2">
           <ButtonLink href="/doctor/va">My VA: workflow certifications and Trello cards</ButtonLink>
+          <ButtonLink href="/doctor/training">Training program: your 4-week plan with your VA</ButtonLink>
           {bankShared && <ButtonLink href="/doctor/bank">Scenario bank with answers (shared by VFDA)</ButtonLink>}
         </div>
       </Card>

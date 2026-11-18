@@ -61,11 +61,12 @@ export class Pdf {
     readonly bold: PDFFont,
     private readonly logo: PDFImage,
     private readonly headerTitle: string,
+    private readonly footer: string,
   ) {
     this.newPage();
   }
 
-  static async create(opts: { title: string; headerTitle: string }) {
+  static async create(opts: { title: string; headerTitle: string; footer?: string }) {
     const doc = await PDFDocument.create();
     doc.setTitle(pdfText(opts.title));
     doc.setAuthor("VFDA");
@@ -74,7 +75,7 @@ export class Pdf {
       doc.embedFont(StandardFonts.HelveticaBold),
       doc.embedJpg(LOGO_JPG_BASE64),
     ]);
-    return new Pdf(doc, regular, bold, logo, opts.headerTitle);
+    return new Pdf(doc, regular, bold, logo, opts.headerTitle, opts.footer ?? "Confidential – VFDA");
   }
 
   newPage() {
@@ -475,7 +476,7 @@ export class Pdf {
         thickness: 0.5,
         color: line,
       });
-      p.drawText("Confidential – VFDA", {
+      p.drawText(pdfText(this.footer), {
         x: SIDE,
         y: FOOTER_Y,
         size: 8.5,

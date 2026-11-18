@@ -17,6 +17,7 @@ import { escapeHtml as escapeHtmlText } from "@/lib/report";
 import { appUrl, deliver, loadAttemptReport, sendAttemptReport, sendEmail, type Target } from "@/lib/reports";
 import { standardsUsed, vaTipTags } from "@/lib/rule-source";
 import { createAdminClient } from "@/lib/supabase/server";
+import { maybeBuildProgram } from "@/lib/training-program";
 import {
   cardOf,
   checkVaTips,
@@ -323,6 +324,13 @@ export async function afterAttemptGraded(attemptId: string) {
     console.error("VA report not made", attemptId, e instanceof Error ? e.message : e);
   }
   await sendAttemptReport(attemptId);
+  // All scheduled quiz days in: build the 4-week training program (nothing is sent until Sunday).
+  try {
+    const { data: a } = await db.from("attempts").select("va_id, office_id, kind").eq("id", attemptId).maybeSingle();
+    if (a?.office_id && a.kind === "day") await maybeBuildProgram(a.va_id, a.office_id);
+  } catch (e) {
+    console.error("Training program not built", attemptId, e instanceof Error ? e.message : e);
+  }
 }
 
 // ---------------------------------------------------------------------------

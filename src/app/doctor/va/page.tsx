@@ -4,7 +4,7 @@ import { ReportButtons } from "@/components/reports/report-buttons";
 import { CertGrid } from "@/components/certs/cert-grid";
 import { StandardsNotice } from "@/components/reports/standards";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
-import { Badge, Card, EmptyState, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
+import { Badge, ButtonLink, Card, EmptyState, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { loadCertGrid } from "@/lib/certifications";
 import { attemptStandards } from "@/lib/quiz-reports";
@@ -22,6 +22,7 @@ export default function MyVaPage() {
         breadcrumbs={[{ label: "Home", href: "/doctor" }, { label: "My VA" }]}
         title="My VA"
         description="Each workflow's status, with the Trello card your VA updated for it. Review and approve cards on Trello; VFDA records your approval here."
+        actions={<ButtonLink href="/doctor/training">Training program</ButtonLink>}
       />
       <Suspense fallback={<Loading />}>
         <Grid />
