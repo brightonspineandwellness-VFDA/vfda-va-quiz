@@ -12,7 +12,10 @@ import { StartDateForm } from "@/components/va/proof-review";
 import { requireRole } from "@/lib/auth";
 import { removeDoctorAction, resendDoctorLinkAction, setPrimaryDoctorAction } from "@/lib/doctor-invite-actions";
 import { loadOfficeDoctors } from "@/lib/doctor-invites";
-import { createSessionClient } from "@/lib/supabase/server";
+import { TimeZoneForm } from "@/components/settings/time-zone-form";
+import { loadOfficesTz } from "@/lib/offices-tz";
+import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
+import { zoneOf } from "@/lib/week";
 import { showDate } from "@/lib/va-flow";
 import { regradeOfficeAction } from "@/lib/va-admin-actions";
 import { resendVaLinkAction, setVaActiveAction } from "@/lib/va-invite-actions";
@@ -51,7 +54,7 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
     supabase.from("offices").select("id, name").neq("id", id).order("name"),
   ]);
   if (!office) notFound();
-  const [vas, doctors] = await Promise.all([loadOfficeVas(id), loadOfficeDoctors(id)]);
+  const [vas, doctors, [tz]] = await Promise.all([loadOfficeVas(id), loadOfficeDoctors(id), loadOfficesTz(createAdminClient(), [id])]);
   const primary = doctors.find((d) => d.primary);
   const defaultStart = nextTrainingDay();
 
@@ -84,6 +87,10 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
           SOP gap report (VFDA only)
         </ButtonLink>
       </nav>
+
+      <Card title="Sunday-night emails" description="The weekly summary and the 4-week training program sheets go out Sunday at 8 pm in the office's time zone.">
+        <TimeZoneForm officeId={id} value={zoneOf(tz?.time_zone)} />
+      </Card>
 
       <Card
         number={1}

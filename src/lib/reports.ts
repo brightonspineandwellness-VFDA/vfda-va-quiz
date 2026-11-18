@@ -270,23 +270,27 @@ ${html}
 }
 
 export async function sendEmail(
-  to: string,
+  to: string | string[],
   subject: string,
   html: string,
   text: string,
   idempotencyKey: string,
   attachments: { filename: string; content: string }[] = [], // content: base64
+  cc: string[] = [],
 ) {
   const key = process.env.RESEND_API_KEY;
   const from = reportFrom();
   if (!key || !from) throw new Error("Email isn't set up: RESEND_API_KEY and REPORT_FROM_EMAIL are needed.");
   const replyTo = process.env.REPORT_REPLY_TO?.trim();
+  const toList = Array.isArray(to) ? to : [to];
+  const ccList = cc.filter((c) => !toList.map((t) => t.toLowerCase()).includes(c.toLowerCase()));
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
     body: JSON.stringify({
       from,
-      to: [to],
+      to: toList,
+      ...(ccList.length ? { cc: ccList } : {}),
       subject,
       html: brandedEmail(html),
       text,

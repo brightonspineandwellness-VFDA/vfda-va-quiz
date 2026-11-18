@@ -161,6 +161,12 @@ const PHASES = [
     title: "Skills reports database changes (no scores for VAs and doctors: skills shown)",
     after: "rule-sources.sql",
   },
+  {
+    name: "weekly-summary",
+    starts: "20261118130000",
+    title: "Weekly summary database changes (office time zone for Sunday-night emails)",
+    after: "skills-reports.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
