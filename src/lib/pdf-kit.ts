@@ -62,11 +62,13 @@ export class Pdf {
     private readonly logo: PDFImage,
     private readonly headerTitle: string,
     private readonly footer: string,
+    // Every text size and gap is multiplied by this (a Training Sheet is drawn smaller to fit 2 pages).
+    readonly scale = 1,
   ) {
     this.newPage();
   }
 
-  static async create(opts: { title: string; headerTitle: string; footer?: string }) {
+  static async create(opts: { title: string; headerTitle: string; footer?: string; scale?: number }) {
     const doc = await PDFDocument.create();
     doc.setTitle(pdfText(opts.title));
     doc.setAuthor("VFDA");
@@ -75,7 +77,7 @@ export class Pdf {
       doc.embedFont(StandardFonts.HelveticaBold),
       doc.embedJpg(LOGO_JPG_BASE64),
     ]);
-    return new Pdf(doc, regular, bold, logo, opts.headerTitle, opts.footer ?? "Confidential – VFDA");
+    return new Pdf(doc, regular, bold, logo, opts.headerTitle, opts.footer ?? "Confidential – VFDA", opts.scale ?? 1);
   }
 
   newPage() {
@@ -105,16 +107,16 @@ export class Pdf {
   lineHeight = (size: number) => size * 1.42;
 
   lines(s: string, o: TextStyle = {}, width = CONTENT_WIDTH) {
-    return wrap(s, this.font(o.font), o.size ?? 10, width - (o.indent ?? 0) - (o.right ?? 0));
+    return wrap(s, this.font(o.font), (o.size ?? 10) * this.scale, width - (o.indent ?? 0) - (o.right ?? 0));
   }
 
   heightOf(paras: Para[], width = CONTENT_WIDTH) {
-    return paras.reduce((h, p) => h + this.lines(p.text, p, width).length * this.lineHeight(p.size ?? 10) + (p.gap ?? 2), 0);
+    return paras.reduce((h, p) => h + this.lines(p.text, p, width).length * this.lineHeight((p.size ?? 10) * this.scale) + (p.gap ?? 2) * this.scale, 0);
   }
 
   // Text that flows across pages. `x0` and `width`: the column (default: the page).
   text(s: string, o: TextStyle = {}, x0 = SIDE, width = CONTENT_WIDTH, decorate?: (top: number, h: number) => void) {
-    const size = o.size ?? 10;
+    const size = (o.size ?? 10) * this.scale;
     const lh = this.lineHeight(size);
     for (const l of this.lines(s, o, width)) {
       if (lh > this.room) this.newPage();
@@ -128,7 +130,7 @@ export class Pdf {
         color: o.color ?? ink,
       });
     }
-    this.y -= o.gap ?? 2;
+    this.y -= (o.gap ?? 2) * this.scale;
   }
 
   // The title block of page 1: the report's name, then office · VA · date.
@@ -149,9 +151,9 @@ export class Pdf {
 
   // A section heading with a thin rule under it, kept with what follows (`keep`).
   heading(s: string, o: { number?: number; color?: RGB; keep?: number } = {}) {
-    this.y -= 14;
+    this.y -= 14 * this.scale;
     this.ensure(o.keep ?? 80);
-    const size = 13;
+    const size = 13 * Math.min(1, this.scale + 0.05);
     let x = SIDE;
     if (o.number !== undefined) {
       this.circle(SIDE + 9, this.y - 7, 9, primary);
@@ -172,14 +174,14 @@ export class Pdf {
       font: this.bold,
       color: o.color ?? ink,
     });
-    this.y -= 19;
+    this.y -= 19 * this.scale;
     this.page.drawLine({
       start: { x: SIDE, y: this.y },
       end: { x: SIDE + CONTENT_WIDTH, y: this.y },
       thickness: 0.6,
       color: line,
     });
-    this.y -= 9;
+    this.y -= 9 * this.scale;
   }
 
   // A box with a colored left border and a light fill, e.g. Alerts and the

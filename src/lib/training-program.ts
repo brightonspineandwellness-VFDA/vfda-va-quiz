@@ -383,7 +383,11 @@ async function fillProgram(db: Db, programId: string, vaId: string, officeId: st
   const queue = plan.map((s, n) => ({ s, n }));
   await Promise.all(
     Array.from({ length: SHEET_CONCURRENCY }, async () => {
-      for (let job = queue.shift(); job; job = queue.shift()) sheets[job.n] = await makeSheet(db, officeId, ctx, job.s);
+      for (let job = queue.shift(); job; job = queue.shift()) {
+        const sheet = await makeSheet(db, officeId, ctx, job.s);
+        // A focus area practiced a second time (fewer than 8 were found) says so.
+        sheets[job.n] = job.s.recap && !/^review:/i.test(sheet.title) ? { ...sheet, title: `Review: ${sheet.title}` } : sheet;
+      }
     }),
   );
   // Sunday nights in the office's time zone, starting the first Sunday after today.

@@ -8,7 +8,11 @@
 
 import { muted, Pdf, toneColor } from "@/lib/pdf-kit";
 import type { Bank, FocusArea, Sheet, Strength } from "@/lib/training-plan";
+import { isVfdaSourceCard } from "@/lib/rule-source";
 import { sundayText } from "@/lib/week";
+
+// "Dr. Hill" from "Isaac Hill" (kept when it already says Dr.).
+export const doctorName = (d: string) => (/^dr\.?\s/i.test(d.trim()) ? d.trim() : `Dr. ${d.trim().split(/\s+/).at(-1)}`);
 
 export type SheetContext = {
   vaName: string;
@@ -30,21 +34,25 @@ export const overviewFileName = (vaName: string) => safeName(`${first(vaName)} �
 
 // "Based on: ..." with the VFDA standards it used, and what to do if the office differs.
 export function basedOnText(c: Pick<SheetContext, "focus" | "vaName">) {
-  const cards = c.focus.cards.length ? c.focus.cards.map((x) => `${x}${/card$/i.test(x) ? "" : " card"}`).join(", ") : "your office's cards";
-  const std = c.focus.standards.length ? ` · VFDA standard: ${c.focus.standards.join("; ")}` : "";
+  const own = c.focus.cards.filter((x) => !isVfdaSourceCard(x) && !/^vfda standards?$/i.test(x.trim()));
+  const cards = own.length ? own.map((x) => `the ${x}${/card$/i.test(x) ? "" : " card"}`).join(", ") : "VFDA standards (your cards don't cover this yet)";
+  const rules = c.focus.standards.map((r) => r.trim().replace(/[.;\s]+$/, ""));
+  const std = rules.length ? ` · VFDA standard: ${rules.join("; ")}` : "";
   const tell = c.focus.standards.length ? ` If your office does this differently, tell ${first(c.vaName)} today and correct it.` : "";
   return `Based on: ${cards}${std}.${tell}`;
 }
 
 async function drawSheet(c: SheetContext, k: number): Promise<{ bytes: Uint8Array; pages: number }> {
   const va = first(c.vaName);
-  const sz = (n: number) => n * k;
+  // pdf-kit scales every size by k.
+  const sz = (n: number) => n;
   const pdf = await Pdf.create({
+    scale: k,
     title: `Training Sheet: ${c.sheet.title} - ${c.vaName}`,
     headerTitle: "VA Training Sheet · 30 minutes",
     footer: "Confidential – VFDA · Fake patient names only",
   });
-  pdf.titleBlock(c.sheet.title, `${c.officeName}  ·  ${c.doctor} with ${c.vaName}  ·  Week ${c.week} · Session ${c.number} of 8`, c.focus.safety ? { text: "Safety", tone: "danger" } : undefined);
+  pdf.titleBlock(c.sheet.title, `${c.officeName}  ·  ${doctorName(c.doctor)} with ${c.vaName}  ·  Week ${c.week} · Session ${c.number} of 8`, c.focus.safety ? { text: "Safety", tone: "danger" } : undefined);
   pdf.text(`Build on: ${c.sheet.buildOn}`, { size: sz(10.5), color: toneColor("success"), font: "bold", gap: 2 });
 
   pdf.heading("What you'll go through", { number: 1, keep: 50 });
@@ -89,7 +97,7 @@ async function drawSheet(c: SheetContext, k: number): Promise<{ bytes: Uint8Arra
 // At most 2 pages: drawn smaller when the content runs longer.
 export async function trainingSheetPdf(c: SheetContext): Promise<Uint8Array> {
   let out = await drawSheet(c, 1);
-  for (const k of [0.92, 0.85, 0.78]) {
+  for (const k of [0.92, 0.85, 0.8, 0.75, 0.7]) {
     if (out.pages <= 2) break;
     out = await drawSheet(c, k);
   }
@@ -106,8 +114,8 @@ export type OverviewContext = {
 
 export async function trainingOverviewPdf(c: OverviewContext): Promise<Uint8Array> {
   const va = first(c.vaName);
-  const pdf = await Pdf.create({ title: `${c.vaName} - Training overview (4-week plan)`, headerTitle: "Training overview · 4-week plan" });
-  pdf.titleBlock(`${va}'s training plan`, `${c.officeName}  ·  ${c.doctor} with ${c.vaName}  ·  Quiz days: ${c.bank.daysDone} of ${c.bank.daysTotal} completed`);
+  const pdf = await Pdf.create({ title: `${c.vaName} - Training overview (4-week plan)`, headerTitle: "Training overview · 4-week plan", scale: 0.9 });
+  pdf.titleBlock(`${va}'s training plan`, `${c.officeName}  ·  ${doctorName(c.doctor)} with ${c.vaName}  ·  Quiz days: ${c.bank.daysDone} of ${c.bank.daysTotal} completed`);
   pdf.text(
     `8 sessions of 30 minutes, 2 a week. Each pairs one thing to practice with one thing ${va} already does well, so it's 50/50. Sheets arrive by email every Sunday night.`,
     { size: 10, gap: 6 },

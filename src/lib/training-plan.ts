@@ -102,6 +102,8 @@ const clip = (s: string, n: number) => {
   return t.length <= n ? t : `${t.slice(0, n - 1).trimEnd()}…`;
 };
 const HARSH = /\b(wrong|failed|fail)\b/i;
+// Claude sometimes says "the wrong slot": calmer words instead of dropping the text.
+const soften = (s: string) => s.replace(/\bwrong\b/gi, "incorrect").replace(/\bfailed to\b/gi, "didn't");
 const SCORE = /\b\d+\s*(%|percent|points?|of \d+)\b/i;
 const clean = (s: string, n: number) => {
   const t = clip(s, n);
@@ -210,7 +212,7 @@ export function checkSheet(raw: TrainingSheet, fallback: Sheet, number: number):
   return {
     title: clean(raw.title, 70) || fallback.title,
     buildOn: clean(raw.buildOn, 90) || fallback.buildOn,
-    summary: clean(raw.summary, 600) || fallback.summary,
+    summary: clean(soften(raw.summary), 700) || fallback.summary,
     explain: raw.explain.map((e) => clip(e, 200)).filter(Boolean).slice(0, 3),
     scenarios,
     wrapUp: wrapUp.length === 2 ? wrapUp : fallback.wrapUp,
@@ -225,7 +227,7 @@ export function fallbackSheet(s: PlannedSession, vaFirst: string, steps: string[
   return {
     title: s.focus.title,
     buildOn: s.strength.text.charAt(0).toLowerCase() + s.strength.text.slice(1),
-    summary: `${vaFirst} is strong at ${s.strength.text.charAt(0).toLowerCase()}${s.strength.text.slice(1).replace(/[.\s]+$/, "")}. One thing to tighten: ${s.focus.text.charAt(0).toLowerCase()}${s.focus.text.slice(1).replace(/[.\s]+$/, "")}. ${s.focus.why}`,
+    summary: `What ${vaFirst} already does well: ${s.strength.text.replace(/[.\s]+$/, "")}. One thing to tighten: ${s.focus.text.charAt(0).toLowerCase()}${s.focus.text.slice(1).replace(/[.\s]+$/, "")}. ${s.focus.why}`,
     explain: [s.focus.text, `Why it matters: it keeps patients safe and the schedule right.`],
     scenarios: order.map((kind, n) =>
       kind === "focus"
