@@ -504,7 +504,7 @@ export async function submitAnswer(
   phase: "first" | "repeat",
   answer: SubmittedAnswer,
   drillId: string | null = null,
-): Promise<{ ok: true; data: SubmitOutcome; critical?: { itemId: string; phase: "first" | "repeat" } } | { ok: false; error: string }> {
+): Promise<{ ok: true; data: SubmitOutcome } | { ok: false; error: string }> {
   const ctx = drillId ? await openDrill(user, drillId) : await openDay(user);
   if (!ctx || ctx.attempt.submitted_at) return { ok: false, error: "Nothing is open for you here right now." };
   const next = nextItem(ctx.scenarios, ctx.items);
@@ -640,12 +640,11 @@ export async function submitAnswer(
   if (error) return { ok: false, error: "Couldn't save your grade. Reload the page." };
   // Where the rule it was graded against came from (the office's card or a VFDA standard).
   if (phase === "first") await recordRuleSource(ctx.db, ctx.user.officeId!, item.id, scenarioId);
-  // A critical error alerts VFDA and the doctor at once (the VA keeps going).
-  const critical = grade?.critical_error ? { itemId: item.id, phase } : undefined;
-
-  if (!repeat) return { ok: true, data: { feedback, repeat: null }, critical };
+  // A critical error sends no alert: it shows on the VFDA admin pages, and in
+  // the quiz report as "Important to review".
+  if (!repeat) return { ok: true, data: { feedback, repeat: null } };
   const parent = ctx.scenarios.find((s) => s.id === scenarioId)!;
-  return { ok: true, data: { feedback, repeat: toServed(ctx, parent, repeat, "repeat", feedback) }, critical };
+  return { ok: true, data: { feedback, repeat: toServed(ctx, parent, repeat, "repeat", feedback) } };
 }
 
 // ---------------------------------------------------------------------------

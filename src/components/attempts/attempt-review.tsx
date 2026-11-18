@@ -135,7 +135,6 @@ export function RetakeReview({
 function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
   const { attempt, items } = data;
   const repeats = items.filter((i) => i.repeat);
-  const alerts = data.notifications.filter((n) => n.event.startsWith("critical") && n.status === "sent");
   return (
     <>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[0.9375rem]">
@@ -179,7 +178,6 @@ function Summary({ data, admin }: { data: AttemptReviewData; admin: boolean }) {
               <span className="text-muted">Scores the written answers again, rebuilds the VA report and the PDF. No emails or posts.</span>
             </div>
           )}
-          {alerts.length > 0 && <p className="text-sm text-muted">Critical error alert sent to {[...new Set(alerts.map((n) => n.recipient))].join(", ")}</p>}
         </div>
       )}
     </>

@@ -88,7 +88,7 @@ async function Office({ params }: { params: PageProps<"/admin/offices/[id]">["pa
       <Card
         number={1}
         title="Doctors"
-        description="Every doctor has their own login and sees the same office: setup, VAs, results and certifications. Reports and alerts go to all of them. The Primary doctor is shown on the office, certificates and reports."
+        description="Every doctor has their own login and sees the same office: setup, VAs, results and certifications. Quiz reports and reminders go to all of them. The Primary doctor is shown on the office, certificates and reports."
       >
         {doctors.length === 0 ? (
           <EmptyState title="No doctors yet">Invite the office&apos;s doctor below.</EmptyState>

@@ -304,30 +304,3 @@ export function workflowStatus(
         : "waiting for VFDA to confirm the Trello card";
   return { status: "Pending", why };
 }
-
-// ---------------------------------------------------------------------------
-// Immediate alert: a critical error, in the VA's exact words.
-// ---------------------------------------------------------------------------
-
-export type CriticalAlert = {
-  vaName: string;
-  officeName: string;
-  dayCode: string;
-  code: string;
-  workflow: string;
-  repeat: boolean;
-  stem: string;
-  quote: string;
-  primaryDoctor?: string | null;
-};
-
-export function criticalAlertText(a: CriticalAlert) {
-  return {
-    subject: `ALERT: critical error – ${a.vaName} – ${a.dayCode} ${a.code} – ${a.officeName}`,
-    lines: [
-      `${a.vaName} (${a.officeName}${a.primaryDoctor ? `, Primary doctor ${a.primaryDoctor}` : ""}) made a critical error on ${a.dayCode} ${a.code} (${a.workflow})${a.repeat ? ", on the repeat" : ""}. They keep going with their training; please coach them.`,
-      `Scenario: ${a.stem}`,
-      `The VA's exact words: "${a.quote}"`,
-    ],
-  };
-}

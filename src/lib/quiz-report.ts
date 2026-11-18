@@ -323,7 +323,6 @@ export type Leads4LifePayload = {
   raw_score: string; // "16/20"
   is_retake: "yes" | "no";
   report_link: string;
-  critical_errors: number;
   flags: string; // short, e.g. "fast finish, 3 pasted answers"; "none" when there are none
   // For the doctor's email: "[VA name] finished [day]: [label]".
   email_subject: string;

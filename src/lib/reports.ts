@@ -5,7 +5,9 @@ import "server-only";
 // REPORT_FROM_EMAIL, reply-to REPORT_REPLY_TO) to VFDA (VFDA_REPORT_EMAIL), a
 // Slack post to VFDA (SLACK_WEBHOOK_URL) with the links, and one Leads4Life
 // POST (LEADS4LIFE_WEBHOOK_URL) per doctor of the office, which delivers it to
-// the doctor. A critical error is also sent at once, while the VA keeps going.
+// the doctor. Nothing else goes out per attempt: a critical error is never a
+// separate alert; it's the report's calm "Important to review" section and
+// shows on the VFDA admin pages.
 // One notifications row per recipient is written before sending, so running
 // this again only sends what hasn't gone out yet. Each send is tried twice.
 
@@ -15,14 +17,12 @@ import { reportFileName, type Leads4LifePayload } from "@/lib/quiz-report";
 import { makeQuizReport, sampleQuizReportLink, type StoredQuizReport } from "@/lib/quiz-reports";
 import { loadRetakeComparison } from "@/lib/retake";
 import {
-  criticalAlertText,
   escapeHtml,
   reportHtml,
   reportSections,
   reportSlack,
   reportText,
   slackEscape,
-  criticalCount,
   finishedSubject,
   flagsText,
   repeatStats,
@@ -33,7 +33,7 @@ import {
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
 import { normalizeScope, scopeText } from "@/lib/va-scope";
-import { attemptLabel, percentOf, RESULT_LABELS, sinceStartText, todayIn, withOverride, type ResultLabel } from "@/lib/va-flow";
+import { percentOf, RESULT_LABELS, sinceStartText, todayIn, withOverride, type ResultLabel } from "@/lib/va-flow";
 
 const TIME_ZONE = process.env.TRAINING_TIME_ZONE || "America/New_York";
 
@@ -58,7 +58,7 @@ export function appUrl() {
 
 export const attemptLink = (attemptId: string, area: "admin" | "doctor") => `${appUrl()}/${area}/attempts/${attemptId}`;
 
-// Every doctor of the office gets the reports and alerts (VFDA's addresses
+// Every doctor of the office gets the reports (VFDA's addresses
 // aren't repeated); the Primary doctor's name is shown on them.
 export async function officeDoctors(db: Db, officeId: string | null) {
   if (!officeId) return { emails: [] as string[], list: [] as { email: string; name: string }[], primary: null as string | null };
@@ -404,8 +404,6 @@ export async function sendTestLeads4Life(): Promise<{ status: number | null; tex
         raw_score: "13/18",
         is_retake: "no",
         report_link: link,
-        // Matches the sample PDF.
-        critical_errors: 1,
         flags: "fast finish, 3 pasted answers",
         email_subject: "Test VA finished W1D1: Building skills",
       }),
@@ -537,7 +535,6 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
           raw_score: `${report.points}/${report.maxPoints}`,
           is_retake: report.retake ? "yes" : "no",
           report_link: stored.link,
-          critical_errors: criticalCount(report),
           flags: flagsText(report),
           email_subject: finishedSubject(report),
         },
@@ -578,81 +575,6 @@ export async function sendTestAttemptEmail(attemptId: string, to: string): Promi
       pdf ? [{ filename: reportFileName({ ...report, retake: !!report.retake }), content: Buffer.from(pdf.bytes).toString("base64") }] : [],
     ),
   );
-}
-
-// ---------------------------------------------------------------------------
-// A critical error: sent at once to VFDA and every doctor of the office, with the
-// VA's exact words. The VA keeps going.
-// ---------------------------------------------------------------------------
-
-export async function sendCriticalAlert(itemId: string, phase: "first" | "repeat"): Promise<{ sent: number; failed: number }> {
-  const db = createAdminClient();
-  const item = must(
-    await db
-      .from("attempt_items")
-      .select("id, attempt_id, office_scenario_id, repeat_scenario_id, critical_quote")
-      .eq("id", itemId)
-      .maybeSingle(),
-  );
-  if (!item?.critical_quote) return { sent: 0, failed: 0 };
-  const attempt = must(await db.from("attempts").select("id, va_id, office_id, schedule_day, kind").eq("id", item.attempt_id).single()) as {
-    id: string;
-    va_id: string;
-    office_id: string;
-    schedule_day: string;
-    kind: string;
-  };
-  const shownId = phase === "repeat" && item.repeat_scenario_id ? item.repeat_scenario_id : item.office_scenario_id;
-  const [va, office, scenario, doctors] = await Promise.all([
-    db.from("profiles").select("full_name, email").eq("id", attempt.va_id).maybeSingle(),
-    db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
-    db.from("office_scenarios").select("code, workflow, stem").eq("id", shownId).maybeSingle(),
-    officeDoctors(db, attempt.office_id),
-  ]);
-  const s = must(scenario);
-  const { subject, lines } = criticalAlertText({
-    vaName: (must(va)?.full_name || must(va)?.email || "VA") as string,
-    officeName: (must(office)?.name ?? "Office") as string,
-    dayCode: attemptLabel(attempt),
-    code: s?.code ?? "",
-    workflow: s?.workflow ?? "",
-    repeat: phase === "repeat",
-    stem: s?.stem ?? "",
-    quote: item.critical_quote,
-    primaryDoctor: doctors.primary,
-  });
-  const vfda = [...new Set(vfdaEmails().map((e) => e.toLowerCase()))];
-  const doctorEmails = doctors.emails;
-  const event = `critical-${phase}:${item.id}`;
-  const email = (to: string, area: "admin" | "doctor"): Target => {
-    const link = attemptLink(attempt.id, area);
-    return {
-      channel: "email",
-      recipient: to,
-      send: () =>
-        sendEmail(
-          to,
-          subject,
-          `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">${lines
-            .map((l) => `<p>${escapeHtml(l)}</p>`)
-            .join("")}<p><a href="${escapeHtml(link)}">Open the attempt</a> (login required)</p></div>`,
-          `${lines.join("\n\n")}\n\nOpen the attempt (login required): ${link}`,
-          `${event}-${to}`,
-        ),
-    };
-  };
-  return deliver(db, { attempt_id: attempt.id, event }, [
-    ...vfda.map((to) => email(to, "admin")),
-    ...doctorEmails.map((to) => email(to, "doctor")),
-    {
-      channel: "slack",
-      recipient: SLACK_RECIPIENT,
-      send: () =>
-        postSlack({
-          text: [`:rotating_light: *${slackEscape(subject)}*`, ...lines.map(slackEscape), `<${attemptLink(attempt.id, "admin")}|Open the attempt>`].join("\n"),
-        }),
-    },
-  ]);
 }
 
 // ---------------------------------------------------------------------------

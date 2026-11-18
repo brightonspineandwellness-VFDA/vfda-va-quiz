@@ -8,7 +8,7 @@ import { after } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { submitSopLinks } from "@/lib/certifications";
 import type { ActionResult } from "@/lib/interview-actions";
-import { sendCriticalAlert, sendPreparingNotice, sendSopNotice } from "@/lib/reports";
+import { sendPreparingNotice, sendSopNotice } from "@/lib/reports";
 import { createSessionClient } from "@/lib/supabase/server";
 import {
   claimPreparingNotice,
@@ -53,8 +53,6 @@ export async function answerItem(
   if (drillId !== null && !UUID.test(drillId)) return fail("Invalid item.");
   const result = await submitAnswer(user, scenarioId, phase, answer ?? {}, drillId);
   if (!result.ok) return result;
-  const critical = result.critical;
-  if (critical) after(() => sendCriticalAlert(critical.itemId, critical.phase).then(() => undefined));
   return { ok: true, data: result.data };
 }
 
