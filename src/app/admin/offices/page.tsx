@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { ListFilter } from "@/components/list-filter";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { Badge, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
+import { createSessionClient } from "@/lib/supabase/server";
 import { currentStep } from "@/lib/doctor-flow";
 import { loadOffices } from "@/lib/interview-data";
 import type { Tone } from "@/lib/theme";
@@ -41,9 +43,27 @@ export default function OfficesPage() {
   );
 }
 
+// The filter chips: setup status, simplified.
+const CHIP_OF: Record<string, string> = {
+  setup: "setup",
+  rules_in_review: "setup",
+  gap_list: "setup",
+  scenarios_in_review: "scenarios",
+  va_training: "training",
+  done: "done",
+};
+
 async function Offices() {
   await requireRole("vfda_admin");
-  const offices = await loadOffices();
+  const [offices, { data: vas }] = await Promise.all([
+    loadOffices(),
+    (await createSessionClient()).from("profiles").select("office_id, full_name, email").eq("role", "va").is("deactivated_at", null),
+  ]);
+  // What the search matches: the office, its doctors and its VAs.
+  const searchText = (o: (typeof offices)[number]) =>
+    [o.name, ...o.doctors.flatMap((d) => [d.name, d.email]), ...(vas ?? []).filter((v) => v.office_id === o.id).flatMap((v) => [v.full_name, v.email])]
+      .filter(Boolean)
+      .join(" ");
 
   return (
     <>
@@ -51,6 +71,18 @@ async function Offices() {
       {offices.length === 0 ? (
         <EmptyState title="No offices yet">Add the first office above. The doctor gets an invite by email.</EmptyState>
       ) : (
+        <div id="office-list" className="flex flex-col gap-4">
+        <ListFilter
+          scope="office-list"
+          label="Search offices"
+          placeholder="Office name, doctor name or email, VA name or email"
+          chips={[
+            { key: "setup", label: "Setup" },
+            { key: "scenarios", label: "Scenarios to approve" },
+            { key: "training", label: "VAs training" },
+            { key: "done", label: "Done" },
+          ]}
+        />
         <Table>
           <thead>
             <tr>
@@ -63,7 +95,7 @@ async function Offices() {
           </thead>
           <tbody>
             {offices.map((office) => (
-              <tr key={office.id}>
+              <tr key={office.id} data-filter-text={searchText(office)} data-filter-tags={CHIP_OF[office.status] ?? ""} data-filter-key={office.id}>
                 <td className={`${td} font-medium`}>
                   <Link href={`/admin/offices/${office.id}`} className={linkClass}>
                     {office.name}
@@ -108,6 +140,7 @@ async function Offices() {
             ))}
           </tbody>
         </Table>
+        </div>
       )}
     </>
   );

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { AttemptLink, ReportStatus } from "@/components/attempts/attempt-review";
 import { CertGrid } from "@/components/certs/cert-grid";
+import { ListFilter } from "@/components/list-filter";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { Card, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, tdNum, th, thNum } from "@/components/ui";
 import type { Tone } from "@/lib/theme";
@@ -147,7 +148,25 @@ async function Vas() {
   );
 
   if (!vas.data?.length) return <EmptyState title="No VAs yet">Invite a VA from an office&apos;s page.</EmptyState>;
-  const [grid, board] = await Promise.all([loadCertGrid(supabase, {}), loadReminderBoard(createAdminClient())]);
+  const [grid, board, doctors, programs] = await Promise.all([
+    loadCertGrid(supabase, {}),
+    loadReminderBoard(createAdminClient()),
+    supabase.from("profiles").select("office_id, full_name, email").eq("role", "doctor").is("deactivated_at", null),
+    // Before training-program.sql has been run there are none.
+    supabase.from("training_programs").select("va_id, office_id, status"),
+  ]);
+  // What the search matches: the VA, their office, and the office's doctors.
+  const searchText = (va: { full_name: string | null; email: string; office_id: string | null }) =>
+    [
+      va.full_name,
+      va.email,
+      va.office_id ? officeName.get(va.office_id) : "",
+      ...(doctors.data ?? []).filter((d) => d.office_id === va.office_id).flatMap((d) => [d.full_name, d.email]),
+    ]
+      .filter(Boolean)
+      .join(" ");
+  const programOf = (va: { id: string; office_id: string | null }) =>
+    (programs.error ? [] : (programs.data ?? [])).find((x) => x.va_id === va.id && x.office_id === va.office_id)?.status;
   const reminderOf = new Map(board.map((r) => [r.vaId, r]));
   const rank = (id: string) => STATE_RANK[reminderOf.get(id)?.state ?? "ok"];
   // Stable: the name order stays within each group.
@@ -179,8 +198,17 @@ async function Vas() {
     const latest = dayAttempts.at(-1);
     const direction = trend(dayAttempts.map((a) => percentOf(a.first_try_points, a.max_points)));
     const waitingForVfda = current && unlockStatus(current.status) === "locked" && current.prep_notified_at;
+    const program = programOf(va);
+    const tags = [
+      reminderOf.get(va.id)?.state === "overdue" && "overdue",
+      current && dayAttempts.length > 0 && "in-training",
+      !current && days.length > 0 && "all-done",
+      critical > 0 && "critical",
+      (program === "ready" || program === "running") && "program",
+    ].filter(Boolean);
     return {
       va,
+      tags: tags.join(" "),
       current: current
         ? `${current.schedule_day} ${waitingForVfda ? "waiting for VFDA approval" : (STATUS_LABELS[unlockStatus(current.status)] ?? current.status)}`
         : days.length
@@ -201,9 +229,23 @@ async function Vas() {
     };
   });
 
+  const tagsOf = new Map(progress.map((p) => [p.va.id, p.tags]));
   return (
-    <>
-      <Card number={1} title="Overview" description="Overdue VAs first, then behind, then everyone else.">
+    <div id="va-list" className="flex flex-col gap-6">
+      <ListFilter
+        scope="va-list"
+        label="Search VAs"
+        placeholder="VA name or email, office, doctor name or email"
+        openOnHash
+        chips={[
+          { key: "overdue", label: "Overdue" },
+          { key: "in-training", label: "In training" },
+          { key: "all-done", label: "All days done" },
+          { key: "critical", label: "Has critical error" },
+          { key: "program", label: "Program running" },
+        ]}
+      />
+      <Card number={1} title="Overview" description="Overdue VAs first, then behind, then everyone else. Click a name to open their section below.">
       <Table maxHeight="70vh">
           <thead>
             <tr>
@@ -221,7 +263,7 @@ async function Vas() {
           </thead>
           <tbody>
             {progress.map((p) => (
-              <tr key={p.va.id}>
+              <tr key={p.va.id} data-filter-text={searchText(p.va)} data-filter-tags={p.tags} data-filter-key={p.va.id}>
                 <td className={td}>
                   <a href={`#va-${p.va.id}`} className={linkClass}>
                     {p.va.full_name || p.va.email}
@@ -283,13 +325,32 @@ async function Vas() {
         const resettable = taken.filter((a) => !a.archived_at);
         const resets = taken.filter((a) => a.archived_at);
         return (
-          <Card
+          <details
             key={va.id}
             id={`va-${va.id}`}
-            className="scroll-mt-4"
-            title={va.full_name || va.email}
-            description={`${va.email} · ${va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office"}`}
+            data-filter-text={searchText(va)}
+            data-filter-tags={tagsOf.get(va.id) ?? ""}
+            data-filter-key={va.id}
+            className="group scroll-mt-4 rounded-[var(--radius-card)] border border-line bg-surface shadow-[0_1px_2px_rgba(16,24,40,0.06)]"
           >
+            <summary className="flex cursor-pointer list-none flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-4 py-3 sm:px-6 [&::-webkit-details-marker]:hidden">
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span aria-hidden="true" className="text-muted transition-transform group-open:rotate-90">
+                  ▸
+                </span>
+                <span className="text-lg font-semibold text-primary">{va.full_name || va.email}</span>
+              </span>
+              <span className="text-sm text-muted">
+                {va.email} · {va.office_id ? (officeName.get(va.office_id) ?? "Unknown office") : "No office"}
+              </span>
+            </summary>
+            <div className="flex flex-col gap-3 border-t border-line px-4 py-4 sm:px-6 sm:py-5">
+            <p className="text-sm">
+              <Link href={`/admin/training/${va.id}`} className={linkClass}>
+                Training program
+              </Link>
+              {programOf(va) ? ` (${programOf(va)})` : ""}
+            </p>
             <div className="flex flex-col gap-1">
               <StartDateForm vaId={va.id} value={va.va_start_date} />
               <p className="text-xs text-muted">
@@ -460,9 +521,10 @@ async function Vas() {
                 </ul>
               </div>
             )}
-          </Card>
+            </div>
+          </details>
         );
       })}
-    </>
+    </div>
   );
 }
