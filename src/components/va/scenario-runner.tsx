@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition } from "react";
 import { Badge, buttonClass, Card, Notice, ProgressBar } from "@/components/ui";
 import { answerItem } from "@/lib/va-actions";
-import { ANSWER_BOXES, type Feedback, type PasteEvent, type ServedItem } from "@/lib/va-flow";
+import { ANSWER_BOXES, niceWorkLine, type Feedback, type PasteEvent, type ServedItem } from "@/lib/va-flow";
 
 // One scenario per screen. Answers can't be changed after submitting: the
 // server only accepts the item on screen, once, then serves the next one.
@@ -17,7 +17,7 @@ export function ScenarioRunner({ initial }: { initial: ServedItem }) {
     return (
       <div className="flex flex-col gap-4">
         <QuizProgress item={item} />
-        <FeedbackCard feedback={feedback} title={feedback.ungraded ? "Saved" : "Your feedback"} />
+        <FeedbackCard feedback={feedback} title={feedback.ungraded ? "Saved" : "Feedback"} />
         <div className="flex justify-end">
           <button type="button" onClick={() => router.refresh()} className={buttonClass("primary")}>
             Next →
@@ -67,52 +67,32 @@ function QuizProgress({ item }: { item: ServedItem }) {
   );
 }
 
-// After a situation: the points, what they did well first, then at most three
-// things to focus on next time and the card to review. Never "wrong",
-// "failed" or "missed" on VA screens.
+// After a situation, never the points: "Nice work on…" first, then
+// "Something to practice:" (at most three) and the card to review. Never
+// "wrong", "failed" or "missed" on VA screens.
 function FeedbackCard({ feedback, title }: { feedback: Feedback; title: string }) {
-  const focus = feedback.missedSteps.slice(0, 3);
-  const full = !feedback.ungraded && focus.length === 0;
-  // Older grades have no "did well" line; their reason is shown instead.
-  const good = feedback.didWell?.trim() || (full ? feedback.reason : "");
+  const practice = feedback.missedSteps.slice(0, 3);
+  // Older grades have no "did well" line; their reason is shown instead when there's nothing to practice.
+  const good = feedback.didWell?.trim() || (!feedback.ungraded && !practice.length ? feedback.reason : "");
+  const niceWork = good ? niceWorkLine(good) : "";
   return (
-    <Card
-      title={title}
-      headingAs="h3"
-      actions={
-        feedback.ungraded ? (
-          <Badge tone="neutral">Waiting for VFDA</Badge>
-        ) : (
-          <Badge tone={full ? "success" : feedback.score === 0 ? "warning" : "info"}>
-            {typeof feedback.score === "number" ? `${feedback.score}/2` : full ? "2/2" : "Under 2/2"}
-          </Badge>
-        )
-      }
-    >
+    <Card title={title} headingAs="h3" actions={feedback.ungraded ? <Badge tone="neutral">Waiting for VFDA</Badge> : undefined}>
       {feedback.ungraded && feedback.reason && <p className="text-[0.9375rem]">{feedback.reason}</p>}
-      {!feedback.ungraded && good && (
+      {!feedback.ungraded && niceWork && <p className="text-[0.9375rem]">{niceWork}</p>}
+      {practice.length > 0 && (
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-semibold text-success">What you did well</p>
-          <p className="text-[0.9375rem]">{good}</p>
-        </div>
-      )}
-      {focus.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <p className="text-sm font-semibold text-foreground">A few things to focus on next time:</p>
+          <p className="text-sm font-semibold text-foreground">Something to practice:</p>
           <ul className="ml-5 flex list-disc flex-col gap-1 text-[0.9375rem]">
-            {focus.map((s, i) => (
+            {practice.map((s, i) => (
               <li key={i}>{s}</li>
             ))}
           </ul>
         </div>
       )}
-      {feedback.review && focus.length > 0 && (
+      {feedback.review && practice.length > 0 && (
         <p className="text-[0.9375rem]">
           <span className="font-semibold">Review:</span> {feedback.review}
         </p>
-      )}
-      {!feedback.ungraded && focus.length > 0 && !feedback.repeatNext && (
-        <p className="text-sm text-muted">VFDA will go over this one with you.</p>
       )}
     </Card>
   );
@@ -226,12 +206,12 @@ function AnswerForm({
       }}
     >
       <QuizProgress item={item} />
-      {item.priorFeedback && <FeedbackCard feedback={item.priorFeedback} title="Your feedback on the first try" />}
+      {item.priorFeedback && <FeedbackCard feedback={item.priorFeedback} title="Feedback" />}
 
       <Card
         accent={repeat ? "accent" : undefined}
         title={repeat ? "Let's try one more" : item.partTitle || typeLabel(item)}
-        description={repeat ? "Same skill, new details. Use the tips above." : undefined}
+        description={repeat ? "Same skill, new details. Use the feedback above." : undefined}
         headingAs="h2"
         actions={<Badge tone={repeat ? "accent" : "primary"}>{typeLabel(item)}</Badge>}
       >
@@ -240,7 +220,7 @@ function AnswerForm({
 
       <div className="flex flex-col items-end gap-2">
         <button type="submit" disabled={!ready || pending} className={buttonClass("primary")}>
-          {pending ? (isMc ? "Saving…" : "Grading your answer…") : "Submit answer"}
+          {pending ? (isMc ? "Saving…" : "Checking your answer…") : repeat ? "Submit and continue" : "Submit answer"}
         </button>
         {error && (
           <p className="text-sm font-medium text-danger" role="alert">

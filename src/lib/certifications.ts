@@ -476,8 +476,10 @@ export type GridCell = {
   certifiedAt: string | null;
   recheckDate: string | null;
   openDrill: "recheck" | null;
-  // Certification uses first-try scores; a retake on the workflow's days shows here as a note.
+  // Certification uses first-try scores; a retake on the workflow's days shows here as a note (VFDA only).
   retakeNote: string | null;
+  // Any of the workflow's days finished ("Practicing" before a status exists).
+  started: boolean;
 };
 
 export type GridRow = {
@@ -573,6 +575,7 @@ export async function loadCertGrid(db: Db, filter: { vaIds?: string[]; officeId?
         recheckDate: c?.recheck_date ?? null,
         openDrill: c ? (drills.find((d) => d.certification_id === c.id)?.kind ?? null) : null,
         retakeNote: ow ? retakeNote(va.id, va.office_id, ow.days) : null,
+        started: !!ow && scored.some((a) => a.kind === "day" && a.va_id === va.id && a.office_id === va.office_id && ow.days.includes(a.schedule_day)),
       };
     };
     const cells = [

@@ -7,7 +7,7 @@
 import { scoreLine, type QuizReport } from "@/lib/quiz-report";
 import { retakeLineText, type RetakeComparison } from "@/lib/retake";
 import { STANDARDS_NOTICE } from "@/lib/rule-source";
-import { RESULT_LABELS, type ResultLabel, type Trend } from "@/lib/va-flow";
+import { progressText, RESULT_LABELS, type ResultLabel, type Trend } from "@/lib/va-flow";
 
 export type ReportItem = {
   code: string;
@@ -46,6 +46,8 @@ export type AttemptReport = {
   typicalTime?: number | null;
   // Days from the VA's start date to this attempt (reports only).
   sinceStart?: string;
+  // "Day X of Y completed" as of this attempt (null: not known).
+  progress?: { done: number; total: number } | null;
   // The office's Primary doctor (every doctor of the office gets the report), and every doctor's name, Primary first.
   primaryDoctor?: string;
   doctors?: string[];
@@ -114,9 +116,9 @@ export function minutesText(seconds: number | null) {
   return m < 60 ? `${Math.max(1, m)} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
-// "Maria Test finished W1D2: Building skills" (the doctor's email subject).
+// "Maria Test completed W1D2: Building skills" (the doctor's email subject; never a score).
 export const finishedSubject = (r: Pick<AttemptReport, "vaName" | "dayCode" | "result" | "retake">) =>
-  `${r.vaName} finished ${r.dayCode}${r.retake ? " retake" : ""}: ${RESULT_LABELS[r.result]}`;
+  `${r.vaName} completed ${r.dayCode}${r.retake ? " (practiced again)" : ""}: ${RESULT_LABELS[r.result]}`;
 
 // The quiz report's sections, or (when it couldn't be made) what the grading
 // alone says: things to focus on from the steps to focus on, no "went well".
@@ -124,6 +126,8 @@ function bodyOf(r: AttemptReport, q: QuizReport | null) {
   if (q) {
     return {
       wentWell: q.wentWell.map((g) => ({ name: g.name, bullets: g.bullets })),
+      skills: q.skills.map((g) => ({ name: g.name ?? "", bullets: g.bullets })),
+      practice: q.practice.map((p) => `${p.text}${p.tag?.kind === "vfda_standard" ? " [VFDA standard]" : ""}`),
       focus: q.focus.map((f) => `${f.code}: ${f.text}${f.tag?.kind === "vfda_standard" ? " [VFDA standard]" : ""}`),
       important: q.important.map((c) => `${c.code}: ${c.text}${c.quote ? ` The VA's words: "${c.quote}"` : ""}`),
       flags: q.flags,
@@ -134,6 +138,8 @@ function bodyOf(r: AttemptReport, q: QuizReport | null) {
   const below = r.items.filter((i) => !i.critical_error && (i.first_score ?? 0) < i.points);
   return {
     wentWell: [],
+    skills: [] as { name: string; bullets: string[] }[],
+    practice: [] as string[],
     focus: below.slice(0, 5).map((i) => `${i.code}: ${i.missed_steps.slice(0, 2).join("; ") || "keep the card's steps in mind"}`),
     important: r.items.filter((i) => i.critical_error).map((i) => `${i.code}: please review the safety steps with the VA. The VA's words: "${i.critical_quote ?? ""}"`),
     flags: shortFlags(r),
@@ -149,7 +155,7 @@ export function reportSections(r: AttemptReport, q: QuizReport | null = null) {
   const body = bodyOf(r, q);
 
   return {
-    // Needs extra support (or any critical error): VFDA coaches, the VA keeps going.
+    // Let's review together (or any critical error): VFDA coaches, the VA keeps going.
     alert: r.result === "at_risk",
     retake: !!rt,
     subject: `${finishedSubject(r)} – ${r.officeName}`,
@@ -159,12 +165,14 @@ export function reportSections(r: AttemptReport, q: QuizReport | null = null) {
       ["Office", r.officeName],
       ...(r.primaryDoctor ? [["Primary doctor", r.primaryDoctor] as [string, string]] : []),
       ["Day", `${r.dayCode}: ${r.dayTitle}${rt ? " (retake)" : ""}`],
+      ["Status", "Completed ✓"],
       ["Result", RESULT_LABELS[r.result]],
-      [rt ? "Retake score" : "Score", scoreLine(r.points, r.maxPoints)],
+      ...(r.progress ? [["Training progress", progressText(r.progress)] as [string, string]] : []),
+      [rt ? "Retake score (VFDA only)" : "Score (VFDA only)", scoreLine(r.points, r.maxPoints)],
       ...((rt
-        ? [["First try (official)", `${scoreLine(rt.first.points, rt.first.max)} · ${firstLabel}`]]
+        ? [["First try (official, VFDA only)", `${scoreLine(rt.first.points, rt.first.max)} · ${firstLabel}`]]
         : r.retakeScore
-          ? [["Retake", scoreLine(r.retakeScore.points, r.retakeScore.max)]]
+          ? [["Retake (VFDA only)", scoreLine(r.retakeScore.points, r.retakeScore.max)]]
           : []) as [string, string][]),
       ["Critical errors", String(criticalCount(r))],
       ["Flags", flagsText(r)],
@@ -182,17 +190,21 @@ export function reportSections(r: AttemptReport, q: QuizReport | null = null) {
 }
 
 const NONE = "None";
-const ALERT_LINE = "Needs extra support: please coach this VA. They keep going with their training.";
+const ALERT_LINE = "Let's review together: please coach this VA. They keep going with their training.";
+const VFDA_ONLY = "VFDA copy: scores are VFDA only. The doctor and the VA see the label, skills and what to practice, never a score.";
 
 // `link`: the attempt review page (login required).
 export function reportText(r: AttemptReport, link: string, q: QuizReport | null = null): string {
   const s = reportSections(r, q);
   const list = (items: string[]) => (items.length ? items.map((i) => `- ${i}`).join("\n") : NONE);
   return [
+    VFDA_ONLY,
     s.summary.map(([k, v]) => `${k}: ${v}`).join("\n"),
     s.alert ? ALERT_LINE : "",
+    s.skills.length ? `Skills shown:\n${s.skills.map((g) => `${g.name ? `${g.name}: ` : ""}${g.bullets.join(", ")}`).join("\n")}` : "",
+    s.practice.length ? `Skills to practice:\n${list(s.practice)}` : "",
     s.wentWell.length ? `What went well:\n${s.wentWell.map((g) => `${g.name}\n${list(g.bullets)}`).join("\n")}` : "",
-    `Things to focus on:\n${list(s.focus)}`,
+    `Things to focus on (VFDA only, by question):\n${list(s.focus)}`,
     s.important.length ? `Important to review:\n${list(s.important)}` : "",
     s.flags.length ? `Flags:\n${list(s.flags)}` : "",
     s.standards.length ? `${STANDARDS_NOTICE.title}\n${STANDARDS_NOTICE.doctor}\n${list(s.standards)}` : "",
@@ -219,13 +231,16 @@ export function reportHtml(r: AttemptReport, link: string, q: QuizReport | null 
   const list = (items: string[]) =>
     items.length ? `<ul style="margin:0;padding-left:20px">${items.map((i) => `<li>${e(i)}</li>`).join("")}</ul>` : `<p style="margin:0">${NONE}</p>`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">
+<p style="margin:0 0 12px;padding:6px 12px;background:#eef1f5;color:#374151;font-size:12px">${e(VFDA_ONLY)}</p>
 ${s.retake ? `<p style="margin:0 0 12px;padding:6px 12px;background:#e8eefc;color:#1e3a8a;font-weight:bold;letter-spacing:1px">RETAKE</p>` : ""}
 ${s.alert ? `<p style="margin:0 0 12px;padding:8px 12px;background:#fdf3e1;color:#7a4a00;font-weight:bold">${e(ALERT_LINE)}</p>` : ""}
 <table style="border-collapse:collapse">${s.summary
     .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#555">${e(k)}</td><td style="padding:2px 0"><b>${e(v)}</b></td></tr>`)
     .join("")}</table>
+${s.skills.length ? `${h("Skills shown", "#166534")}${s.skills.map((g) => `<p style="margin:4px 0">${g.name ? `<b>${e(g.name)}:</b> ` : ""}${g.bullets.map((b) => `&#10003; ${e(b)}`).join(" &nbsp; ")}</p>`).join("")}` : ""}
+${s.practice.length ? `${h("Skills to practice")}${list(s.practice)}` : ""}
 ${s.wentWell.length ? `${h("What went well", "#166534")}${s.wentWell.map((g) => `<p style="margin:6px 0 2px;font-weight:bold">${e(g.name)}</p>${list(g.bullets)}`).join("")}` : ""}
-${h("Things to focus on")}${list(s.focus)}
+${h("Things to focus on (VFDA only, by question)")}${list(s.focus)}
 ${s.important.length ? `${h("Important to review", "#7a4a00")}${list(s.important)}` : ""}
 ${s.flags.length ? `${h("Flags")}${list(s.flags)}` : ""}
 ${s.standards.length ? `${h(STANDARDS_NOTICE.title)}<p style="margin:0 0 4px">${e(STANDARDS_NOTICE.doctor)}</p>${list(s.standards)}` : ""}
@@ -251,12 +266,13 @@ export function reportSlack(r: AttemptReport, link: string, q: QuizReport | null
   const s = reportSections(r, q);
   const line = (label: string, items: string[]) => (items.length ? `*${label}:* ${items.map(slackEscape).join(" · ")}` : "");
   const lines = [
-    `*${slackEscape(s.subject)}*`,
+    `*${slackEscape(s.subject)}*  _(scores: VFDA only)_`,
     r.retake
       ? `Retake ${scoreLine(r.points, r.maxPoints)} (${RESULT_LABELS[r.result]}) · first try ${scoreLine(r.retake.first.points, r.retake.first.max)} (official) · ${minutesText(r.timeSpent)}`
       : `${RESULT_LABELS[r.result]} · ${scoreLine(r.points, r.maxPoints)}${r.retakeScore ? ` · retake ${scoreLine(r.retakeScore.points, r.retakeScore.max)}` : ""} · ${minutesText(r.timeSpent)}`,
     r.scope ? `VA's role: ${slackEscape(r.scope)}` : "",
-    line("What went well", s.wentWell.flatMap((g) => g.bullets)),
+    line("Skills shown", s.skills.flatMap((g) => g.bullets)),
+    line("To practice", s.practice),
     line("Focus on", s.focus),
     line("Important to review", s.important),
     line("Flags", s.flags),

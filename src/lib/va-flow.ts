@@ -16,24 +16,31 @@ export type UnlockStatus = "locked" | "open" | "done";
 export type Version = "A" | "B";
 export type ResultLabel = "strong" | "needs_coaching" | "at_risk";
 
-// Same score bands as before; only the words changed (encouraging, everywhere:
-// app, PDFs, emails, Slack, Leads4Life). Admin pages may show the old word in
-// a tooltip (OLD_RESULT_LABELS).
+// Same score bands as before; only the words changed (everywhere: app, PDFs,
+// emails, Slack, Leads4Life). VAs and doctors see the label, never the score:
+// On track = first try >= 80% and no critical error; Building skills = 60-79%;
+// Let's review together = below 60%, or any critical error. Admin pages show
+// the band in a tooltip (LABEL_HINTS).
 export const RESULT_LABELS: Record<ResultLabel, string> = {
-  strong: "Great work",
+  strong: "On track",
   needs_coaching: "Building skills",
-  at_risk: "Needs extra support",
+  at_risk: "Let's review together",
 };
 
-export const OLD_RESULT_LABELS: Record<ResultLabel, string> = {
-  strong: "Strong",
-  needs_coaching: "Needs coaching",
-  at_risk: "At risk",
+const LABEL_HINTS: Record<ResultLabel, string> = {
+  strong: "VFDA only: first try 80%+ and no critical error",
+  needs_coaching: "VFDA only: first try 60-79% (or a repeat below full points)",
+  at_risk: "VFDA only: first try below 60%, or a critical error",
 };
 
-// "Formerly: Needs coaching", for an admin tooltip.
-export const oldLabelHint = (r: string | null | undefined) =>
-  r && r in OLD_RESULT_LABELS ? `Formerly: ${OLD_RESULT_LABELS[r as ResultLabel]}` : undefined;
+// The label's score band, for an admin tooltip.
+export const oldLabelHint = (r: string | null | undefined) => (r && r in LABEL_HINTS ? LABEL_HINTS[r as ResultLabel] : undefined);
+
+// What VAs and doctors see for a finished quiz, next to the label.
+export const COMPLETED = "Completed ✓";
+
+// "Day 6 of 10 completed"
+export const progressText = (p: { done: number; total: number }) => `Day ${p.done} of ${p.total} completed`;
 
 // "16 of 20 points (80%)"
 export const rawScoreText = (points: number | string | null, max: number | null) =>
@@ -252,10 +259,36 @@ export type Feedback = {
   missedSteps: string[];
   repeatNext: boolean;
   ungraded: boolean;
-  // Shown on the feedback card only: the points, and the office card to review.
-  score?: number | null;
+  // Shown on the feedback card: the office card to review. Never the points.
   review?: string | null;
 };
+
+// The quiz feedback's first line: "Nice work on verifying the caller and ..."
+// from the grader's "You verified the caller and ...". Lines that don't start
+// with a past-tense verb become "Nice work! <line>".
+export function niceWorkLine(didWell: string): string {
+  const t = didWell
+    .trim()
+    .replace(/^(great job|nice work|well done|good job)[,!:]?\s*/i, "")
+    .replace(/[.\s]+$/, "");
+  if (!t) return "";
+  const gerund = (word: string) => {
+    const w = word.toLowerCase();
+    if (/^[a-z]{3,}ied$/.test(w)) return `${w.slice(0, -3)}ying`;
+    if (/^[a-z]{3,}[^e]ed$/.test(w) && !/^(need|feed|seed|speed|proceed)$/.test(w)) return `${w.slice(0, -2)}ing`;
+    return null;
+  };
+  const body = t.replace(/^you\s+/i, "");
+  const [verb, ...rest] = body.split(/\s+/);
+  const ing = /^you\s/i.test(t) ? gerund(verb) : null;
+  if (!ing) return `Nice work! ${t.charAt(0).toUpperCase()}${t.slice(1)}.`;
+  // "... and offered" -> "... and offering".
+  const tail = rest.join(" ").replace(/\b(and|then)\s+([a-z]+)\b/g, (m, joiner: string, w: string) => {
+    const g = gerund(w);
+    return g ? `${joiner} ${g}` : m;
+  });
+  return `Nice work on ${ing}${tail ? ` ${tail}` : ""}.`;
+}
 
 export type ServedItem = {
   scenarioId: string; // the day's scenario (a repeat is answered under its parent)
@@ -374,9 +407,9 @@ export function withOverride<T extends Omit<GradedItem, "type" | "points">>(item
   };
 }
 
-// Great work (strong): first try >= 80% and no critical error.
+// On track (strong): first try >= 80% and no critical error.
 // Building skills (needs_coaching): first try 60-79%, or a repeat still below 2/2.
-// Needs extra support (at_risk): first try below 60%, or any critical error.
+// Let's review together (at_risk): first try below 60%, or any critical error.
 // An answer the grader couldn't score counts toward neither points nor max
 // until VFDA scores it.
 export function dayResult(items: GradedItem[], rules: CertificationRules) {

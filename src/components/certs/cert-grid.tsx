@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { EmptyState, linkClass, StatusBadge, Table, td, th } from "@/components/ui";
-import { CERT_LABELS, SOP_LABELS } from "@/lib/certification";
+import { CERT_LABELS, simpleCert, SOP_LABELS } from "@/lib/certification";
 import type { GridCell, GridRow } from "@/lib/certifications";
 import type { Tone } from "@/lib/theme";
 import { showDate } from "@/lib/va-flow";
@@ -19,10 +19,13 @@ export function CertGrid({
   columns,
   rows,
   certificatePath,
+  simple = false,
 }: {
   columns: { code: string; name: string }[];
   rows: GridRow[];
   certificatePath?: (vaId: string) => string;
+  // Doctors: Certified / Practicing / Not started / n/a, no scores or score notes.
+  simple?: boolean;
 }) {
   if (!rows.length) return <EmptyState title="No VAs yet">Certifications show here once VAs start training.</EmptyState>;
   const hasGray = rows.some((r) => r.cells.length > columns.length);
@@ -57,7 +60,7 @@ export function CertGrid({
             </td>
             {r.cells.slice(0, columns.length).map((c) => (
               <td key={c.code} className={td}>
-                <Cell cell={c} />
+                <Cell cell={c} simple={simple} />
               </td>
             ))}
             {hasGray && (
@@ -68,7 +71,7 @@ export function CertGrid({
                       <span className="font-semibold">
                         {c.code} {c.name}
                       </span>
-                      <Cell cell={c} />
+                      <Cell cell={c} simple={simple} />
                     </div>
                   ))}
                 </div>
@@ -81,8 +84,23 @@ export function CertGrid({
   );
 }
 
-function Cell({ cell }: { cell: GridCell }) {
+function Cell({ cell, simple }: { cell: GridCell; simple: boolean }) {
   if (!cell.applies) return <span className="text-xs text-muted">n/a</span>;
+  if (simple) {
+    const label = simpleCert(cell);
+    return (
+      <div className="flex min-w-24 flex-col gap-1 text-xs">
+        <span className="self-start">
+          <StatusBadge label={label} />
+        </span>
+        {cell.links.map((l, i) => (
+          <a key={l} href={l} target="_blank" rel="noreferrer" className={linkClass}>
+            Trello{cell.links.length > 1 ? ` ${i + 1}` : ""}
+          </a>
+        ))}
+      </div>
+    );
+  }
   if (!cell.status) return <span className="text-xs text-muted">not yet</span>;
   return (
     <div className="flex min-w-24 flex-col gap-1 text-xs">

@@ -6,8 +6,20 @@ import { saveVaReport } from "@/lib/va-report-actions";
 
 // VFDA edits the VA's coaching tips: one line per bullet. Saved text shows on
 // the VA's My report at once.
-export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId: string; alerts: string[]; tips: string[]; strengths: string[] }) {
-  const [text, setText] = useState({ alerts: alerts.join("\n"), tips: tips.join("\n"), strengths: strengths.join("\n") });
+export function VaTipsEditor({
+  attemptId,
+  alerts,
+  tips,
+  strengths,
+  skills,
+}: {
+  attemptId: string;
+  alerts: string[];
+  tips: string[];
+  strengths: string[];
+  skills: string[];
+}) {
+  const [text, setText] = useState({ alerts: alerts.join("\n"), tips: tips.join("\n"), strengths: strengths.join("\n"), skills: skills.join("\n") });
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   const box = (key: keyof typeof text, label: string, rows: number) => (
@@ -26,8 +38,9 @@ export function VaTipsEditor({ attemptId, alerts, tips, strengths }: { attemptId
   );
   return (
     <div className="flex flex-col gap-3">
-      {box("strengths", "What went well, 4-8 lines (start a line with [Workflow name] to group it)", Math.max(5, strengths.length + 1))}
-      {box("tips", "Things to focus on, most important first, 2-5 lines (end each with \"Review: <card>\")", Math.max(3, tips.length + 1))}
+      {box("skills", "Skills shown: short names, 4-8 lines (start a line with [Workflow name] to group it, e.g. [Scheduling] Offering two times)", Math.max(5, skills.length + 1))}
+      {box("strengths", "What went well, full sentences (the first one is shown under the skills)", Math.max(4, strengths.length + 1))}
+      {box("tips", "Skills to practice, most important first, 2-5 lines (end each with \"Review: <card>\")", Math.max(3, tips.length + 1))}
       {box("alerts", "Important to review: critical errors only, calm, general terms (one per line)", Math.max(2, alerts.length + 1))}
       <span className="flex flex-wrap items-center gap-2">
         <button

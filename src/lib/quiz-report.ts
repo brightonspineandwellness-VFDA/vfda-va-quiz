@@ -12,6 +12,7 @@
 
 import { requiredSteps } from "@/lib/mock-grade";
 import { standardsUsed, tipTagOf, vaTipTags, type ItemRuleSource, type TipTag } from "@/lib/rule-source";
+import { skillsOf, type WentWellGroup } from "@/lib/skills";
 
 export type NeedsWorkItem = {
   key: string; // the item's position, for matching Claude's tips
@@ -93,8 +94,26 @@ export type QuizReport = {
   cardTips: string[];
   // "Coaching tips given to the VA" (va_reports); null before they're written.
   // tags: each tip's "VFDA standard" / "Card: ..." tag.
-  vaTips: { alerts: string[]; tips: string[]; strengths: string[]; tags?: (TipTag | null)[] } | null;
+  vaTips: { alerts: string[]; tips: string[]; strengths: string[]; skills?: string[]; tags?: (TipTag | null)[] } | null;
+  // What the doctor sees (the PDF, Leads4Life), never a score: "Day X of Y
+  // completed", Skills [VA] showed (by workflow), Skills to practice (2-5,
+  // the same as the VA's), Important to review (calm), gentle flags.
+  progress: { done: number; total: number } | null;
+  skills: WentWellGroup[];
+  practice: { text: string; tag: TipTag | null }[];
+  doctorImportant: string[];
+  doctorFlags: string[];
 };
+
+// The flags a doctor sees, gently: no scores, no grading details.
+export function doctorFlags(f: Pick<FlagInput, "retake" | "fastFinish" | "pastedAnswers">, vaName: string): string[] {
+  const first = vaName.trim().split(/\s+/)[0] || "the VA";
+  return [
+    f.retake && `${first} chose to practice this day again (optional).`,
+    f.fastFinish && `Finished faster than usual. Worth checking ${first} took time to think each answer through.`,
+    f.pastedAnswers > 0 && `A few answers were pasted. Worth checking they're ${first}'s own words.`,
+  ].filter((x): x is string => !!x);
+}
 
 export type FlagInput = {
   retake: boolean;
@@ -132,8 +151,8 @@ const MAX_CARD_TIP = 180;
 const MAX_BULLET = 170;
 export const MAX_FOCUS = 5;
 const MAX_CARD_TIPS = 5;
-// What went well: 4-8 bullets in all, more when the result is Great work or Building skills.
-export const wentWellRange = (resultLabel: string) => (/extra support|risk/i.test(resultLabel) ? { min: 4, max: 6 } : { min: 6, max: 8 });
+// What went well: 4-8 bullets in all, more when the result is On track or Building skills.
+export const wentWellRange = (resultLabel: string) => (/review together|extra support|risk/i.test(resultLabel) ? { min: 4, max: 6 } : { min: 6, max: 8 });
 const PER_WORKFLOW = 4;
 
 const clip = (s: string, n: number) => {
@@ -264,7 +283,7 @@ export function checkTips(raw: Tips, needsWork: NeedsWorkItem[], doneWell: DoneW
 export const withReview = (text: string, card: string) => (/review:/i.test(text) ? sentence(text) : `${sentence(text)} Review: ${card}.`);
 
 export function buildQuizReport(
-  head: Omit<QuizReport, "wentWell" | "focus" | "moreFocus" | "important" | "flags" | "standards" | "cardTips" | "vaTips">,
+  head: Omit<QuizReport, "wentWell" | "focus" | "moreFocus" | "important" | "flags" | "standards" | "cardTips" | "vaTips" | "skills" | "practice" | "doctorImportant">,
   needsWork: NeedsWorkItem[],
   doneWell: DoneWellItem[],
   tips: Tips,
@@ -275,8 +294,27 @@ export function buildQuizReport(
   const coachingOf = (i: NeedsWorkItem) => tips.items.find((x) => x.key === i.key);
   const ordered = orderNeedsWork(needsWork);
   const focusItems = ordered.filter((i) => !i.critical);
+  const first = head.vaName.trim().split(/\s+/)[0] || "your VA";
+  // The doctor sees the same skills and practice list as the VA; before the
+  // VA's report is written, they come from the doctor's own tips.
+  const strengthLines = tips.strengths.flatMap((s) => s.bullets.map((b) => `[${names.get(s.workflow) ?? s.workflow}] ${b}`));
+  const skills = skillsOf(vaTips?.strengths.length ? vaTips : { strengths: strengthLines });
+  const tags = vaTips ? vaTipTags(vaTips.tips, needsWork) : [];
+  const focusLines = focusItems.slice(0, MAX_FOCUS).map((i) => ({
+    text: withReview(coachingOf(i)?.coaching || `Keep the card's steps for ${lower(topicOf(i))} in mind`, cardOf(i)),
+    tag: tipTagOf(i.ruleSource, i.sourceCard),
+  }));
+  const criticals = ordered.filter((i) => i.critical);
   return {
     ...head,
+    skills,
+    practice: vaTips?.tips.length ? vaTips.tips.map((text, n) => ({ text, tag: tags[n] ?? null })) : focusLines,
+    doctorImportant: criticals.length
+      ? [
+          ...(vaTips?.alerts.length ? vaTips.alerts : criticals.map((i) => withReview(coachingOf(i)?.coaching || "When this comes up, always start with the safety steps on the card", cardOf(i)))),
+          `Please go over ${criticals.length === 1 ? "this" : "these"} with ${first} when you can.`,
+        ]
+      : [],
     vaTips: vaTips && { ...vaTips, tags: vaTipTags(vaTips.tips, needsWork) },
     standards: standardsUsed([...needsWork, ...doneWell].map((i) => i.ruleSource)),
     wentWell: tips.strengths
@@ -318,13 +356,15 @@ export type Leads4LifePayload = {
   va_name: string;
   day: string;
   topic: string;
-  result: string; // "Great work", "Building skills" or "Needs extra support"
-  first_try_score: string; // "72%"
-  raw_score: string; // "16/20"
+  // No scores: the label, how many skills were shown, and what to practice.
+  label: string; // "On track", "Building skills" or "Let's review together"
+  skills_shown_count: number;
+  skills_to_practice: string; // "; "-separated, each with its "Review: <card>"
+  training_progress: string; // "Day 6 of 10 completed"
   is_retake: "yes" | "no";
   report_link: string;
   flags: string; // short, e.g. "fast finish, 3 pasted answers"; "none" when there are none
-  // For the doctor's email: "[VA name] finished [day]: [label]".
+  // For the doctor's email: "[VA name] completed [day]: [label]".
   email_subject: string;
 };
 

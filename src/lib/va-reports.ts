@@ -11,9 +11,8 @@ import "server-only";
 
 import { z } from "zod";
 import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
-import { loadItems } from "@/lib/quiz-reports";
+import { loadItems, makeQuizReport } from "@/lib/quiz-reports";
 import type { DoneWellItem, NeedsWorkItem } from "@/lib/quiz-report";
-import { scoreLine } from "@/lib/quiz-report";
 import { escapeHtml as escapeHtmlText } from "@/lib/report";
 import { appUrl, deliver, loadAttemptReport, sendAttemptReport, sendEmail, type Target } from "@/lib/reports";
 import { standardsUsed, vaTipTags } from "@/lib/rule-source";
@@ -23,8 +22,9 @@ import {
   checkVaTips,
   CLOSING,
   fallbackVaTips,
-  groupStrengths,
   MAX_STRENGTHS,
+  parseStrength,
+  skillsOf,
   MAX_TIPS,
   tipGroups,
   vaFlags,
@@ -32,7 +32,7 @@ import {
   type VaReportView,
   type VaTips,
 } from "@/lib/va-report";
-import { attemptLabel, RESULT_LABELS, type ResultLabel } from "@/lib/va-flow";
+import { attemptLabel, progressText, RESULT_LABELS, type ResultLabel } from "@/lib/va-flow";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -52,14 +52,15 @@ const VaTipsSchema = z.object({
     .array(
       z.object({
         workflow: z.string().describe("The workflow name, copied exactly from the names given"),
-        text: z.string().describe("One specific bullet to the VA: the skill they showed and the card it matches"),
+        skill: z.string().describe('The skill in 2-5 words, starting with a verb ending in -ing, e.g. "Verifying callers", "Offering two times"'),
+        text: z.string().describe("One specific sentence to the VA: the skill they showed and the card it matches"),
       }),
     )
-    .describe("What went well: the biggest part of the report"),
+    .describe("Skills you showed: the biggest part of the report"),
   tips: z.array(
     z.object({
       keys: z.array(z.string()).describe("The keys of the items this tip covers (all on the same card)"),
-      text: z.string().describe("1-2 warm sentences, at most 40 words, to the VA: what to do next time, in general terms"),
+      text: z.string().describe("One short line, at most 20 words, starting with a verb: the skill to practice, in general terms"),
       card: z.string().describe("The card to review, copied exactly from the card names given"),
       section: z.string().describe("Which part of that card, in a few words, e.g. 'the steps for a patient who wants to cancel'"),
     }),
@@ -75,22 +76,24 @@ const VaTipsSchema = z.object({
 
 const VA_TIPS_SYSTEM = `You write the report a virtual assistant (VA) in training at a chiropractic office reads after a practice quiz.
 Write to the VA ("you"), warm, supportive and specific, plain English, never shaming.
-Never use the words "wrong", "failed", "fail", "missed" or "missing". Use "to focus on", "next time", "keep in mind".
+Never use the words "wrong", "failed", "fail", "missed" or "missing". Never mention points, scores or percentages.
 
 The VA must NEVER see the quiz itself. Never include, quote or paraphrase closely:
 - the scenario, any patient or caller name, date, time or detail from it,
 - the VA's answer or their words,
 - the correct answer as a script, or the critical fail wording.
 
-strengths ("What went well", the biggest section): {MIN}-{MAX} bullets, grouped by workflow (use the workflow names in
-<workflows>). Each bullet names a specific skill the VA showed and the card it matches, e.g.
-"You offered two appointment times, just like the Master Phone Script." Use <done_well> (full points) and the did_well notes on
-<needs_work> items (partial credit counts). Start some bullets with "You did a great job..." when it fits.
+strengths ("Skills you showed", the biggest section): {MIN}-{MAX} skills, grouped by workflow (use the workflow names in
+<workflows>), each a different skill. skill: 2-5 words starting with an -ing verb, e.g. "Verifying callers", "Offering two
+times", "Warm greeting", "Confirming bookings saved". text: one sentence to the VA naming the skill and the card it matches, e.g.
+"You verified every caller before sharing details, just like the HIPAA card asks." Use <done_well> (full points) and the
+did_well notes on <needs_work> items (partial credit counts).
 
-tips ("Things to focus on"): only for items in <needs_work> without critical="true". Aim for 2-{TIPS} tips (fewer only when
+tips ("Skills to practice"): only for items in <needs_work> without critical="true". Aim for 2-{TIPS} tips (fewer only when
 there are fewer items). Items on the same card AND the same topic become ONE tip (list all their keys); different topics on the
-same card are separate tips. Most important first, at most {TIPS} tips. text: what to do next time, warm and concrete, at most 40 words,
-naming the 1-2 most important points. card: exactly one of the names in <cards>. section: which part of that card to review.
+same card are separate tips. Most important first, at most {TIPS} tips. text: one short line starting with a verb, at most 20
+words, e.g. "Mention the 24-hour cancellation policy when someone cancels late." card: exactly one of the names in <cards>.
+section: which part of that card to review.
 
 alerts ("Important to review"): one per item marked critical="true", with its key. One calm sentence on what to always do when
 this comes up, e.g. "When a patient mentions numbness or chest pain, always start with the emergency script." card: the card to
@@ -120,11 +123,11 @@ ${cards.map((c) => `- ${c}`).join("\n") || "(none)"}
 <needs_work>
 ${needsWork
   .map(
-    (i) => `<item key="${i.key}" workflow="${i.workflowName}" card="${cardOf(i)}" topic="${i.partTitle || i.workflowName}" points="${i.score ?? "ungraded"}/${i.points}"${i.critical ? ' critical="true"' : ""}>
+    (i) => `<item key="${i.key}" workflow="${i.workflowName}" card="${cardOf(i)}" topic="${i.partTitle || i.workflowName}"${i.critical ? ' critical="true"' : ""}>
 <scenario>${i.scenario}</scenario>
 <correct>${i.correct.join("; ")}</correct>
 <va_answer>${i.answer || "(left empty)"}</va_answer>
-<grade>${i.score ?? "ungraded"}/${i.points}. ${i.reason} ${i.missed.map((m) => `To focus on: ${m}.`).join(" ")}</grade>
+<grade>${i.reason} ${i.missed.map((m) => `To practice: ${m}.`).join(" ")}</grade>
 <did_well>${i.didWell || "(not noted)"}</did_well>
 </item>`,
   )
@@ -180,27 +183,27 @@ export async function makeVaReport(
   if (!attempt?.submitted_at || !attempt.result) return "unfinished";
   const { needsWork, doneWell } = await loadItems(db, attemptId);
   const { tips, source } = await writeVaTips(needsWork, doneWell, attempt.result as ResultLabel);
+  // Before skills-reports.sql has been run there is no skills column: the
+  // skills then come from the strengths when shown.
+  const write = async (row: Record<string, unknown>) => {
+    const run = (r: Record<string, unknown>) =>
+      existing
+        ? db.from("va_reports").update(r).eq("attempt_id", attemptId).select("attempt_id")
+        : // Two runs at once: the first insert wins, the other changes nothing.
+          db.from("va_reports").upsert(r, { onConflict: "attempt_id", ignoreDuplicates: true }).select("attempt_id");
+    const first = await run(row);
+    if (first.error && /skills/.test(first.error.message)) {
+      const rest = Object.fromEntries(Object.entries(row).filter(([k]) => k !== "skills"));
+      return must(await run(rest));
+    }
+    return must(first);
+  };
   if (existing) {
     // Re-graded: new text, the VFDA edit stamp cleared; emailed_at stays.
-    must(
-      await db
-        .from("va_reports")
-        .update({ ...tips, source, edited_at: null, edited_by: null })
-        .eq("attempt_id", attemptId)
-        .select("attempt_id"),
-    );
+    await write({ ...tips, skills: tips.skills ?? [], source, edited_at: null, edited_by: null });
     return "created";
   }
-  // Two runs at once: the first insert wins, the other changes nothing.
-  const inserted = must(
-    await db
-      .from("va_reports")
-      .upsert(
-        { attempt_id: attemptId, va_id: attempt.va_id, office_id: attempt.office_id, ...tips, source },
-        { onConflict: "attempt_id", ignoreDuplicates: true },
-      )
-      .select("attempt_id"),
-  );
+  const inserted = await write({ attempt_id: attemptId, va_id: attempt.va_id, office_id: attempt.office_id, ...tips, skills: tips.skills ?? [], source });
   return inserted?.length ? "created" : "exists";
 }
 
@@ -211,18 +214,28 @@ export async function makeVaReport(
 // The VA's view of one report. Only these fields are sent to the page or drawn
 // in the PDF. `tipsDb`: the client the stored tips are read with (the VA's own
 // session on their pages, so row-level security applies).
+// The stored text of one report (null: none yet). Read with the skills
+// column, or without it before skills-reports.sql has been run.
+export async function readVaTips(tipsDb: Pick<Db, "from">, attemptId: string): Promise<(VaTips & { released_at: string }) | null> {
+  const read = (cols: string) => tipsDb.from("va_reports").select(cols).eq("attempt_id", attemptId).maybeSingle();
+  let res = await read("alerts, tips, strengths, skills, released_at");
+  if (res.error && /skills/.test(res.error.message)) res = await read("alerts, tips, strengths, released_at");
+  if (res.error || !res.data) return null;
+  const row = res.data as unknown as Record<string, unknown>;
+  return { alerts: list(row.alerts), tips: list(row.tips), strengths: list(row.strengths), skills: list(row.skills), released_at: String(row.released_at) };
+}
+
 export async function loadVaReportView(db: Db, attemptId: string, tipsDb: Pick<Db, "from"> = db): Promise<VaReportView | null> {
-  const [loaded, attempt, stored, items, graded] = await Promise.all([
+  const [loaded, attempt, row, items, graded] = await Promise.all([
     loadAttemptReport(db, attemptId),
     db.from("attempts").select("kind, submitted_at").eq("id", attemptId).maybeSingle(),
-    tipsDb.from("va_reports").select("alerts, tips, strengths, released_at").eq("attempt_id", attemptId).maybeSingle(),
+    readVaTips(tipsDb, attemptId),
     db.from("attempt_items").select("first_answer").eq("attempt_id", attemptId),
     // For the VFDA standards notice and the tips' tags.
     loadItems(db, attemptId).catch(() => null),
   ]);
   if (!loaded || !attempt.data?.submitted_at) return null;
   const r = loaded.report;
-  const row = stored.error ? null : stored.data;
   const ready = !!row && new Date(row.released_at) <= new Date();
   const retake = attempt.data.kind === "retake";
   return {
@@ -235,23 +248,18 @@ export async function loadVaReportView(db: Db, attemptId: string, tipsDb: Pick<D
     retake,
     result: r.result,
     resultLabel: RESULT_LABELS[r.result],
-    score: scoreLine(r.points, r.maxPoints),
-    otherScore: r.retake
-      ? { caption: "First try", text: scoreLine(r.retake.first.points, r.retake.first.max) }
-      : r.retakeScore
-        ? { caption: "Retake", text: scoreLine(r.retakeScore.points, r.retakeScore.max) }
-        : null,
-    timeSpent: r.timeSpent,
-    wentWell: ready ? groupStrengths(list(row!.strengths)) : [],
-    important: ready ? list(row!.alerts) : [],
+    progress: r.progress ?? null,
+    skills: ready ? skillsOf(row!) : [],
+    highlight: ready ? (row!.strengths.map((s) => parseStrength(s).text).find(Boolean) ?? null) : null,
+    important: ready ? row!.alerts : [],
     closing: CLOSING[r.result],
     flags: vaFlags({
       fastFinish: r.fastFinish,
       pastedAnswers: r.pastedAnswers ?? 0,
       totalAnswers: (items.data ?? []).filter((i) => i.first_answer).length,
     }),
-    tips: ready ? list(row!.tips) : [],
-    tipTags: ready && graded ? vaTipTags(list(row!.tips), graded.needsWork) : [],
+    tips: ready ? row!.tips : [],
+    tipTags: ready && graded ? vaTipTags(row!.tips, graded.needsWork) : [],
     standards: graded ? standardsUsed([...graded.needsWork, ...graded.doneWell].map((i) => i.ruleSource)) : [],
     ready,
   };
@@ -271,7 +279,7 @@ async function activeVa(db: Db, vaId: string) {
 const firstName = (va: { full_name: string | null }) => va.full_name?.trim().split(/\s+/)[0] || "there";
 
 // "Your W1D2 results are ready – nice work finishing!"
-const readySubject = (day: string) => `Your ${day} results are ready – nice work finishing!`;
+const readySubject = (day: string) => `Your ${day} skills report is ready – nice work finishing!`;
 
 // One attempt's report is ready (after grading). Sent once (emailed_at).
 export async function sendVaReportReady(db: Db, attemptId: string): Promise<{ sent: number; failed: number }> {
@@ -280,10 +288,11 @@ export async function sendVaReportReady(db: Db, attemptId: string): Promise<{ se
   const va = await activeVa(db, row.va_id);
   const view = await loadVaReportView(db, attemptId);
   if (!va || !view) return { sent: 0, failed: 0 };
-  const day = `${view.dayCode}${view.retake ? " retake" : ""}`;
+  const day = `${view.dayCode}${view.retake ? " practice" : ""}`;
   const subject = readySubject(day);
   const link = `${appUrl()}/va/results/${attemptId}`;
   const line = vaReportLine(view);
+  const progressLine = view.progress ? progressText(view.progress) : "";
   const result = await deliver(db, { attempt_id: attemptId, event: "va-report" }, [
     {
       channel: "email",
@@ -293,9 +302,9 @@ export async function sendVaReportReady(db: Db, attemptId: string): Promise<{ se
           va.email,
           subject,
           wrapHtml(
-            `<p>Hi ${escapeHtmlText(firstName(va))},</p><p>Nice work finishing ${escapeHtmlText(day)}! Your report is ready: it starts with what went well, then a few things to focus on next time.</p><p>${escapeHtmlText(line)}</p><p><a href="${escapeHtmlText(link)}">Open My report</a> (sign-in required)</p><p>Keep going. Every day builds on this one.</p>`,
+            `<p>Hi ${escapeHtmlText(firstName(va))},</p><p>Nice work finishing ${escapeHtmlText(day)}! Your report is ready: the skills you showed, then a few skills to practice.</p><p>${escapeHtmlText(line)}</p>${progressLine ? `<p>${escapeHtmlText(progressLine)}</p>` : ""}<p><a href="${escapeHtmlText(link)}">Open My report</a> (sign-in required)</p><p>Keep going. Every day builds on this one.</p>`,
           ),
-          `Hi ${firstName(va)},\n\nNice work finishing ${day}! Your report is ready: it starts with what went well, then a few things to focus on next time.\n\n${line}\n\nOpen My report (sign-in required): ${link}\n\nKeep going. Every day builds on this one.`,
+          `Hi ${firstName(va)},\n\nNice work finishing ${day}! Your report is ready: the skills you showed, then a few skills to practice.\n\n${line}${progressLine ? `\n${progressLine}` : ""}\n\nOpen My report (sign-in required): ${link}\n\nKeep going. Every day builds on this one.`,
           `va-report-${attemptId}`,
         ),
     },
@@ -434,7 +443,7 @@ async function sendVaReportsDigest(db: Db, vaId: string, attemptIds: string[]): 
   const ids = views.map((v) => v.attemptId).sort();
   const link = `${appUrl()}/va/results`;
   const one = views.length === 1;
-  const subject = one ? readySubject(`${views[0].dayCode}${views[0].retake ? " retake" : ""}`) : `Your results are ready (${views.length} quizzes) – nice work finishing!`;
+  const subject = one ? readySubject(`${views[0].dayCode}${views[0].retake ? " practice" : ""}`) : `Your skills reports are ready (${views.length} quizzes) – nice work finishing!`;
   const lines = views.map(vaReportLine);
   const intro = one ? "Nice work finishing! Your report is ready:" : `Nice work finishing! Your reports for ${views.length} quizzes are ready:`;
   const target: Target = {
@@ -475,3 +484,57 @@ export async function loadMyVaReport(user: { id: string; role: string | null }, 
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ---------------------------------------------------------------------------
+// "Rebuild reports in the skills format" (/admin/settings): every finished
+// attempt's VA report written again (skills shown, skills to practice, no
+// scores) and its doctor PDF made again, stored with a new 30-day link.
+// Nothing is emailed, posted or sent to Leads4Life (emailed_at is kept).
+// Works in batches: attempts whose VA report has no skills yet; press again
+// until none are left.
+// ---------------------------------------------------------------------------
+
+const REBUILD_BATCH = 12;
+
+export async function rebuildReportsInSkillsFormat(): Promise<{ rebuilt: number; left: number; failed: { attempt: string; error: string }[] }> {
+  const db = createAdminClient();
+  const probe = await db.from("va_reports").select("attempt_id, skills").limit(1);
+  if (probe.error) throw new Error(`Run supabase/skills-reports.sql first (${probe.error.message}).`);
+  const attempts = (must(
+    await db
+      .from("attempts")
+      .select("id, va_id, kind, schedule_day")
+      .not("submitted_at", "is", null)
+      .not("result", "is", null)
+      .is("archived_at", null)
+      .order("submitted_at"),
+  ) ?? []) as { id: string; va_id: string; kind: string; schedule_day: string }[];
+  const ids = attempts.map((a) => a.id);
+  const done = new Set<string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const rows = (must(await db.from("va_reports").select("attempt_id, skills").in("attempt_id", ids.slice(i, i + 200))) ?? []) as {
+      attempt_id: string;
+      skills: unknown;
+    }[];
+    for (const r of rows) if (Array.isArray(r.skills) && r.skills.length) done.add(r.attempt_id);
+  }
+  const todo = attempts.filter((a) => !done.has(a.id));
+  const batch = todo.slice(0, REBUILD_BATCH);
+  const failed: { attempt: string; error: string }[] = [];
+  let rebuilt = 0;
+  const queue = [...batch];
+  const worker = async () => {
+    for (let a = queue.shift(); a; a = queue.shift()) {
+      try {
+        await makeVaReport(db, a.id, { replace: true });
+        const loaded = await loadAttemptReport(db, a.id);
+        if (loaded) await makeQuizReport(db, a.id, loaded.report);
+        rebuilt++;
+      } catch (e) {
+        failed.push({ attempt: attemptLabel(a), error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  return { rebuilt, left: todo.length - batch.length + failed.length, failed };
+}

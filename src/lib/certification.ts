@@ -9,6 +9,14 @@ export type SopStatus = "pending" | "approved" | "needs_changes" | "rejected";
 
 export const CERT_LABELS: Record<CertStatus, string> = { pending: "Pending", coaching: "Coaching needed", certified: "Certified" };
 
+// What VAs and doctors see in the certification grid (internal statuses unchanged).
+export type SimpleCert = "Certified" | "Practicing" | "Not started" | "n/a";
+export function simpleCert(c: { applies: boolean; status: CertStatus | null; started?: boolean }): SimpleCert {
+  if (!c.applies) return "n/a";
+  if (c.status === "certified") return "Certified";
+  return c.status || c.started ? "Practicing" : "Not started";
+}
+
 // Older rows may still say "retrain" until the SQL renames it.
 export const certStatus = (s: string): CertStatus => (s === "certified" ? "certified" : s === "pending" ? "pending" : "coaching");
 

@@ -235,7 +235,7 @@ export function Badge({ children, tone = "neutral", size = "sm", className }: { 
 }
 
 // Approved, Draft, Needs review, Invited, Training, Certified, Retake,
-// Great work, Building skills, Needs extra support, ...: the tone comes from the label.
+// On track, Building skills, Let's review together, ...: the tone comes from the label.
 // `hint`: a tooltip (e.g. the old label name on admin pages).
 export function StatusBadge({ label, size, tone, hint }: { label: string; size?: "sm" | "lg"; tone?: Tone; hint?: string }) {
   const badge = (

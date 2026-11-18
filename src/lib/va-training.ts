@@ -607,7 +607,6 @@ export async function submitAnswer(
         missedSteps: grade.score < 2 ? grade.missed_steps : [],
         repeatNext: !!repeat,
         ungraded: false,
-        score: grade.score,
         review: isVfdaSourceCard(key.source_card) ? null : key.source_card,
       }
     : UNGRADED;
@@ -800,7 +799,7 @@ async function finishDay(ctx: DayContext): Promise<FinishedDay> {
 }
 
 // ---------------------------------------------------------------------------
-// One optional retake of a whole day (Building skills or Needs extra support). Never
+// One optional retake of a whole day (Building skills or Let's review together). Never
 // blocks the next day; the first try stays the official score.
 // ---------------------------------------------------------------------------
 
@@ -905,7 +904,7 @@ export async function startRetake(user: CurrentUser, parentId: string): Promise<
     build_version: number | null;
   } | null;
   if (!parent || parent.kind !== "day" || !parent.submitted_at || parent.archived_at) return { error: "There's no finished day to retake here." };
-  if (!RETAKE_LABELS.includes(parent.result as ResultLabel)) return { error: "Only a day labeled Building skills or Needs extra support can be retaken." };
+  if (!RETAKE_LABELS.includes(parent.result as ResultLabel)) return { error: "Only a day labeled Building skills or Let's review together can be practiced again." };
 
   // Once per day. A retake whose preparation died is started again.
   const existing = must(

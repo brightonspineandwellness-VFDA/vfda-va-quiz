@@ -4,13 +4,12 @@ import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { ButtonLink, EmptyState } from "@/components/ui";
 import { doneMessage, QuizDone } from "@/components/va/quiz-done";
-import { RetakeCompare } from "@/components/va/retake-compare";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
 import { afterAttemptGraded } from "@/lib/va-reports";
-import { loadRetakeComparison } from "@/lib/retake";
 import { createAdminClient } from "@/lib/supabase/server";
-import { percentOf, RESULT_LABELS } from "@/lib/va-flow";
+import { dayProgress } from "@/lib/training-progress";
+import { RESULT_LABELS } from "@/lib/va-flow";
 import { loadDrillScreen, type FinishedDay } from "@/lib/va-training";
 
 // A workflow recheck, or a day's retake: same screen as a training day.
@@ -44,28 +43,22 @@ async function Drill({ params }: { params: Promise<{ id: string }> }) {
   if (screen.kind === "finished") {
     const { attemptId, fresh } = screen.result;
     if (fresh) after(() => afterAttemptGraded(attemptId));
-    return <Finished result={screen.result} />;
+    return <Finished result={screen.result} vaId={user.id} officeId={user.officeId} />;
   }
   const { item } = screen;
   return <ScenarioRunner key={`${item.scenarioId}:${item.phase}`} initial={item} />;
 }
 
-async function Finished({ result }: { result: FinishedDay }) {
-  // Only this VA's own attempt gets here (loadDrillScreen checked it).
-  const retake = result.drill === "retake" ? await loadRetakeComparison(createAdminClient(), result.attemptId) : null;
-  const points = retake ? retake.retake.points : result.points;
-  const max = retake ? retake.retake.max : result.max;
-  const label = retake?.retake.result ?? result.result;
+// Completed ✓ and the label, never a score or a score comparison.
+async function Finished({ result, vaId, officeId }: { result: FinishedDay; vaId: string; officeId: string | null }) {
+  const progress = officeId ? await dayProgress(createAdminClient(), vaId, officeId) : null;
   return (
     <QuizDone
-      title={`${result.drill === "retake" ? "Retake done" : "Recheck done"}: ${result.dayCode}`}
-      score={`${points} of ${max} points`}
-      scoreLabel={max > 0 ? `${percentOf(points, max)}%` : undefined}
-      result={label ? RESULT_LABELS[label] : null}
+      title={`${result.drill === "retake" ? "Practice done" : "Recheck done"}: ${result.dayCode}`}
+      result={result.result ? RESULT_LABELS[result.result] : null}
       attemptId={result.attemptId}
-      message={<p>{doneMessage(label)}</p>}
-    >
-      {retake && <RetakeCompare data={retake} />}
-    </QuizDone>
+      progress={progress}
+      message={<p>{doneMessage(result.result)}</p>}
+    />
   );
 }

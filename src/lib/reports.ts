@@ -32,8 +32,10 @@ import {
   type ReportItem,
 } from "@/lib/report";
 import { createAdminClient } from "@/lib/supabase/server";
+import { dayProgress } from "@/lib/training-progress";
 import { normalizeScope, scopeText } from "@/lib/va-scope";
-import { percentOf, RESULT_LABELS, sinceStartText, todayIn, withOverride, type ResultLabel } from "@/lib/va-flow";
+import { skillCount } from "@/lib/skills";
+import { percentOf, progressText, RESULT_LABELS, sinceStartText, todayIn, withOverride, type ResultLabel } from "@/lib/va-flow";
 
 const TIME_ZONE = process.env.TRAINING_TIME_ZONE || "America/New_York";
 
@@ -232,6 +234,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     pastedAnswers: allItems.filter((i) => i.attempt_id === attemptId && Array.isArray(i.paste_log) && i.paste_log.length > 0).length,
     ...(await attemptTimes(db, attemptId)),
     sinceStart: sinceStartText(must(va)?.va_start_date, todayIn(TIME_ZONE, new Date(attempt.submitted_at))),
+    progress: attempt.office_id ? await dayProgress(db, attempt.va_id, attempt.office_id, attempt.submitted_at) : null,
     primaryDoctor: doctors.primary ?? undefined,
     // Primary first.
     doctors: [...doctors.list.map((d) => d.name)].sort((a, b) => Number(b === doctors.primary) - Number(a === doctors.primary)),
@@ -399,13 +402,15 @@ export async function sendTestLeads4Life(): Promise<{ status: number | null; tex
         va_name: "Test VA",
         day: "W1D1",
         topic: "Basics & VA Onboarding",
-        result: "Building skills",
-        first_try_score: "72%",
-        raw_score: "13/18",
+        label: "Building skills",
+        skills_shown_count: 2,
+        skills_to_practice:
+          "Verify the caller's name and date of birth, and ask before putting anyone on hold. Review: HOW TO: Phone Scripts.",
+        training_progress: "Day 1 of 10 completed",
         is_retake: "no",
         report_link: link,
         flags: "fast finish, 3 pasted answers",
-        email_subject: "Test VA finished W1D1: Building skills",
+        email_subject: "Test VA completed W1D1: Building skills",
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -495,7 +500,6 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
   const link = attemptLink(attemptId, "admin");
   const pdfNote = pdf ? "" : `The report PDF couldn't be made (${pdfError}). Download it from the attempt page.`;
   const attachments = pdf ? [{ filename: reportFileName({ ...report, retake: !!report.retake }), content: Buffer.from(pdf.bytes).toString("base64") }] : [];
-  const percent = report.maxPoints ? Math.round((report.points * 100) / report.maxPoints) : 0;
   // The email and Slack post show the PDF's sections (what went well first).
   const content = pdf?.content ?? null;
   const subject = reportSections(report, content).subject;
@@ -530,9 +534,10 @@ export async function sendAttemptReport(attemptId: string, opts: { again?: strin
           va_name: report.vaName,
           day: report.dayCode,
           topic: report.dayTitle,
-          result: RESULT_LABELS[report.result],
-          first_try_score: `${percent}%`,
-          raw_score: `${report.points}/${report.maxPoints}`,
+          label: RESULT_LABELS[report.result],
+          skills_shown_count: skillCount(stored.content.skills),
+          skills_to_practice: stored.content.practice.map((p) => p.text).join("; "),
+          training_progress: report.progress ? progressText(report.progress) : "",
           is_retake: report.retake ? "yes" : "no",
           report_link: stored.link,
           flags: flagsText(report),

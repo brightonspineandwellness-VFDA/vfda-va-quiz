@@ -4,13 +4,13 @@ import { ReportButtons } from "@/components/reports/report-buttons";
 import { CertGrid } from "@/components/certs/cert-grid";
 import { StandardsNotice } from "@/components/reports/standards";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
-import { Badge, Card, EmptyState, PageHeader, StatusBadge, Table, td, tdNum, th, thNum } from "@/components/ui";
+import { Badge, Card, EmptyState, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { loadCertGrid } from "@/lib/certifications";
 import { attemptStandards } from "@/lib/quiz-reports";
 import { standardsUsed } from "@/lib/rule-source";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
-import { attemptLabel, percentOf, resultLabel } from "@/lib/va-flow";
+import { attemptLabel, COMPLETED, resultLabel } from "@/lib/va-flow";
 
 // The VFDA standards notice covers the latest reports (each one is checked item by item).
 const NOTICE_REPORTS = 10;
@@ -40,7 +40,7 @@ async function Grid() {
     // Row-level security: this office's VAs only. Archived (test) attempts don't count.
     supabase
       .from("attempts")
-      .select("id, va_id, kind, schedule_day, submitted_at, first_try_points, max_points, result")
+      .select("id, va_id, kind, schedule_day, submitted_at, result")
       .eq("office_id", user.officeId)
       .not("submitted_at", "is", null)
       .is("archived_at", null)
@@ -59,7 +59,7 @@ async function Grid() {
   return (
     <>
       <Card title="Workflows">
-        <CertGrid columns={columns} rows={rows} certificatePath={(id) => `/doctor/va/${id}/certificate`} />
+        <CertGrid columns={columns} rows={rows} certificatePath={(id) => `/doctor/va/${id}/certificate`} simple />
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm text-muted">
           {columns.map((c) => (
             <div key={c.code} className="contents">
@@ -72,7 +72,7 @@ async function Grid() {
 
       <StandardsNotice rules={standards} audience="doctor" />
 
-      <Card title="Quiz reports" description="Open a report to see every answer, or download the PDF.">
+      <Card title="Quiz reports" description="Open a report to see the skills your VA showed and what to practice, or download the PDF.">
         {list.length === 0 ? (
           <EmptyState title="No quizzes finished yet">Reports show here as soon as your VA finishes a training day.</EmptyState>
         ) : (
@@ -81,8 +81,8 @@ async function Grid() {
               <tr>
                 <th className={th}>VA</th>
                 <th className={th}>Quiz</th>
+                <th className={th}>Status</th>
                 <th className={th}>Result</th>
-                <th className={thNum}>First try</th>
                 <th className={th}>Date</th>
                 <th className={th}>Report</th>
               </tr>
@@ -98,10 +98,10 @@ async function Grid() {
                     </span>
                   </td>
                   <td className={td}>
-                    <StatusBadge label={resultLabel(a.result)} />
+                    <StatusBadge label={COMPLETED} />
                   </td>
-                  <td className={tdNum}>
-                    {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%)
+                  <td className={td}>
+                    <StatusBadge label={resultLabel(a.result)} />
                   </td>
                   <td className={`${td} whitespace-nowrap text-muted`}>{new Date(a.submitted_at!).toLocaleDateString("en-US", { dateStyle: "medium" })}</td>
                   <td className={td}>

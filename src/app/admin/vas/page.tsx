@@ -213,7 +213,7 @@ async function Vas() {
               <th className={th}>Last activity</th>
               <th className={th}>Reminders</th>
               <th className={th}>Latest label</th>
-              <th className={th}>First-try scores</th>
+              <th className={th}>First-try scores <span className="text-xs font-normal text-muted">(VFDA only)</span></th>
               <th className={th}>Trend</th>
               <th className={th}>Repeats</th>
               <th className={th}>Flags</th>
@@ -339,7 +339,7 @@ async function Vas() {
                   <thead>
                     <tr>
                       <th className={th}>Day</th>
-                      <th className={thNum}>First try</th>
+                      <th className={thNum}>First try <span className="text-xs font-normal text-muted">(VFDA only)</span></th>
                       <th className={th}>Label</th>
                       <th className={th}>Repeat scores</th>
                       <th className={thNum}>Time</th>

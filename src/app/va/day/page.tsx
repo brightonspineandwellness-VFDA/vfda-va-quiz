@@ -6,7 +6,9 @@ import { ButtonLink, EmptyState } from "@/components/ui";
 import { doneMessage, QuizDone } from "@/components/va/quiz-done";
 import { ScenarioRunner } from "@/components/va/scenario-runner";
 import { requireRole } from "@/lib/auth";
-import { percentOf, RESULT_LABELS } from "@/lib/va-flow";
+import { createAdminClient } from "@/lib/supabase/server";
+import { dayProgress } from "@/lib/training-progress";
+import { RESULT_LABELS } from "@/lib/va-flow";
 import { loadDayScreen, type FinishedDay } from "@/lib/va-training";
 import { afterAttemptGraded } from "@/lib/va-reports";
 
@@ -38,24 +40,24 @@ async function DayScreen() {
   if (screen.kind === "finished") {
     const { attemptId, fresh } = screen.result;
     if (fresh) after(() => afterAttemptGraded(attemptId));
-    return <Finished result={screen.result} />;
+    return <Finished result={screen.result} vaId={user.id} officeId={user.officeId} />;
   }
   const { item } = screen;
   return <ScenarioRunner key={`${item.scenarioId}:${item.phase}`} initial={item} />;
 }
 
-// The score right away, and My report (coaching tips are written in a minute
-// or two); the next day opens once its cards are done.
-function Finished({ result }: { result: FinishedDay }) {
-  const retake = !!result.result && result.result !== "strong";
+// Completed ✓ and the label right away (never the score), and My report
+// (written in a minute or two); the next day opens once its cards are done.
+async function Finished({ result, vaId, officeId }: { result: FinishedDay; vaId: string; officeId: string | null }) {
+  const practice = result.result === "needs_coaching" || result.result === "at_risk";
+  const progress = officeId ? await dayProgress(createAdminClient(), vaId, officeId) : null;
   return (
     <QuizDone
       title={`${result.dayCode} complete`}
-      score={`${result.points} of ${result.max} points`}
-      scoreLabel={result.max > 0 ? `${percentOf(result.points, result.max)}%` : undefined}
       result={result.result ? RESULT_LABELS[result.result] : null}
       attemptId={result.attemptId}
-      retakeAllowed={retake}
+      progress={progress}
+      practice={practice ? <ButtonLink href="/va">Practice this day again</ButtonLink> : undefined}
       message={<p>{doneMessage(result.result)}</p>}
       extra={<ButtonLink href="/va/proof">Proof of work</ButtonLink>}
     />

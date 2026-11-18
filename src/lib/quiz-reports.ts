@@ -14,6 +14,7 @@ import { aiErrorMessage, aiMode, askStructured } from "@/lib/ai";
 import {
   alertFlags,
   buildQuizReport,
+  doctorFlags,
   checkTips,
   correctSteps,
   wentWellRange,
@@ -310,6 +311,8 @@ export async function buildQuizReportContent(db: Db, attemptId: string, r: Attem
       resultLabel,
       retake: !!r.retake,
       timeSpent: r.timeSpent,
+      progress: r.progress ?? null,
+      doctorFlags: doctorFlags({ retake: !!r.retake, fastFinish: r.fastFinish, pastedAnswers: r.pastedAnswers ?? 0 }, r.vaName),
     },
     needsWork,
     doneWell,
@@ -322,10 +325,14 @@ export async function buildQuizReportContent(db: Db, attemptId: string, r: Attem
 // The coaching tips given to the VA (va_reports), for the doctor/VFDA PDF.
 // Null before they're written, or before va-reports.sql has been run.
 async function storedVaTips(db: Db, attemptId: string): Promise<VaTips | null> {
-  const { data, error } = await db.from("va_reports").select("alerts, tips, strengths").eq("attempt_id", attemptId).maybeSingle();
-  if (error || !data) return null;
+  const read = (cols: string) => db.from("va_reports").select(cols).eq("attempt_id", attemptId).maybeSingle();
+  let res = await read("alerts, tips, strengths, skills");
+  // Before skills-reports.sql has been run.
+  if (res.error && /skills/.test(res.error.message)) res = await read("alerts, tips, strengths");
+  if (res.error || !res.data) return null;
+  const data = res.data as unknown as Record<string, unknown>;
   const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
-  return { alerts: list(data.alerts), tips: list(data.tips), strengths: list(data.strengths) };
+  return { alerts: list(data.alerts), tips: list(data.tips), strengths: list(data.strengths), skills: list(data.skills) };
 }
 
 export type StoredQuizReport = { path: string; bytes: Uint8Array; link: string; content: QuizReport };
@@ -429,6 +436,8 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
       resultLabel: "Building skills",
       retake: false,
       timeSpent: 1500,
+      progress: { done: 1, total: 10 },
+      doctorFlags: doctorFlags({ retake: false, fastFinish: true, pastedAnswers: 3 }, "Test VA"),
     },
     needsWork,
     doneWell,
@@ -453,6 +462,7 @@ export async function sampleQuizReportLink(db: Db): Promise<string> {
         "[Scheduling] You booked a new patient smoothly, with every step in order, just like the Master Phone Script.",
         "[Scheduling] You offered two appointment times, just like the Master Phone Script.",
       ],
+      skills: ["[Scheduling] Booking new patients", "[Scheduling] Offering two times"],
     },
   );
   const path = "test/sample-quiz-report.pdf";

@@ -1,15 +1,14 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
-import { ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, th, thNum, tdNum } from "@/components/ui";
+import { ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { StepProgress } from "@/components/setup/step-progress";
 import { requireRole } from "@/lib/auth";
 import { currentStep } from "@/lib/doctor-flow";
 import { loadOfficeSetup } from "@/lib/interview-data";
-import { TREND_LABELS } from "@/lib/report";
 import { canReadBank } from "@/lib/scenario-bank";
 import { createSessionClient } from "@/lib/supabase/server";
-import { attemptLabel, percentOf, resultLabel, trend } from "@/lib/va-flow";
+import { attemptLabel, COMPLETED, resultLabel } from "@/lib/va-flow";
 
 export default function DoctorPage() {
   return (
@@ -58,7 +57,7 @@ async function Results() {
   const supabase = await createSessionClient();
   const { data: attempts } = await supabase
     .from("attempts")
-    .select("id, va_id, kind, schedule_day, first_try_points, max_points, result, submitted_at")
+    .select("id, va_id, kind, schedule_day, result, submitted_at")
     .not("submitted_at", "is", null)
     .is("archived_at", null)
     .order("submitted_at", { ascending: false })
@@ -74,26 +73,13 @@ async function Results() {
     .select("id, full_name, email")
     .in("id", [...new Set(attempts.map((a) => a.va_id))]);
   const name = new Map((vas ?? []).map((v) => [v.id, v.full_name || v.email]));
-  // Each VA's trend across their training days (oldest first).
-  const trends = [...name.keys()].map((id) => {
-    const days = attempts.filter((a) => a.va_id === id && a.kind === "day").reverse();
-    const t = trend(days.map((a) => percentOf(a.first_try_points, a.max_points)));
-    return { id, text: t ? TREND_LABELS[t] : null };
-  });
   return (
     <Card title="VA training results" description="Finished training days, newest first.">
-      {trends
-        .filter((t) => t.text)
-        .map((t) => (
-          <p key={t.id} className="text-[0.9375rem]">
-            <span className="font-semibold">{name.get(t.id)}</span>: first-try scores {t.text?.toLowerCase()} across days.
-          </p>
-        ))}
       <Table>
         <thead>
           <tr>
             <th className={th}>VA · day</th>
-            <th className={thNum}>Score</th>
+            <th className={th}>Status</th>
             <th className={th}>Result</th>
           </tr>
         </thead>
@@ -105,8 +91,8 @@ async function Results() {
                   {name.get(a.va_id) ?? "Former VA"} · {attemptLabel(a)}
                 </Link>
               </td>
-              <td className={tdNum}>
-                {Number(a.first_try_points)}/{a.max_points} ({percentOf(a.first_try_points, a.max_points)}%)
+              <td className={td}>
+                <StatusBadge label={COMPLETED} />
               </td>
               <td className={td}>{a.result ? <StatusBadge label={resultLabel(a.result)} /> : "–"}</td>
             </tr>

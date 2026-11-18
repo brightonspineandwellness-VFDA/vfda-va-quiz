@@ -8,13 +8,13 @@ import { getCurrentUser } from "@/lib/auth";
 import type { ActionResult } from "@/lib/interview-actions";
 import { createSessionClient } from "@/lib/supabase/server";
 import { linesOf, MAX_STRENGTHS, MAX_TIPS } from "@/lib/va-report";
-import { backfillVaReports } from "@/lib/va-reports";
+import { backfillVaReports, rebuildReportsInSkillsFormat } from "@/lib/va-reports";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (error: string) => ({ ok: false, error }) as const;
 
 // One line per bullet in each box.
-export async function saveVaReport(attemptId: string, text: { alerts: string; tips: string; strengths: string }): Promise<ActionResult> {
+export async function saveVaReport(attemptId: string, text: { alerts: string; tips: string; strengths: string; skills: string }): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (user?.role !== "vfda_admin") return fail("VFDA admins only.");
   if (!UUID.test(attemptId)) return fail("Invalid request.");
@@ -22,11 +22,11 @@ export async function saveVaReport(attemptId: string, text: { alerts: string; ti
   const strengths = linesOf(text.strengths, MAX_STRENGTHS);
   if (!tips.length && !strengths.length) return fail("Write at least one thing that went well or one thing to focus on.");
   const supabase = await createSessionClient();
-  const { data, error } = await supabase
-    .from("va_reports")
-    .update({ alerts: linesOf(text.alerts, 10), tips, strengths, edited_at: new Date().toISOString(), edited_by: user.id })
-    .eq("attempt_id", attemptId)
-    .select("attempt_id");
+  const row = { alerts: linesOf(text.alerts, 10), tips, strengths, skills: linesOf(text.skills ?? "", MAX_STRENGTHS), edited_at: new Date().toISOString(), edited_by: user.id };
+  const save = (r: Record<string, unknown>) => supabase.from("va_reports").update(r).eq("attempt_id", attemptId).select("attempt_id");
+  let { data, error } = await save(row);
+  // Before skills-reports.sql has been run there is no skills column.
+  if (error && /skills/.test(error.message)) ({ data, error } = await save(Object.fromEntries(Object.entries(row).filter(([k]) => k !== "skills"))));
   if (error || !data?.length) return fail("Couldn't save. Try again.");
   revalidatePath(`/admin/attempts/${attemptId}`);
   return { ok: true, data: null };
@@ -48,6 +48,24 @@ export async function runVaReportBackfill(): Promise<ActionResult<string>> {
     ].filter(Boolean);
     const text = `${parts.join(", ")}.`;
     return r.failed.length || r.emailsFailed ? fail(text) : { ok: true, data: text };
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+export async function runSkillsRebuild(): Promise<ActionResult<string>> {
+  const user = await getCurrentUser();
+  if (user?.role !== "vfda_admin") return fail("VFDA admins only.");
+  try {
+    const r = await rebuildReportsInSkillsFormat();
+    const text = [
+      `${r.rebuilt} report${r.rebuilt === 1 ? "" : "s"} rebuilt (no emails sent)`,
+      r.left ? `${r.left} left: press again` : "all done",
+      r.failed.length ? `${r.failed.length} failed: ${r.failed.map((f) => `${f.attempt} (${f.error})`).join("; ")}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return r.failed.length ? fail(`${text}.`) : { ok: true, data: `${text}.` };
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }

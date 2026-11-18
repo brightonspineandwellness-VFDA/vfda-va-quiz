@@ -27,5 +27,5 @@ export function pointsLabel(quiz: {
 }) {
   return quiz.max_points === null
     ? "Points set per office"
-    : `${quiz.max_points} pts · labels: Great work 80%+, Building skills 60-79%, Needs extra support below 60%`;
+    : `${quiz.max_points} pts · labels: On track 80%+, Building skills 60-79%, Let's review together below 60%`;
 }

@@ -6,7 +6,7 @@ import { aiMode } from "@/lib/ai";
 import { requireRole } from "@/lib/auth";
 import { appUrl, reportFrom, vfdaEmails } from "@/lib/reports";
 import { testEmail, testLeads4Life, testSlack } from "@/lib/va-admin-actions";
-import { runVaReportBackfill } from "@/lib/va-report-actions";
+import { runSkillsRebuild, runVaReportBackfill } from "@/lib/va-report-actions";
 
 // A test send can take two tries; Backfill VA reports asks Claude for each attempt.
 export const maxDuration = 300;
@@ -71,6 +71,12 @@ async function Settings() {
           log).
         </p>
         <TestButton action={runVaReportBackfill} label="Backfill VA reports" pendingLabel="Writing reports… (a few minutes)" />
+        <p className="text-sm text-muted">
+          Rebuild reports in the skills format: every finished quiz&apos;s VA report and doctor PDF made again with no scores
+          (Completed ✓, the label, skills shown, skills to practice). Nothing is emailed, posted or sent to Leads4Life. Works in
+          batches of 12; press again until it says all done. Needs supabase/skills-reports.sql.
+        </p>
+        <TestButton action={runSkillsRebuild} label="Rebuild reports in the skills format" pendingLabel="Rebuilding… (a few minutes)" />
       </Card>
       <Card number={3} title="Test sends">
         <TestButton action={testEmail} label="Send a test email to VFDA" />

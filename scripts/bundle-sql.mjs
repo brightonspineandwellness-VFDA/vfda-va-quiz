@@ -155,6 +155,12 @@ const PHASES = [
     title: "Rule sources database changes (VFDA standards notice on the quiz reports)",
     after: "va-reports.sql",
   },
+  {
+    name: "skills-reports",
+    starts: "20261118120000",
+    title: "Skills reports database changes (no scores for VAs and doctors: skills shown)",
+    after: "rule-sources.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

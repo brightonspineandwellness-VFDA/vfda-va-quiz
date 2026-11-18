@@ -9,10 +9,12 @@ import { requireRole } from "@/lib/auth";
 import { loadVaTasks } from "@/lib/certifications";
 import { sendPreparingNotice } from "@/lib/reports";
 import { markTodaysCardsDone, startDayRetake } from "@/lib/va-actions";
-import { proofState, RESULT_LABELS, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
+import { DayProgress } from "@/components/reports/skills";
+import { createAdminClient } from "@/lib/supabase/server";
+import { COMPLETED, proofState, RESULT_LABELS, resultLabel, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
 import { claimPreparingNotice, loadRetakeTasks, loadToday } from "@/lib/va-training";
 
-// "Retake this day" waits while Claude writes the day's new versions.
+// "Practice this day again" waits while Claude writes the day's new versions.
 export const maxDuration = 300;
 
 export default function VaPage() {
@@ -57,6 +59,19 @@ async function Today() {
     after(() => sendPreparingNotice(user.id, day).then(() => undefined));
   }
   const total = "days" in today ? today.days.length : 0;
+  // Each finished day's label (never a score).
+  const { data: finished } = await createAdminClient()
+    .from("attempts")
+    .select("schedule_day, result, submitted_at")
+    .eq("va_id", user.id)
+    .eq("office_id", user.officeId ?? "")
+    .eq("kind", "day")
+    .not("submitted_at", "is", null)
+    .is("archived_at", null)
+    .order("submitted_at");
+  const labelOf = new Map<string, string | null>();
+  for (const a of finished ?? []) if (!labelOf.has(a.schedule_day)) labelOf.set(a.schedule_day, a.result);
+  const doneCount = "days" in today ? today.days.filter((d) => d.status === "done").length : 0;
 
   return (
     <>
@@ -104,7 +119,8 @@ async function Today() {
       {user.officeId && <Tasks vaId={user.id} officeId={user.officeId} />}
 
       {"days" in today && (
-        <Card title="Your training days" description="Your progress through the training schedule.">
+        <Card title="Your progress" description={`Day ${doneCount} of ${total} completed`}>
+          <DayProgress progress={{ done: doneCount, total }} compact />
           <Table>
             <thead>
               <tr>
@@ -125,7 +141,14 @@ async function Today() {
                     </td>
                     <td className={`${td} min-w-40`}>{d.day.title}</td>
                     <td className={td}>
-                      <StatusBadge label={STATUS_LABELS[d.status]} />
+                      {d.status === "done" ? (
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <StatusBadge label={COMPLETED} />
+                          {labelOf.get(d.day.code) && <StatusBadge label={resultLabel(labelOf.get(d.day.code))} />}
+                        </span>
+                      ) : (
+                        <StatusBadge label={d.status === "open" ? "Open now" : STATUS_LABELS[d.status]} tone={d.status === "open" ? "info" : undefined} />
+                      )}
                     </td>
                     <td className={td}>{p ? <Badge tone={p.tone}>{p.label}</Badge> : <span className="text-sm text-muted">–</span>}</td>
                   </tr>
@@ -134,7 +157,7 @@ async function Today() {
             </tbody>
           </Table>
           <p className="text-sm text-muted">
-            Scores and coaching tips for each finished day are on{" "}
+            The skills you showed and what to practice for each finished day are on{" "}
             <Link href="/va/results" className={linkClass}>
               My results
             </Link>
@@ -179,33 +202,32 @@ async function Tasks({ vaId, officeId }: { vaId: string; officeId: string }) {
         t.kind === "open" ? (
           <Card key={t.parentId} accent="accent">
             <Badge tone="accent" className="self-start">
-              Retake (optional)
+              Practice this day again (optional)
             </Badge>
             <p className="text-lg font-semibold">
               {t.day}: {t.title}
             </p>
-            <p className="text-[0.9375rem]">Every question of the day again, with new details. Your first try stays your official score.</p>
+            <p className="text-[0.9375rem]">Every question of the day again, with new details.</p>
             <ButtonLink href={`/va/drill/${t.id}`} variant="primary" className="self-start">
-              Continue retake →
+              Continue practice →
             </ButtonLink>
           </Card>
         ) : (
           <Card key={t.parentId} accent="accent">
             <Badge tone="accent" className="self-start">
-              Retake available (optional)
+              Practice this day again (optional)
             </Badge>
             <p className="flex flex-wrap items-center gap-2 text-lg font-semibold">
               {t.day}: {t.title} <StatusBadge label={RESULT_LABELS[t.result]} />
             </p>
             <p className="text-[0.9375rem]">
-              You can retake this whole day once, with new details. It&apos;s optional and doesn&apos;t block your next day. Your first try
-              stays your official score.
+              You can practice this whole day once more, with new details. It&apos;s optional and doesn&apos;t block your next day.
             </p>
             <div>
               <ActionButton
                 action={startDayRetake.bind(null, t.parentId)}
-                label="Retake this day"
-                pendingLabel="Preparing your retake (about a minute)…"
+                label="Practice this day again"
+                pendingLabel="Preparing your practice (about a minute)…"
               />
             </div>
           </Card>

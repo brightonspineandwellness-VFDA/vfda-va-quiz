@@ -75,7 +75,7 @@ async function Reports({ searchParams }: { searchParams: PageProps<"/admin/repor
                 <th className={th}>Date</th>
                 <th className={th}>Office · VA</th>
                 <th className={th}>Day</th>
-                <th className={thNum}>Score</th>
+                <th className={thNum}>Score <span className="text-xs font-normal text-muted">(VFDA only)</span></th>
                 <th className={th}>Label</th>
                 <th className={thNum}>Critical</th>
                 <th className={th}>Flags</th>

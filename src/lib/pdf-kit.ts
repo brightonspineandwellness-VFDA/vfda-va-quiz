@@ -221,11 +221,20 @@ export class Pdf {
     this.y -= pad + 6;
   }
 
-  // A pill badge at (x, baseline y); returns its width.
+  // A check mark drawn as lines (Helvetica has no ✓), its box `size` wide, from (x, baseline y).
+  check(x: number, y: number, size: number, color: RGB) {
+    const t = Math.max(1, size / 7);
+    this.page.drawLine({ start: { x, y: y + size * 0.45 }, end: { x: x + size * 0.35, y: y + size * 0.1 }, thickness: t, color });
+    this.page.drawLine({ start: { x: x + size * 0.35, y: y + size * 0.1 }, end: { x: x + size, y: y + size * 0.85 }, thickness: t, color });
+  }
+
+  // A pill badge at (x, baseline y); returns its width. A "✓" in the label is drawn as a check mark.
   badge(x: number, y: number, label: string, tone: Tone, size = 9) {
     const t = TONES[tone];
-    const text = pdfText(label);
-    const w = this.bold.widthOfTextAtSize(text, size) + size * 1.6;
+    const withCheck = label.includes("✓");
+    const text = pdfText(label.replace(/\s*✓\s*/g, " ").trim());
+    const checkW = withCheck ? size * 1.15 : 0;
+    const w = this.bold.widthOfTextAtSize(text, size) + size * 1.6 + checkW;
     const h = size * 1.8;
     this.roundRect(x, y - size * 0.55, w, h, h / 2, t.soft, t.fg);
     this.page.drawText(text, {
@@ -235,10 +244,51 @@ export class Pdf {
       font: this.bold,
       color: t.fg,
     });
+    if (withCheck) this.check(x + size * 0.8 + this.bold.widthOfTextAtSize(text, size) + size * 0.35, y + size * 0.05, size * 0.75, t.fg);
     return w;
   }
 
-  // Large badges in a row (score, label, time ...), each with a small caption above.
+  // Skills as green pills with a check mark, wrapped across lines.
+  checkChips(items: string[], tone: Tone = "success") {
+    const size = 9.5;
+    const h = size * 2;
+    const t = TONES[tone];
+    let x = SIDE;
+    this.ensure(h + 6);
+    this.y -= h;
+    for (const raw of items) {
+      const text = pdfText(raw);
+      const w = Math.min(CONTENT_WIDTH, this.regular.widthOfTextAtSize(text, size) + size * 3);
+      if (x + w > SIDE + CONTENT_WIDTH && x > SIDE) {
+        x = SIDE;
+        this.y -= h + 5;
+        if (this.y < CONTENT_BOTTOM) {
+          this.newPage();
+          this.y -= h;
+        }
+      }
+      this.roundRect(x, this.y, w, h, h / 2, t.soft, t.fg);
+      this.check(x + size * 0.7, this.y + h / 2 - size * 0.35, size * 0.8, t.fg);
+      this.page.drawText(text, { x: x + size * 2, y: this.y + h / 2 - size * 0.33, size, font: this.regular, color: ink });
+      x += w + 6;
+    }
+    this.y -= 8;
+  }
+
+  // "Day X of Y completed": one segment per day, the done ones teal.
+  progress(done: number, total: number) {
+    if (total <= 0) return;
+    const gap = 3;
+    const segW = (CONTENT_WIDTH * 0.6 - gap * (total - 1)) / total;
+    this.ensure(14);
+    this.y -= 8;
+    for (let i = 0; i < total; i++) {
+      this.roundRect(SIDE + i * (segW + gap), this.y, segW, 6, 3, i < done ? TONES.accent.fg : c(L.surfaceMuted));
+    }
+    this.y -= 8;
+  }
+
+  // Large badges in a row (status, label, progress ...), each with a small caption above.
   badgeRow(items: { caption: string; text: string; tone: Tone }[]) {
     const size = 13;
     this.ensure(48);
@@ -445,6 +495,6 @@ export class Pdf {
   }
 }
 
-// The tone of a result label ("Great work", "Building skills", "Needs extra support"; older: Strong, Needs coaching, At risk).
+// The tone of a result label ("On track", "Building skills", "Let's review together"; older: Great work, Needs extra support).
 export const resultTone = (label: string): Tone =>
-  /great work|strong|pass/i.test(label) ? "success" : /extra support|risk|fail/i.test(label) ? "danger" : "warning";
+  /on track|great work|strong|pass|completed/i.test(label) ? "success" : /review together/i.test(label) ? "info" : /extra support|risk|fail/i.test(label) ? "danger" : "warning";

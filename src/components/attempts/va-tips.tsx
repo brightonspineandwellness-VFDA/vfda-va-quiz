@@ -3,7 +3,7 @@ import { TipTagBadge } from "@/components/reports/standards";
 import { Card, NumberBadge } from "@/components/ui";
 import type { NeedsWorkItem } from "@/lib/quiz-report";
 import { vaTipTags } from "@/lib/rule-source";
-import { groupStrengths } from "@/lib/va-report";
+import { groupStrengths, skillsOf } from "@/lib/va-report";
 import { createSessionClient } from "@/lib/supabase/server";
 
 // "Coaching tips given to the VA" on the admin and doctor attempt pages:
@@ -12,17 +12,22 @@ import { createSessionClient } from "@/lib/supabase/server";
 // `items`: the attempt's items below full points, for each tip's "VFDA standard" / "Card" tag.
 export async function VaTips({ attemptId, admin, items = [] }: { attemptId: string; admin: boolean; items?: NeedsWorkItem[] }) {
   const supabase = await createSessionClient();
-  const { data, error } = await supabase.from("va_reports").select("alerts, tips, strengths, source, edited_at").eq("attempt_id", attemptId).maybeSingle();
+  const read = (cols: string) => supabase.from("va_reports").select(cols).eq("attempt_id", attemptId).maybeSingle();
+  let res = await read("alerts, tips, strengths, skills, source, edited_at");
+  // Before skills-reports.sql has been run there is no skills column.
+  if (res.error && /skills/.test(res.error.message)) res = await read("alerts, tips, strengths, source, edited_at");
+  const data = res.data as { alerts: unknown; tips: unknown; strengths: unknown; skills?: unknown; source: string; edited_at: string | null } | null;
+  const error = res.error;
   const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
   const tips = data ? list(data.tips) : [];
   const tags = vaTipTags(tips, items);
   return (
     <Card
-      title="Coaching tips given to the VA"
+      title="Skills report given to the VA"
       description={
         data && !error ? (
           <>
-            What the VA sees on My report (no scenarios or answers): what went well, things to focus on, important to review.
+            What the VA and the doctor see on the report, never a score: skills shown, skills to practice, important to review.
             {data.source === "fallback" && " Written without Claude (fallback)."}
             {data.edited_at && ` Edited by VFDA ${new Date(data.edited_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}.`}
           </>
@@ -40,7 +45,13 @@ export async function VaTips({ attemptId, admin, items = [] }: { attemptId: stri
             <TipList tips={tips} tags={tags} />
           )}
           {admin ? (
-            <VaTipsEditor attemptId={attemptId} alerts={list(data.alerts)} tips={tips} strengths={list(data.strengths)} />
+            <VaTipsEditor
+              attemptId={attemptId}
+              alerts={list(data.alerts)}
+              tips={tips}
+              strengths={list(data.strengths)}
+              skills={skillsOf({ skills: list(data.skills), strengths: list(data.strengths) }).flatMap((g) => g.bullets.map((b) => `${g.name ? `[${g.name}] ` : ""}${b}`))}
+            />
           ) : (
             <div className="flex flex-col gap-3 text-[0.9375rem]">
               {list(data.strengths).length > 0 && (
