@@ -28,7 +28,7 @@ async function Program({ params }: { params: Promise<{ vaId: string }> }) {
   const { data: va } = await (await createSessionClient()).from("profiles").select("full_name, email, office_id, role").eq("id", vaId).maybeSingle();
   if (!va || va.role !== "va" || va.office_id !== user.officeId) notFound();
   const name = (va.full_name || va.email) as string;
-  const data = await loadProgramPage(createAdminClient(), vaId, user.officeId);
+  const data = await loadProgramPage(createAdminClient(), vaId, user.officeId, false);
   return (
     <>
       <PageHeader

@@ -47,7 +47,8 @@ export function ProgramView({ data, vaName, base, admin }: { data: PageData; vaN
       {program.trigger === "test" && admin && (
         <Notice tone="info" title="Built for testing">
           Generated with the admin button
-          {program.missing_days.length ? `, with ${program.missing_days.length} scheduled day(s) not submitted: ${program.missing_days.join(", ")}` : ""}.
+          {program.missing_days.length ? `, with ${program.missing_days.length} scheduled day(s) not submitted: ${program.missing_days.join(", ")}` : ""}. The
+          doctor doesn&apos;t see it and it&apos;s never sent on Sunday; the real program replaces it once every scheduled day is submitted.
         </Notice>
       )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

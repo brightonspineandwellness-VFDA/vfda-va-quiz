@@ -239,7 +239,8 @@ export async function sendProgramWeek(db: Db, p: ProgramRow, sunday: string) {
 
 // Every ready or running program of the office, for this Sunday.
 export async function sendOfficePrograms(db: Db, officeId: string, sunday: string) {
-  const res = await db.from("training_programs").select("*").eq("office_id", officeId).in("status", ["ready", "running"]);
+  // Programs VFDA generated for testing are never sent: only "Send this week now (test email)".
+  const res = await db.from("training_programs").select("*").eq("office_id", officeId).eq("trigger", "auto").in("status", ["ready", "running"]);
   if (res.error) return { programs: 0, sent: 0, failed: 0, skipped: res.error.message };
   let sent = 0;
   let failed = 0;

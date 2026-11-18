@@ -18,7 +18,7 @@ export async function trainingPdfDownload(user: CurrentUser | null, vaId: string
   if (!va?.office_id) return new Response("Not found.", { status: 404 });
   if (user.role === "doctor" && va.office_id !== user.officeId) return new Response("Not allowed.", { status: 403 });
   const { program, sessions } = await loadProgram(db, vaId, va.office_id);
-  if (!program?.bank) return new Response("Not built yet.", { status: 404 });
+  if (!program?.bank || (user.role === "doctor" && program.trigger === "test")) return new Response("Not built yet.", { status: 404 });
   const s = session === null ? null : sessions.find((x) => x.number === session);
   if (session !== null && !s?.sheet) return new Response("Not found.", { status: 404 });
   const { filename, bytes } = s ? await sessionPdf(db, program, s) : await overviewPdf(db, program, sessions);

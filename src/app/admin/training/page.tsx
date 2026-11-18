@@ -24,6 +24,7 @@ export default function TrainingProgramsPage() {
 const STATUS: Record<string, { label: string; tone: "neutral" | "info" | "primary" | "success" | "danger" | "warning" }> = {
   building: { label: "Building", tone: "warning" },
   ready: { label: "Ready (starts Sunday)", tone: "info" },
+  test: { label: "Test build (never sent)", tone: "neutral" },
   running: { label: "Running", tone: "primary" },
   done: { label: "All sessions sent", tone: "success" },
   failed: { label: "Build failed", tone: "danger" },

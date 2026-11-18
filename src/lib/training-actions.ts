@@ -45,7 +45,10 @@ export async function generateProgramNow(vaId: string): Promise<ActionResult<str
     const warn = r.missing.length
       ? ` Warning: ${r.missing.length} scheduled day${r.missing.length === 1 ? " isn't" : "s aren't"} submitted yet (${r.missing.join(", ")}), so the plan leaves ${r.missing.length === 1 ? "it" : "them"} out.`
       : "";
-    return { ok: true, data: `Training program built for ${va.name}. Nothing was sent; the first email goes out Sunday night.${warn}` };
+    return {
+      ok: true,
+      data: `Training program built for ${va.name} (test). Nothing was sent, doctors don't see it, and the Sunday cron never sends a test build: use "Send this week now (test email)". The real program replaces it once every scheduled day is submitted.${warn}`,
+    };
   } catch (e) {
     return fail(`Not built: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -70,7 +73,7 @@ export async function markSessionDone(sessionId: string, note: string): Promise<
   if (user?.role !== "doctor" && user?.role !== "vfda_admin") return fail("Not allowed.");
   if (!UUID.test(sessionId)) return fail("Invalid request.");
   const db = createAdminClient();
-  const { data: s } = await db.from("training_sessions").select("office_id, va_id").eq("id", sessionId).maybeSingle();
+  const { data: s } = await db.from("training_sessions").select("office_id, va_id, program_id").eq("id", sessionId).maybeSingle();
   if (!s || (user.role === "doctor" && s.office_id !== user.officeId)) return fail("Not allowed.");
   const { error } = await db
     .from("training_sessions")

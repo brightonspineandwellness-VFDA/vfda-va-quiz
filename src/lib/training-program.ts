@@ -422,13 +422,23 @@ export async function maybeBuildProgram(vaId: string, officeId: string) {
   const { program, missingTable } = await loadProgram(db, vaId, officeId);
   if (missingTable) return null;
   const stale = program && (program.status === "failed" || (program.status === "building" && Date.now() - Date.parse(program.created_at) > 15 * 60 * 1000));
-  if (program && !stale) return null;
-  if (stale) await db.from("training_programs").delete().eq("id", program.id).in("status", ["failed", "building"]);
+  // A program VFDA generated for testing is replaced by the real one once every day is in.
+  const testOnly = program?.trigger === "test" && program.status !== "building";
+  if (program && !stale && !testOnly) return null;
+  if (program && (stale || testOnly)) {
+    if (!(await loadReadiness(db, vaId, officeId)).ready) return null;
+    await db.from("training_programs").delete().eq("id", program.id);
+  }
   return buildProgram(db, vaId, officeId);
 }
 
-// For a page: the program, or how far the VA is from it.
-export async function loadProgramPage(db: Db, vaId: string, officeId: string) {
-  const [{ program, sessions, missingTable }, r] = await Promise.all([loadProgram(db, vaId, officeId), loadReadiness(db, vaId, officeId)]);
+// For a page: the program, or how far the VA is from it. Doctors never see
+// a program VFDA generated for testing (`admin` false).
+export async function loadProgramPage(db: Db, vaId: string, officeId: string, admin = true) {
+  const [loaded, r] = await Promise.all([loadProgram(db, vaId, officeId), loadReadiness(db, vaId, officeId)]);
+  const hide = !admin && loaded.program?.trigger === "test";
+  const { missingTable } = loaded;
+  const program = hide ? null : loaded.program;
+  const sessions = hide ? [] : loaded.sessions;
   return { program, sessions, missingTable, readiness: { done: r.done, total: r.total, missing: r.missing.map((d) => `${d.code} ${d.title}`), ready: r.ready, triggerDay: r.triggerDay } };
 }
