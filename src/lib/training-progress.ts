@@ -45,7 +45,8 @@ export async function loadVaPath(db: Db, vaId: string, officeId: string): Promis
     db.from("offices").select("bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool").eq("id", officeId).maybeSingle(),
     db.from("schedule_days").select(DAY_COLUMNS),
     db.from("settings").select("key, value").in("key", ["conditions", "sequence"]),
-    db.from("office_scenarios").select("schedule_day").eq("office_id", officeId).eq("version", "A").eq("is_repeat_variant", false),
+    // Every built day ("*": title only exists once practice-days.sql has been run).
+    db.from("office_days").select("*").eq("office_id", officeId),
     db.from("day_unlocks").select("schedule_day, status").eq("va_id", vaId).eq("office_id", officeId),
     db.from("profiles").select("va_scope").eq("id", vaId).maybeSingle(),
     db
@@ -67,7 +68,8 @@ export async function loadVaPath(db: Db, vaId: string, officeId: string): Promis
         days: (must(days) ?? []) as DayRow[],
         conditions: (setting("conditions") as Record<string, string> | undefined) ?? {},
         profile: officeProfile(officeRow),
-        officeScenarioDays: new Set(((must(scenarios) ?? []) as { schedule_day: string }[]).map((s) => s.schedule_day)),
+        officeScenarioDays: new Set(((must(scenarios) ?? []) as { schedule_day: string; build_version: number | null }[]).filter((s) => s.build_version).map((s) => s.schedule_day)),
+        officeDays: new Map(((must(scenarios) ?? []) as { schedule_day: string; kind: string | null; title?: string | null }[]).map((s) => [s.schedule_day, s])),
         scope: normalizeScope(must(me)?.va_scope),
         started: new Set(unlockRows.filter((u) => u.status !== "locked").map((u) => u.schedule_day)),
       })

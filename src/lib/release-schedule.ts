@@ -122,6 +122,8 @@ export type ScheduleInput = {
   done: Set<string>;
   // Days already opened (an open quiz from before the schedule, or a day VFDA opened): released.
   opened: Set<string>;
+  // Days released no earlier than this office date (practice days added later).
+  notBefore?: Record<string, string>;
   now: Date;
 };
 
@@ -150,6 +152,16 @@ export function buildSchedule(input: ScheduleInput): DaySchedule[] {
           break;
         }
         slot = nextWeekday(slot);
+      }
+      const floor = input.notBefore?.[code];
+      if (slot && floor && slot < floor) {
+        slot = firstWeekday(floor);
+        // A pause still applies after the move.
+        while (slot) {
+          const p = pausedAt(instant(slot));
+          if (!p) break;
+          slot = p.resumed_at ? nextWeekday(slot) : null;
+        }
       }
       if (slot) {
         releaseDate = slot;

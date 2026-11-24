@@ -100,7 +100,8 @@ export async function runExtraction(officeId: string) {
         .select("key, tier, card_group, suggested_answer, schedule_day, question, answer_type, condition, card_source, workflows")
         .in("tier", ["profile", "doctor", "default"])
         .order("position"),
-      db.from("schedule_days").select("code, title, condition, cards, workflows"),
+      // Practice days (W2P*, W2W*) get no cards mapped.
+      db.from("schedule_days").select("code, title, condition, cards, workflows").not("code", "like", "W2P%").not("code", "like", "W2W%"),
       db.from("settings").select("value").eq("key", "conditions").maybeSingle(),
       db
         .from("office_rules")

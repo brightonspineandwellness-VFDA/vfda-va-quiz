@@ -688,6 +688,113 @@ ${rulesBlock(input.rules)}
 }
 
 // ---------------------------------------------------------------------------
+// A practice day (src/lib/practice-days.ts): about 20 items like the other
+// days, mostly situational (Say / Do / Book) plus a few multiple choice,
+// from the office's phone script cards (or the workflow's cards) and rules.
+// New situations: nothing reused or closely copied from `avoid`.
+// ---------------------------------------------------------------------------
+
+const PracticeItem = z.object({
+  type: z.enum(["situational", "mc"]),
+  topic: z.string(),
+  stem: z.string(),
+  say: z.array(z.string()),
+  do: z.array(z.string()),
+  book: z.array(z.string()),
+  options: z.array(z.string()).nullable(),
+  answer: z.string().nullable(),
+  critical_fail: z.string().nullable(),
+  source_card: z.string().nullable(),
+});
+export type PracticeItem = z.infer<typeof PracticeItem>;
+
+export async function writePracticeDay(input: {
+  title: string;
+  focus: string;
+  situational: number;
+  mc: number;
+  cards: CardSource[];
+  // A workflow practice day: the workflow it's about.
+  workflow: WorkflowFields | null;
+  rules: { key: string; value: string }[];
+  // Stems of the office's other phone days (W2D1, W2D2, the other practice days): never reuse.
+  avoid: string[];
+}): Promise<PracticeItem[]> {
+  const count = input.situational + input.mc;
+  if (mock()) {
+    return Array.from({ length: count }, (_, n) => ({
+      type: n < input.situational ? ("situational" as const) : ("mc" as const),
+      topic: "mock",
+      stem: `(mock) ${input.title} ${n + 1}: a patient named Lee ${n < input.situational ? "calls about their visit." : "asks a question. What do you do?"}`,
+      say: n < input.situational ? ["greets with the office script"] : [],
+      do: n < input.situational ? ["checks the schedule and notes the call"] : [],
+      book: n < input.situational ? ["offers the next open time"] : [],
+      options: n < input.situational ? null : ["Check the office's rule first", "Guess", "Ignore it", "Hang up"],
+      answer: n < input.situational ? null : "A",
+      critical_fail: null,
+      source_card: null,
+    }));
+  }
+  const schema = z.object({ items: z.array(PracticeItem) });
+  const cardTitles = input.cards.map((c) => c.title);
+  const text = `Write the training day "${input.title}" for this office's VA.
+About: ${input.focus}
+
+Write exactly ${count} items, each a NEW situation:
+- ${input.situational} "situational" items: ${input.workflow ? "a realistic task or call for this workflow" : "a phone call the VA takes or makes"}. The answer is
+  the steps a good answer has, split into say (what the VA says), do (what the VA does in the EHR,
+  texting or phone system) and book (what gets booked; "nothing to book" when right). options and answer null.
+- ${input.mc} "mc" (multiple choice) items: exactly 4 options, one correct (answer "A"-"D"), the
+  others plausible mistakes. say/do/book empty lists.
+- Vary them: different fake patients (first names only), reasons, times of day, new and existing
+  patients, calls in and calls out. topic: 2-4 words naming the situation. No two items alike.
+- Use the office's rules and cards exactly where they apply; never invent office policy. Where the
+  office has no rule, the VA checks with the office instead of guessing.
+- critical_fail: only where something must never happen (e.g. giving a diagnosis or medical advice,
+  ignoring red flags, sharing another patient's information), else null.
+- source_card: the card an item is written from (one of: ${cardTitles.length ? cardTitles.join("; ") : "none"}), or null.
+- Do NOT reuse or closely copy any situation in <already_used>: new patients, new reasons, new details.
+${
+  input.workflow
+    ? `\n<workflow>\n${JSON.stringify(input.workflow)}\n</workflow>\n`
+    : ""
+}
+<office_rules>
+${rulesBlock(input.rules)}
+</office_rules>
+
+<cards>
+${input.cards.length ? input.cards.map((c) => `## ${c.title}\n${c.text.slice(0, 12000)}`).join("\n\n") : "(no cards: use the office rules and VFDA's usual phone standards)"}
+</cards>
+
+<already_used>
+${input.avoid.length ? input.avoid.map((s) => `- ${s.slice(0, 300)}`).join("\n") : "(none)"}
+</already_used>`;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  const avoid = new Set(input.avoid.map(norm));
+  const out = await ask(schema, text, (o) => {
+    if (o.items.length !== count) return `need exactly ${count} items, got ${o.items.length}`;
+    const sit = o.items.filter((i) => i.type === "situational").length;
+    if (sit !== input.situational) return `need exactly ${input.situational} situational and ${input.mc} mc items, got ${sit} situational`;
+    const seen = new Set<string>();
+    for (const [n, i] of o.items.entries()) {
+      if (!i.stem.trim()) return `item ${n + 1} has no stem`;
+      const key = norm(i.stem);
+      if (avoid.has(key) || seen.has(key)) return `item ${n + 1} repeats a situation already used`;
+      seen.add(key);
+      if (i.type === "situational" && (!i.say.length || !i.do.length || !i.book.length)) return `item ${n + 1}: situational needs say, do and book`;
+      if (i.type === "mc") {
+        const bad = checkMc(i.options, i.answer);
+        if (bad) return `item ${n + 1}: ${bad}`;
+      }
+      if (hasPlaceholder([i.stem, i.say, i.do, i.book, i.options, i.critical_fail])) return `item ${n + 1}: placeholder left`;
+    }
+    return null;
+  });
+  return out.items;
+}
+
+// ---------------------------------------------------------------------------
 // Repeat variants: shown right after a situational answer below 2/2.
 // ---------------------------------------------------------------------------
 

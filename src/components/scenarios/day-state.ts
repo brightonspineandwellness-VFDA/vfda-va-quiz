@@ -5,7 +5,8 @@ import type { DaySummary } from "@/lib/scenario-data";
 export const KIND_LABELS = {
   standard: "Standard scenarios",
   gray: "Built from gray cards",
-  skipped: "Skipped: 20 extra phone drills",
+  skipped: "Office skips this day: phone practice day instead (16 calls + 4 multiple choice)",
+  practice: "Practice day for a VA whose role leaves a week 2 day out",
 } as const;
 
 export function dayState(d: DaySummary): { label: string; tone: "muted" | "ok" | "warn" | "bad" } {

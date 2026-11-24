@@ -11,6 +11,7 @@ import "server-only";
 // One notifications row per recipient is written before sending, so running
 // this again only sends what hasn't gone out yet. Each send is tried twice.
 
+import { officeDayTitles } from "@/lib/day-titles";
 import { colors, LOGO } from "@/lib/theme";
 import { passPercent } from "@/lib/certification";
 import { reportFileName, type Leads4LifePayload } from "@/lib/quiz-report";
@@ -107,7 +108,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
   const [va, office, day, doctors, attempts, workflows, grayWorkflows, certifications] = await Promise.all([
     db.from("profiles").select("full_name, email, va_start_date, va_scope").eq("id", attempt.va_id).maybeSingle(),
     db.from("offices").select("name").eq("id", attempt.office_id).maybeSingle(),
-    db.from("schedule_days").select("title").eq("code", attempt.schedule_day).maybeSingle(),
+    officeDayTitles(db, attempt.office_id),
     officeDoctors(db, attempt.office_id),
     db
       .from("attempts")
@@ -223,7 +224,7 @@ export async function loadAttemptReport(db: Db, attemptId: string) {
     vaName: must(va)?.full_name || must(va)?.email || "VA",
     officeName: must(office)?.name ?? "Office",
     dayCode: drill ? `${drill === "retrain" ? "Retrain" : "Recheck"} ${drillWorkflow}` : attempt.schedule_day,
-    dayTitle: drill ? (names.get(drillWorkflow) ?? drillWorkflow) : (must(day)?.title ?? ""),
+    dayTitle: drill ? (names.get(drillWorkflow) ?? drillWorkflow) : (day.get(attempt.schedule_day) ?? ""),
     points: Number(attempt.first_try_points ?? 0),
     maxPoints: attempt.max_points ?? 0,
     result: attempt.result as ResultLabel,

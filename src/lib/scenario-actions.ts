@@ -37,7 +37,7 @@ import {
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DAY_CODE = /^W\dD\d$/;
+const DAY_CODE = /^W\d[DPW]\d$/;  // W2P* / W2W*: practice days
 const fail = (error: string) => ({ ok: false, error }) as const;
 
 async function admin() {

@@ -19,8 +19,10 @@ import "server-only";
 // process goes to W2D1 or W2D2 instead. Every build is a new build_version of the day's office_scenarios, as
 // drafts for VFDA to review; older versions are never changed, so a day can be
 // rebuilt after VAs have taken it (they keep their version; new attempts get
-// the version VFDA approves next). Skipped days (extra phone drills,
-// settings.skipped_day_rule) don't follow the day rules.
+// the version VFDA approves next). Practice days (a W2D3 / W2D4 / W2D5 the
+// office skips, W2P* / W2W* for VAs whose role leaves a day out,
+// src/lib/practice-days.ts) are written fresh from the phone script cards and
+// rules, never reusing W2D1 / W2D2, and don't follow the day rules.
 
 import { aiErrorMessage } from "@/lib/ai";
 import { GRAY_DAY, GRAY_ITEM_CAP, isMustAsk, NO_CARD_SOURCE, topicDays } from "@/lib/card-map";
@@ -30,6 +32,7 @@ import {
   writeCardDay,
   writeGrayItems,
   writePhoneDrills,
+  writePracticeDay,
   writeVariants,
   type Drill,
   type GrayCard,
@@ -42,6 +45,7 @@ import {
   cardDrafts,
   fillMaster,
   missingSlots,
+  neededPractice,
   refillRow,
   responseBoxes,
   officeDays,
@@ -59,6 +63,17 @@ import { phoneDay, planExtraDay, planPhoneItems, type LeftOut } from "@/lib/extr
 import { extractExtraWorkflows, extraDrafts, loadExtraWorkflows } from "@/lib/extra-workflows";
 import { createAdminClient } from "@/lib/supabase/server";
 import { officeProfile } from "@/lib/va-flow";
+import { normalizeScope, workflowInScope } from "@/lib/va-scope";
+import {
+  isPracticeCode,
+  isWorkflowPracticeCode,
+  PHONE_PRACTICE,
+  slotOf,
+  weakestWorkflows,
+  WORKFLOW_PRACTICE_TITLE,
+  workflowRank,
+  type WorkflowScore,
+} from "@/lib/practice-days";
 
 export { GRAY_DAY };
 const DRILL_COUNT = 20;
@@ -76,7 +91,7 @@ const settingOf = (rows: { key: string; value: unknown }[], key: string) => rows
 
 // What every build needs about an office: its days and how it gets each.
 export async function loadOfficeBuild(db: Db, officeId: string) {
-  const [office, days, settings, extraCards] = await Promise.all([
+  const [office, days, settings, extraCards, vas] = await Promise.all([
     db
       .from("offices")
       .select("id, name, status, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
@@ -95,25 +110,34 @@ export async function loadOfficeBuild(db: Db, officeId: string) {
       .eq("kind", "card")
       .eq("skip", false)
       .contains("schedule_days", [GRAY_DAY]),
+    // The office's VAs: their roles decide which practice days it needs.
+    db.from("profiles").select("va_scope").eq("role", "va").eq("office_id", officeId).is("deactivated_at", null),
   ]);
   const officeRow = must(office);
   if (!officeRow) return null;
   const settingRows = must(settings) ?? [];
   const conditions = (settingOf(settingRows, "conditions") ?? {}) as Record<string, string>;
   const profile = { ...officeProfile(officeRow), ...(extraCards.count ? { HAS_GRAY_CARDS: "yes" } : {}) };
+  const dayRows = (must(days) ?? []) as BuildDay[];
+  const own = officeDays({
+    sequence: (settingOf(settingRows, "sequence") ?? []) as string[],
+    days: dayRows,
+    conditions,
+    profile,
+    grayDay: GRAY_DAY,
+  });
+  const practice = neededPractice({
+    days: own,
+    scopes: ((must(vas) ?? []) as { va_scope: string[] | null }[]).map((v) => normalizeScope(v.va_scope)),
+    practiceDays: dayRows.filter((d) => isPracticeCode(d.code)),
+  });
   return {
     office: officeRow,
     settings: settingRows,
     conditions,
     profile,
     dayRules: parseDayRules(settingOf(settingRows, "day_rules")),
-    days: officeDays({
-      sequence: (settingOf(settingRows, "sequence") ?? []) as string[],
-      days: (must(days) ?? []) as BuildDay[],
-      conditions,
-      profile,
-      grayDay: GRAY_DAY,
-    }),
+    days: [...own, ...practice],
   };
 }
 
@@ -262,6 +286,160 @@ const drillDraft = (d: Drill, i: number): DraftScenario => ({
   source_quote: null,
   source_document_id: null,
 });
+
+// ---------------------------------------------------------------------------
+// Practice days (src/lib/practice-days.ts)
+// ---------------------------------------------------------------------------
+
+const PRACTICE_SITUATIONAL = 16;
+const PRACTICE_MC = 4;
+const PHONE_DAYS = ["W2D1", "W2D2"];
+// Cards a phone practice day is written from: the phone script cards.
+const PHONE_CARD = /phone|script|call/i;
+const ESCALATION = /escalat|upset|angry|emergenc|911|red flag|doctor|approv|complain/i;
+
+const latestStems = async (db: Db, officeId: string, days: string[]) => {
+  if (!days.length) return [];
+  const { data: status } = await db.from("office_days").select("schedule_day, build_version").eq("office_id", officeId).in("schedule_day", days);
+  const out: string[] = [];
+  for (const s of status ?? []) {
+    if (!s.build_version) continue;
+    const { data } = await db
+      .from("office_scenarios")
+      .select("stem")
+      .eq("office_id", officeId)
+      .eq("schedule_day", s.schedule_day)
+      .eq("build_version", s.build_version)
+      .eq("version", "A")
+      .eq("is_repeat_variant", false);
+    out.push(...(data ?? []).map((r) => r.stem as string));
+  }
+  return out;
+};
+
+// A workflow practice day (W2W*): the office's VAs with no Phones role, their
+// weakest workflow in their role (1st for W2W3, 2nd for W2W4, 3rd for W2W5).
+async function practiceWorkflow(db: Db, officeId: string, dayCode: string): Promise<string> {
+  const { data: vas } = await db.from("profiles").select("id, va_scope").eq("role", "va").eq("office_id", officeId).is("deactivated_at", null);
+  const needing = (vas ?? []).filter((v) => !normalizeScope(v.va_scope).includes("phones"));
+  const allCodes = ["WF01", "WF02", "WF03", "WF05", "WF06", "WF07", "WF08", "WF10"];
+  const role = allCodes.filter((code) => needing.some((v) => workflowInScope(normalizeScope(v.va_scope), code)));
+  const scores: WorkflowScore[] = [];
+  if (needing.length) {
+    const { data: attempts } = await db
+      .from("attempts")
+      .select("id")
+      .in("va_id", needing.map((v) => v.id))
+      .eq("office_id", officeId)
+      .eq("kind", "day")
+      .not("submitted_at", "is", null)
+      .is("archived_at", null);
+    const ids = (attempts ?? []).map((a) => a.id);
+    if (ids.length) {
+      const { data: items } = await db.from("attempt_items").select("office_scenario_id, first_score").in("attempt_id", ids);
+      const scenarioIds = [...new Set((items ?? []).map((i) => i.office_scenario_id))];
+      const { data: scen } = scenarioIds.length
+        ? await db.from("office_scenarios").select("id, workflow, points").in("id", scenarioIds)
+        : { data: [] };
+      const byId = new Map((scen ?? []).map((s) => [s.id, s]));
+      for (const i of items ?? []) {
+        const s = byId.get(i.office_scenario_id);
+        if (s && i.first_score !== null) scores.push({ workflow: s.workflow, points: Number(i.first_score), max: Number(s.points) });
+      }
+    }
+  }
+  const ranked = weakestWorkflows(role.length ? role : allCodes, scores);
+  return ranked[Math.min(workflowRank(dayCode), ranked.length - 1)];
+}
+
+async function practiceDrafts(db: Db, officeId: string, dayCode: string, ruleList: { key: string; value: string }[]) {
+  const slot = slotOf(dayCode)!;
+  const workflowCode = isWorkflowPracticeCode(dayCode) ? await practiceWorkflow(db, officeId, dayCode) : null;
+  const [{ data: docs }, { data: wf }] = await Promise.all([
+    db
+      .from("office_documents")
+      .select("id, card_title, file_name, extracted_text, workflow, tags, schedule_days")
+      .eq("office_id", officeId)
+      .eq("kind", "card")
+      .eq("skip", false)
+      .not("imported_at", "is", null)
+      .order("created_at"),
+    workflowCode
+      ? db
+          .from("workflows")
+          .select("code, name, trigger, steps, definition_of_done, va_can_decide, requires_approval, immediate_escalation, prohibited_actions")
+          .eq("code", workflowCode)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const all = ((docs ?? []) as { id: string; card_title: string; file_name: string; extracted_text: string | null; workflow: string | null; tags: string[] | null; schedule_days: string[] | null }[])
+    .filter((d) => d.extracted_text?.trim())
+    .map((d) => ({ id: d.id, title: d.card_title || d.file_name, text: d.extracted_text!, workflow: d.workflow, tags: d.tags ?? [], days: d.schedule_days ?? [] }));
+  let cards: typeof all;
+  if (workflowCode) {
+    cards = all.filter((c) => c.workflow === workflowCode);
+  } else {
+    // The phone script cards (Texting & Phone Scripts, Master Phone Script), else the cards of the phone days.
+    const phoneDays = all.filter((c) => c.days.some((d) => PHONE_DAYS.includes(d) || d === "W1D3"));
+    const scripts = phoneDays.filter((c) => PHONE_CARD.test(c.title));
+    cards = scripts.length ? scripts : phoneDays.filter((c) => c.days.some((d) => PHONE_DAYS.includes(d)));
+  }
+  const workflowName = (wf as WorkflowFields | null)?.name ?? workflowCode ?? "";
+  const phone = PHONE_PRACTICE[slot];
+  const title = workflowCode ? WORKFLOW_PRACTICE_TITLE(workflowName) : phone.title;
+  // Never the same situations as the office's other phone days.
+  const others = [...PHONE_DAYS, ...["W2D3", "W2D4", "W2D5", "W2P3", "W2P4", "W2P5", "W2W3", "W2W4", "W2W5"].filter((c) => c !== dayCode)];
+  const { data: kinds } = await db.from("office_days").select("schedule_day, kind").eq("office_id", officeId).in("schedule_day", others);
+  // A real W2D3 / W2D4 / W2D5 (insurance, billing, extra cards) isn't a phone day.
+  const avoidDays = others.filter((c) => PHONE_DAYS.includes(c) || isPracticeCode(c) || (kinds ?? []).some((k) => k.schedule_day === c && k.kind === "skipped"));
+  const avoid = await latestStems(db, officeId, avoidDays);
+  const items = await writePracticeDay({
+    title,
+    focus: workflowCode
+      ? `Extra practice on ${workflowName}, the VA's weakest workflow: everyday and harder situations, mistakes to avoid, when to escalate.`
+      : phone.focus,
+    situational: PRACTICE_SITUATIONAL,
+    mc: PRACTICE_MC,
+    cards: cards.map(({ days: _d, ...c }) => {
+      void _d;
+      return c;
+    }),
+    workflow: (wf as WorkflowFields | null) ?? null,
+    rules: ruleList,
+    avoid,
+  });
+  const cardOf = new Map(cards.map((c) => [c.title.toLowerCase(), c]));
+  const drafts = items.map((it, i): DraftScenario => {
+    const card = it.source_card ? cardOf.get(it.source_card.toLowerCase()) : undefined;
+    const situational = it.type === "situational";
+    return {
+      scenario_id: null,
+      office_workflow_id: null,
+      workflow: workflowCode ?? (phone.mode !== "everyday" && ESCALATION.test(`${it.topic} ${it.stem}`) ? "WF09" : "WF04"),
+      part: "P",
+      part_title: it.topic || title,
+      code: `P${i + 1}`,
+      type: it.type,
+      points: situational ? 2 : 1,
+      answer_format: situational ? "say_do_book" : null,
+      stem: it.stem,
+      options: situational ? null : it.options,
+      answer: situational ? null : (it.answer?.trim().toUpperCase() ?? null),
+      correct_response: situational ? { Say: it.say, Do: it.do, Book: it.book } : null,
+      critical_fail: it.critical_fail,
+      escalation_level: it.critical_fail ? "immediate" : "none",
+      formula: null,
+      missing_keys: [],
+      options_rule: null,
+      wants_repeat: situational,
+      position: i,
+      source_card: card?.title ?? null,
+      source_quote: null,
+      source_document_id: card?.id ?? null,
+    };
+  });
+  return { drafts, title };
+}
 
 // What a day is written from: the office's rules, the master items (the day's
 // own as slots, and the pool it may follow under the day rules), the cards
@@ -443,6 +621,8 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
 
     let drafts: DraftScenario[];
     let leftOut: LeftOut[] = [];
+    // A practice day's name at the office (office_days.title).
+    let title: string | null = null;
     if (entry.kind === "standard") {
       if (cards.length) {
         // Card-first: the master items are the pattern, the cards the source.
@@ -525,6 +705,11 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
         rules,
       );
       for (const d of drafts) if (d.review_error) log({ item: d.code, field: d.review_error.split(":")[0], value: d.stem.slice(0, 500), reason: d.review_error });
+    } else if (slotOf(dayCode)) {
+      // A practice day (W2D3 / W2D4 / W2D5 the office skips, or W2P* / W2W*).
+      const practice = await practiceDrafts(db, officeId, dayCode, ruleList);
+      drafts = practice.drafts;
+      title = practice.title;
     } else {
       const day = entry.day;
       const drills = await writePhoneDrills({
@@ -544,6 +729,8 @@ export async function buildOfficeDay(officeId: string, dayCode: string) {
     await finishBuild(db, officeId, dayCode, version);
     // Extra cards that didn't fit (shown on the day's review page).
     await db.from("office_days").update({ left_out: leftOut }).eq("office_id", officeId).eq("schedule_day", dayCode);
+    // The practice day's name (no title column before practice-days.sql: the default names stand).
+    if (title) await db.from("office_days").update({ title }).eq("office_id", officeId).eq("schedule_day", dayCode);
     await logCheckFailures(db, officeId, dayCode, failures);
   } catch (e) {
     await logCheckFailures(db, officeId, dayCode, failures);
@@ -607,7 +794,7 @@ export async function recheckBuiltDays(db: Db) {
   let reopened = 0;
   let started = 0;
   for (const d of built) {
-    if (d.kind === "skipped") continue;
+    if (d.kind === "skipped" || d.kind === "practice") continue;
     const version = (d.build_version as number | null) ?? 1;
     if (await versionHasAttempts(db, d.office_id, d.schedule_day, version)) {
       started++;

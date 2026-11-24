@@ -75,7 +75,7 @@ export async function getLibraryOverview() {
   const [workflows, scenarios, days, info] = await Promise.all([
     supabase.from("workflows").select("*").order("position"),
     supabase.from("scenarios").select("workflow, schedule_day"),
-    supabase.from("schedule_days").select(DAY_COLUMNS).order("week").order("day"),
+    supabase.from("schedule_days").select(DAY_COLUMNS).not("code", "like", "W2P%").not("code", "like", "W2W%").order("week").order("day"),
     supabase.from("settings").select("value").eq("key", "bank_info").maybeSingle(),
   ]);
   for (const r of [workflows, scenarios, days]) if (r.error) throw r.error;
@@ -105,7 +105,7 @@ export async function getWorkflowWithScenarios(code: string) {
 
   const [scenarios, days, slots] = await Promise.all([
     supabase.from("scenarios").select("*").eq("workflow", code).order("position"),
-    supabase.from("schedule_days").select(DAY_COLUMNS).order("week").order("day"),
+    supabase.from("schedule_days").select(DAY_COLUMNS).not("code", "like", "W2P%").not("code", "like", "W2W%").order("week").order("day"),
     supabase.from("rule_slots").select("key, question").in("key", (workflow as Workflow).rule_keys),
   ]);
   for (const r of [scenarios, days, slots]) if (r.error) throw r.error;

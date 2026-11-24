@@ -16,7 +16,7 @@ import { loadScenarioDay, rebuildNote, type MissingRule, type ScenarioRow } from
 export const maxDuration = 300;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DAY_CODE = /^W\dD\d$/;
+const DAY_CODE = /^W\d[DPW]\d$/;  // W2P* / W2W*: practice days
 
 export default function ScenarioDayPage({ params }: PageProps<"/admin/offices/[id]/scenarios/[day]">) {
   return (
@@ -72,7 +72,7 @@ async function ScenarioDay({ params }: { params: Promise<{ id: string; day: stri
           <>
             {KIND_LABELS[summary.kind]}
             {summary.status?.build_version ? ` · version ${summary.status.build_version}` : ""}
-            {summary.kind !== "skipped" &&
+            {summary.kind !== "skipped" && summary.kind !== "practice" &&
               ` · ${summary.cards.length ? `Written from: ${summary.cards.join(", ")}` : "No card mapped to this day: built from the master bank."}`}
           </>
         }

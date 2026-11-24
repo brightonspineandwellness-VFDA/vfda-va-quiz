@@ -3,9 +3,9 @@ import "server-only";
 // The training bank and the 4-week doctor training program
 // (src/lib/training-plan.ts has the pure parts).
 //
-// When: once the VA has submitted every scheduled quiz day: W2D5, or, when
-// W2D5 isn't in their schedule (no gray cards, or outside their role), their
-// last scheduled day, with every other scheduled day submitted too. It's
+// When: once the VA has submitted every scheduled quiz day: their 10th day
+// (W2D5, or the phone practice day standing in for it, src/lib/practice-days.ts),
+// with every other scheduled day submitted too. It's
 // built from ALL of the VA's quiz days (first tries, repeats, retakes,
 // critical errors, flags): the training bank (src/lib/ai.ts), the 8 sessions,
 // and one Training Sheet per session. Nothing is sent when it's built; the
@@ -13,6 +13,7 @@ import "server-only";
 // training program now" builds it at once for testing, and says which days
 // are missing.
 
+import { officeDayTitles } from "@/lib/day-titles";
 import { aiErrorMessage, aiMode, askTrainingBank, askTrainingSheet } from "@/lib/ai";
 import { loadItems } from "@/lib/quiz-reports";
 import { cardOf } from "@/lib/quiz-report";
@@ -156,11 +157,11 @@ async function loadContext(db: Db, vaId: string, officeId: string, r: Readiness)
     loadOfficesTz(db, [officeId]),
     officeDoctors(db, officeId),
     db.from("settings").select("value").eq("key", "sequence").maybeSingle(),
-    db.from("schedule_days").select("code, title"),
+    officeDayTitles(db, officeId),
   ]);
   const vaName = (must(va)?.full_name || must(va)?.email || "VA") as string;
   const vaFirst = firstNameOf(vaName);
-  const titleOf = new Map(((must(allDays) ?? []) as { code: string; title: string }[]).map((d) => [d.code, d.title]));
+  const titleOf = allDays;
   const attempts = r.path.attempts;
   const items: BankItem[] = [];
   const lines: string[] = [];

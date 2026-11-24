@@ -7,7 +7,8 @@
 
 import { applies, normalizeRemoteAccess, type Profile } from "@/lib/interview";
 import { buildSchedule, type DaySchedule, type ScheduleSettings } from "@/lib/release-schedule";
-import { dayInScope, type ScopeKey } from "@/lib/va-scope";
+import { dayInScope, SCOPE_KEYS, type ScopeKey } from "@/lib/va-scope";
+import { isPracticeCode, officeDayTitle, PHONE_PRACTICE, PRACTICE_RELEASE_FROM, slotDay, slotOf } from "@/lib/practice-days";
 
 // "describe": one box, the VA's own words (describe items).
 export type AnswerFormat = "steps_say_doc" | "say_do_book" | "describe";
@@ -75,6 +76,8 @@ export type DayRow = {
   review_min_points: number | null;
   answer_format: AnswerFormat;
   proof_of_work: string[];
+  // A practice day standing in for a skipped W2D3 / W2D4 / W2D5 (src/lib/practice-days.ts).
+  practice?: boolean;
 };
 
 export type UnlockRow = {
@@ -122,6 +125,11 @@ export function officeProfile(o: OfficeFlags): Profile {
 // day's extra phone scenarios). With a scope, only the days of the VA's roles
 // (src/lib/va-scope.ts), plus any day they already started: a scope changed
 // later adds or removes only days not started yet.
+//
+// Every VA gets 10 days: W2D3 / W2D4 / W2D5 skipped for the office or left
+// out of the VA's role become practice days in the same slot
+// (src/lib/practice-days.ts). `officeDays`: the office's built days (kind and
+// title), for the practice days' names.
 export function trainingPath(input: {
   sequence: string[];
   days: DayRow[];
@@ -130,13 +138,42 @@ export function trainingPath(input: {
   officeScenarioDays: Set<string>;
   scope?: ScopeKey[];
   started?: Set<string>;
+  officeDays?: Map<string, { kind?: string | null; title?: string | null }>;
 }): DayRow[] {
   const byCode = new Map(input.days.map((d) => [d.code, d]));
-  return input.sequence
-    .map((code) => byCode.get(code))
-    .filter((d): d is DayRow => !!d)
-    .filter((d) => input.officeScenarioDays.has(d.code) || applies(d.condition, input.conditions, input.profile))
-    .filter((d) => !input.scope || dayInScope(input.scope, d.code) || !!input.started?.has(d.code));
+  const scope = input.scope ?? SCOPE_KEYS;
+  const named = (d: DayRow): DayRow => {
+    const title = officeDayTitle(d.code, d.title, input.officeDays?.get(d.code));
+    return title === d.title ? d : { ...d, title };
+  };
+  const out: DayRow[] = [];
+  for (const code of input.sequence) {
+    const day = byCode.get(code);
+    if (!day) continue;
+    const officeHas = applies(day.condition, input.conditions, input.profile);
+    const slot = slotOf(code);
+    if (slot && !input.started?.has(code)) {
+      const inScope = dayInScope(scope, code);
+      const stand = slotDay(slot, { officeHas, inScope, phones: scope.includes("phones") });
+      if (stand === code) {
+        out.push(officeHas ? day : { ...named({ ...day, title: PHONE_PRACTICE[slot].title }), answer_format: "say_do_book", practice: true });
+        continue;
+      }
+      const practice = byCode.get(stand);
+      // A practice day already started stays; one not in the database yet (practice-days.sql not run) is left out.
+      if (practice) out.push({ ...named(practice), practice: true });
+      continue;
+    }
+    if (!(input.officeScenarioDays.has(code) || officeHas)) continue;
+    if (!dayInScope(scope, code) && !input.started?.has(code)) continue;
+    out.push(slot && !officeHas ? { ...named({ ...day, title: PHONE_PRACTICE[slot].title }), answer_format: "say_do_book", practice: true } : day);
+  }
+  // A practice day the VA started (their role changed since) stays.
+  for (const code of input.started ?? []) {
+    const practice = byCode.get(code);
+    if (practice && isPracticeCode(code) && !out.some((d) => d.code === code)) out.push({ ...named(practice), practice: true });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +261,7 @@ export function pathSchedule(input: {
   const status = new Map(input.unlocks.map((u) => [u.schedule_day, unlockStatus(u.status)]));
   return buildSchedule({
     codes: input.path.map((d) => d.code),
+    notBefore: Object.fromEntries(input.path.filter((d) => d.practice).map((d) => [d.code, PRACTICE_RELEASE_FROM])),
     startDate: input.startDate,
     timeZone: input.timeZone,
     settings: input.settings,

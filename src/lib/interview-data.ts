@@ -62,7 +62,7 @@ async function loadBankParts(supabase: Awaited<ReturnType<typeof createSessionCl
       .from("rule_slots")
       .select("key, tier, card_group, suggested_answer, schedule_day, question, answer_type, condition, card_source")
       .order("position"),
-    supabase.from("schedule_days").select("code, title, condition").order("week").order("day"),
+    supabase.from("schedule_days").select("code, title, condition").not("code", "like", "W2P%").not("code", "like", "W2W%").order("week").order("day"),
     supabase.from("settings").select("key, value").in("key", ["conditions", "gray_card_questions"]),
   ]);
   for (const r of [slots, days, settings]) if (r.error) throw r.error;

@@ -179,6 +179,12 @@ const PHASES = [
     title: "Daily release schedule database changes (pause and release-now per VA)",
     after: "training-program.sql",
   },
+  {
+    name: "practice-days",
+    starts: "20261124130000",
+    title: "Practice days database changes (phone practice days for skipped week 2 days, 10 days for every VA)",
+    after: "release-schedule.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

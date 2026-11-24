@@ -92,7 +92,7 @@ async function Scenarios({ params }: { params: Promise<{ id: string }> }) {
                     </Link>
                     <p className="text-sm text-muted">{KIND_LABELS[d.kind]}</p>
                     <p className="text-xs text-muted">
-                      {d.kind === "skipped" ? "" : d.cards.length ? `From: ${d.cards.join(", ")}` : "No card mapped: master bank"}
+                      {d.kind === "skipped" || d.kind === "practice" ? "From the office's phone script cards and rules (new situations, none from W2D1 / W2D2)" : d.cards.length ? `From: ${d.cards.join(", ")}` : "No card mapped: master bank"}
                     </p>
                   </td>
                   <td className={td}>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { officeDayTitles } from "@/lib/day-titles";
 import { Suspense } from "react";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { Badge, ButtonLink, Card, EmptyState, linkClass, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
@@ -31,7 +32,7 @@ export default function ResultsPage() {
 async function Results() {
   const user = await requireRole("va");
   const db = createAdminClient();
-  const [{ data: attempts }, { data: days }, grid] = await Promise.all([
+  const [{ data: attempts }, days, grid] = await Promise.all([
     db
       .from("attempts")
       .select("id, schedule_day, kind, submitted_at, result")
@@ -40,11 +41,11 @@ async function Results() {
       .not("submitted_at", "is", null)
       .is("archived_at", null)
       .order("submitted_at", { ascending: false }),
-    db.from("schedule_days").select("code, title"),
+    officeDayTitles(db, user.officeId),
     loadCertGrid(db, { vaIds: [user.id] }),
   ]);
   const done = attempts ?? [];
-  const titleOf = new Map((days ?? []).map((d) => [d.code, d.title as string]));
+  const titleOf = days;
   const row = grid.rows[0];
 
   return (

@@ -214,7 +214,7 @@
 
 # 
 
-# \*\*Unlocking (daily schedule, Nov 2026).\*\* One quiz is released each weekday at 8:00 am in the office's time zone (offices.time\_zone, default US Eastern), from va\_start\_date (a weekend start date starts the next Monday), in the VA's path order. A released quiz opens once VFDA approved that day for the office and the VA marked its cards done; quizzes are taken in order and stay open until submitted. Late = not submitted by 11:59 pm office time on its release day. VFDA can pause a VA's schedule or release their next day now (VA progress). See src/lib/release-schedule.ts and src/lib/schedule-board.ts (morning emails, daily cron).
+# \*\*Unlocking (daily schedule, Nov 2026).\*\* One quiz is released each weekday at 8:00 am in the office's time zone (offices.time\_zone, default US Eastern), from va\_start\_date (a weekend start date starts the next Monday), in the VA's path order. A released quiz opens once VFDA approved that day for the office and the VA marked its cards done; quizzes are taken in order and stay open until submitted. Late = not submitted by 11:59 pm office time on its release day. VFDA can pause a VA's schedule or release their next day now (VA progress). See src/lib/release-schedule.ts and src/lib/schedule-board.ts (morning emails, daily cron). **Every VA gets 10 days:** W2D3 / W2D4 / W2D5 skipped for the office or outside the VA's role become phone practice days in the same slot (1: Everyday calls, 2: Tricky calls, 3: Mixed review; about 20 items, 16 situational + 4 multiple choice, new situations, VFDA approval like any day); a VA with no Phones role gets practice on their weakest workflows instead. See src/lib/practice-days.ts.
 
 # 
 

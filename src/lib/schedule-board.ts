@@ -74,7 +74,8 @@ export async function loadScheduleBoard(db: Db, now = new Date()): Promise<VaSch
     db.from("offices").select("id, name, time_zone, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool"),
     db.from("schedule_days").select(DAY_COLUMNS),
     db.from("settings").select("key, value").in("key", ["conditions", "sequence"]),
-    db.from("office_scenarios").select("office_id, schedule_day").eq("version", "A").eq("is_repeat_variant", false).limit(20000),
+    // Every built day ("*": title only exists once practice-days.sql has been run).
+    db.from("office_days").select("*"),
     db.from("office_days").select("office_id, schedule_day, live_version").not("live_version", "is", null),
     db.from("day_unlocks").select("va_id, office_id, schedule_day, version, status, cards_done_at, unlocked_at"),
   ]);
@@ -84,7 +85,7 @@ export async function loadScheduleBoard(db: Db, now = new Date()): Promise<VaSch
   const dayRows = (must(days) ?? []) as DayRow[];
   const titles = new Map(dayRows.map((d) => [d.code, d.title]));
   const officeRows = (must(offices) ?? []) as (OfficeFlags & { id: string; name: string; time_zone: string | null })[];
-  const scenarioRows = (must(scenarios) ?? []) as { office_id: string; schedule_day: string }[];
+  const builtRows = (must(scenarios) ?? []) as { office_id: string; schedule_day: string; build_version: number | null; kind: string | null; title?: string | null }[];
   const liveRows = (must(officeDays) ?? []) as { office_id: string; schedule_day: string }[];
   const unlockRows = (must(unlocks) ?? []) as (UnlockRow & { va_id: string; office_id: string })[];
 
@@ -107,7 +108,8 @@ export async function loadScheduleBoard(db: Db, now = new Date()): Promise<VaSch
       days: dayRows,
       conditions,
       profile: officeProfile(office),
-      officeScenarioDays: new Set(scenarioRows.filter((s) => s.office_id === va.office_id).map((s) => s.schedule_day)),
+      officeScenarioDays: new Set(builtRows.filter((s) => s.office_id === va.office_id && s.build_version).map((s) => s.schedule_day)),
+      officeDays: new Map(builtRows.filter((s) => s.office_id === va.office_id).map((s) => [s.schedule_day, s])),
       scope: normalizeScope(va.va_scope),
       started: new Set(mine.filter((u) => u.status !== "locked").map((u) => u.schedule_day)),
     });

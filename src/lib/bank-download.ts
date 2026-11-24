@@ -9,7 +9,7 @@ import { bankPdf } from "@/lib/bank-pdf";
 import { loadBank } from "@/lib/scenario-bank";
 import { createAdminClient } from "@/lib/supabase/server";
 
-const DAY_CODE = /^W\dD\d$/;
+const DAY_CODE = /^W\d[DPW]\d$/;  // W2P* / W2W*: practice days
 
 export async function bankDownload(officeId: string, url: URL): Promise<Response> {
   const format = url.searchParams.get("format") === "csv" ? "csv" : "pdf";

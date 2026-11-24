@@ -19,7 +19,7 @@ import { RESULT_LABELS, type ResultLabel } from "@/lib/va-flow";
 import { isPaused, nextUnreleased, type ScheduleSettings } from "@/lib/release-schedule";
 import { loadScheduleBoard, type VaSchedule } from "@/lib/schedule-board";
 
-const DAY_CODE = /^W\dD\d$/;
+const DAY_CODE = /^W\d[DPW]\d$/;  // W2P* / W2W*: practice days
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (error: string) => ({ ok: false, error }) as const;
 

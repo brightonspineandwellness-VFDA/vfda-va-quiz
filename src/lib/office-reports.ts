@@ -65,7 +65,7 @@ async function loadInputs(db: Db, officeId: string) {
   const [workflowsRes, slotsRes, daysRes, derivedRes, docsRes] = await Promise.all([
     db.from("workflows").select("code, name, steps, immediate_escalation").order("position"),
     db.from("rule_slots").select("key, workflows, default_answer"),
-    db.from("schedule_days").select("code, condition, workflows"),
+    db.from("schedule_days").select("code, condition, workflows").not("code", "like", "W2P%").not("code", "like", "W2W%"),
     db.from("settings").select("value").eq("key", "derived_placeholders").maybeSingle(),
     db
       .from("office_documents")

@@ -87,7 +87,8 @@ export async function loadScenarioOverview(officeId: string) {
   const [days, scenarios, attempts, documents] = await Promise.all([
     supabase
       .from("office_days")
-      .select("schedule_day, build_status, build_error, built_at, approved_at, build_version, live_version, left_out")
+      // "*": title only exists once practice-days.sql has been run.
+      .select("*")
       .eq("office_id", officeId),
     supabase
       .from("office_scenarios")
@@ -121,7 +122,7 @@ export async function loadScenarioOverview(officeId: string) {
     const taken = attemptRows.filter((a) => a.schedule_day === day.code);
     return {
       code: day.code,
-      title: day.title,
+      title: (status as { title?: string | null } | null)?.title || day.title,
       kind,
       status,
       countA: mine.filter((r) => r.version === "A" && !r.is_repeat_variant).length,

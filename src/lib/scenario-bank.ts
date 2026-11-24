@@ -5,6 +5,7 @@ import "server-only";
 // doctors read-only when VFDA turned on "Share answer bank with doctor".
 // Never served to VAs. Service role after the access check.
 
+import { officeDayTitle } from "@/lib/practice-days";
 import type { CurrentUser } from "@/lib/auth";
 import { bankStatus, type BankItem } from "@/lib/bank-export";
 import type { CorrectResponse } from "@/lib/scenario-build";
@@ -69,7 +70,8 @@ export async function loadBank(db: Db, officeId: string) {
     db.from("offices").select("id, name, share_answer_bank").eq("id", officeId).maybeSingle(),
     db.from("schedule_days").select("code, title"),
     db.from("settings").select("value").eq("key", "sequence").maybeSingle(),
-    db.from("office_days").select("schedule_day, build_version, live_version").eq("office_id", officeId),
+    // "*": title only exists once practice-days.sql has been run.
+    db.from("office_days").select("*").eq("office_id", officeId),
     db.from("office_scenarios").select(COLUMNS).eq("office_id", officeId).limit(10000),
   ]);
   const officeRow = must(office) as { id: string; name: string; share_answer_bank: boolean } | null;
@@ -113,13 +115,13 @@ export async function loadBank(db: Db, officeId: string) {
       (order[a.day] ?? 99) - (order[b.day] ?? 99) || b.build_version - a.build_version || (position.get(a.id) ?? 0) - (position.get(b.id) ?? 0) || a.code.localeCompare(b.code),
   );
   const titles = new Map(((must(days) ?? []) as { code: string; title: string }[]).map((d) => [d.code, d.title]));
-  const status = (must(officeDays) ?? []) as { schedule_day: string; build_version: number | null; live_version: number | null }[];
+  const status = (must(officeDays) ?? []) as { schedule_day: string; build_version: number | null; live_version: number | null; kind: string | null; title?: string | null }[];
   const dayCodes = [...new Set(items.map((i) => i.day))];
   const bankDays: BankDay[] = dayCodes.map((code) => {
     const s = status.find((d) => d.schedule_day === code);
     return {
       code,
-      title: titles.get(code) ?? "",
+      title: officeDayTitle(code, titles.get(code) ?? "", s),
       latest: s?.build_version ?? null,
       live: s?.live_version ?? null,
       approved: !!s?.live_version && s.live_version === s.build_version,

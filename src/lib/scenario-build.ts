@@ -6,6 +6,8 @@
 
 import { LOCKED_STANDARDS } from "@/lib/card-map";
 import type { ItemType } from "@/lib/day-rules";
+import { PHONE_PRACTICE, PRACTICE_SLOTS, slotDay, slotOf } from "@/lib/practice-days";
+import { dayInScope, type ScopeKey } from "@/lib/va-scope";
 import { applies, checkAnswerValue, MATRIX_COLUMNS, type InterviewQuestion, type MatrixRow, type Profile } from "@/lib/interview";
 
 export type MasterScenario = {
@@ -33,13 +35,16 @@ export type MasterScenario = {
 
 export type CorrectResponse = string[] | Record<string, string[]>;
 
-export type DayKind = "standard" | "gray" | "skipped";
+// "skipped": the office skips the day (W2D3 / W2D4 / W2D5): built as a phone
+// practice day. "practice": a stand-in for a VA whose role leaves a day out
+// (W2P*, W2W*, src/lib/practice-days.ts).
+export type DayKind = "standard" | "gray" | "skipped" | "practice";
 
 export type BuildDay = { code: string; title: string; condition: string; answer_format: string };
 
 // Every day in settings.sequence, and how the office gets it: its own master
 // scenarios, gray card items (W2D5 with gray cards), or, when its condition is
-// false, 20 extra phone drills instead (settings.skipped_day_rule).
+// false, a phone practice day (src/lib/practice-days.ts).
 export function officeDays(input: {
   sequence: string[];
   days: BuildDay[];
@@ -51,14 +56,35 @@ export function officeDays(input: {
   return input.sequence
     .map((code) => byCode.get(code))
     .filter((d): d is BuildDay => !!d)
-    .map((day) => ({
-      day,
-      kind: !applies(day.condition, input.conditions, input.profile)
-        ? "skipped"
-        : day.code === input.grayDay
-          ? "gray"
-          : "standard",
-    }));
+    .map((day) => {
+      const kind: DayKind = !applies(day.condition, input.conditions, input.profile) ? "skipped" : day.code === input.grayDay ? "gray" : "standard";
+      const slot = slotOf(day.code);
+      // A skipped week 2 day is the office's phone practice day.
+      return { day: kind === "skipped" && slot ? { ...day, title: PHONE_PRACTICE[slot].title, answer_format: "say_do_book" } : day, kind };
+    });
+}
+
+// The practice days the office's VAs need on top of its own days (W2P* for a
+// VA whose role leaves out a day the office has, W2W* for a VA with no
+// Phones role), in slot order.
+export function neededPractice(input: {
+  days: { day: BuildDay; kind: DayKind }[];
+  scopes: ScopeKey[][];
+  practiceDays: BuildDay[];
+}): { day: BuildDay; kind: DayKind }[] {
+  const codes = new Set<string>();
+  for (const scope of input.scopes) {
+    for (const slot of PRACTICE_SLOTS) {
+      const entry = input.days.find((d) => d.day.code === slot);
+      if (!entry) continue;
+      const stand = slotDay(slot, { officeHas: entry.kind !== "skipped", inScope: dayInScope(scope, slot), phones: scope.includes("phones") });
+      if (stand !== slot) codes.add(stand);
+    }
+  }
+  return input.practiceDays
+    .filter((d) => codes.has(d.code))
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((day) => ({ day, kind: "practice" as DayKind }));
 }
 
 // Version A masters for a day whose own condition holds for the office

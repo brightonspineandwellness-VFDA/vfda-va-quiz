@@ -9,6 +9,7 @@ import "server-only";
 // checks the VA itself and returns only what the VA may see: never answer,
 // correct_response, critical_fail or options_rule.
 
+import { officeDayTitles } from "@/lib/day-titles";
 import { aiErrorMessage, CONFIDENCE_VALUE, gradeSituational, RUBRIC_VERSION } from "@/lib/ai";
 import type { CurrentUser } from "@/lib/auth";
 import { recalculateCertifications } from "@/lib/certifications";
@@ -99,12 +100,8 @@ export async function loadToday(user: CurrentUser) {
     db.from("settings").select("key, value").in("key", ["conditions", "sequence"]),
     db.from("day_unlocks").select(UNLOCK_COLUMNS).eq("va_id", user.id).eq("office_id", officeId),
     db.from("proof_uploads").select(PROOF_COLUMNS).eq("va_id", user.id).eq("office_id", officeId).order("created_at"),
-    db
-      .from("office_scenarios")
-      .select("schedule_day, test_status")
-      .eq("office_id", officeId)
-      .eq("version", "A")
-      .eq("is_repeat_variant", false),
+    // Every built day ("*": title only exists once practice-days.sql has been run).
+    db.from("office_days").select("*").eq("office_id", officeId),
     db.from("office_days").select("schedule_day, live_version").eq("office_id", officeId).not("live_version", "is", null),
     // "*": release_schedule only exists once release-schedule.sql has been run.
     db.from("profiles").select("*").eq("id", user.id).maybeSingle(),
@@ -114,7 +111,7 @@ export async function loadToday(user: CurrentUser) {
   const meRow = must(me) as { va_scope: string[] | null; va_start_date: string | null; release_schedule?: unknown } | null;
   const timeZone = zoneOf(officeRow.time_zone as string | null);
   const settingRows = must(settings) ?? [];
-  const scenarioRows = must(scenarios) ?? [];
+  const builtRows = (must(scenarios) ?? []) as { schedule_day: string; build_version: number | null; kind: string | null; title?: string | null }[];
 
   // A day is approved once VFDA has approved a version of it: the live version,
   // which new attempts get.
@@ -127,7 +124,8 @@ export async function loadToday(user: CurrentUser) {
     days: (must(days) ?? []) as DayRow[],
     conditions: (settingValue(settingRows, "conditions") as Record<string, string> | undefined) ?? {},
     profile: officeProfile(officeRow),
-    officeScenarioDays: new Set(scenarioRows.map((s) => s.schedule_day)),
+    officeScenarioDays: new Set(builtRows.filter((d) => d.build_version).map((d) => d.schedule_day)),
+    officeDays: new Map(builtRows.map((d) => [d.schedule_day, d])),
   };
   // Only the VA's roles; a day they already opened stays.
   const scope = normalizeScope(meRow?.va_scope);
@@ -865,9 +863,9 @@ export async function loadRetakeTasks(vaId: string, officeId: string): Promise<R
       .eq("office_id", officeId)
       .eq("kind", "retake")
       .is("archived_at", null),
-    db.from("schedule_days").select("code, title"),
+    officeDayTitles(db, officeId),
   ]);
-  const titles = new Map(((must(titlesRes) ?? []) as { code: string; title: string }[]).map((d) => [d.code, d.title]));
+  const titles = titlesRes;
   const retakes = (must(retakesRes) ?? []) as RetakeRow[];
   const prepared = await preparedRetakes(db, retakes.map((r) => r.id));
   const tasks: RetakeTask[] = [];
