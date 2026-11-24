@@ -214,7 +214,7 @@
 
 # 
 
-# \*\*Unlocking.\*\* A day opens only when all are true, checked on the server: previous day passed (or approved from review); today's cards marked done; that training day reached (from va\_start\_date); VFDA approved that day's scenarios for the office; previous day's proof of work accepted.
+# \*\*Unlocking (daily schedule, Nov 2026).\*\* One quiz is released each weekday at 8:00 am in the office's time zone (offices.time\_zone, default US Eastern), from va\_start\_date (a weekend start date starts the next Monday), in the VA's path order. A released quiz opens once VFDA approved that day for the office and the VA marked its cards done; quizzes are taken in order and stay open until submitted. Late = not submitted by 11:59 pm office time on its release day. VFDA can pause a VA's schedule or release their next day now (VA progress). See src/lib/release-schedule.ts and src/lib/schedule-board.ts (morning emails, daily cron).
 
 # 
 

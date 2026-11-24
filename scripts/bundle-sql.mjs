@@ -173,6 +173,12 @@ const PHASES = [
     title: "Training program database changes (training bank, 4-week doctor training program, sessions)",
     after: "weekly-summary.sql",
   },
+  {
+    name: "release-schedule",
+    starts: "20261124120000",
+    title: "Daily release schedule database changes (pause and release-now per VA)",
+    after: "training-program.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();

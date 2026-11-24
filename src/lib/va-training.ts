@@ -1,8 +1,9 @@
 import "server-only";
 
-// VA training on the server: loads the VA's days, opens the next one once the
-// day before it was submitted, its cards are marked done and VFDA approved it
-// for the office, serves scenarios one at a time, grades answers and labels
+// VA training on the server: loads the VA's days, opens the next one at its
+// release (8 am office time, src/lib/release-schedule.ts) once the day before
+// it was submitted, its cards are marked done and VFDA approved it for the
+// office, serves scenarios one at a time, grades answers and labels
 // the day, and prepares a day's one optional retake. Quizzes never block.
 // Uses the service role, so every function here
 // checks the VA itself and returns only what the VA may see: never answer,
@@ -16,11 +17,14 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { isVfdaSourceCard } from "@/lib/rule-source";
 import { graderRank, recordRuleSource } from "@/lib/rule-sources";
 import { normalizeScope } from "@/lib/va-scope";
+import { isPaused, scheduleSettings } from "@/lib/release-schedule";
+import { zoneOf } from "@/lib/week";
 import {
   addTrainingDays,
   ANSWER_BOXES,
   formatOf,
   buildToday,
+  pathSchedule,
   certificationRules,
   cleanPasteLog,
   dayResult,
@@ -88,7 +92,7 @@ export async function loadToday(user: CurrentUser) {
   const [office, days, settings, unlocks, proofs, scenarios, officeDays, me] = await Promise.all([
     db
       .from("offices")
-      .select("name, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
+      .select("name, time_zone, bills_insurance, billing_type, has_reexam_card, has_gray_cards, remote_access_tool")
       .eq("id", officeId)
       .maybeSingle(),
     db.from("schedule_days").select(DAY_COLUMNS),
@@ -102,10 +106,13 @@ export async function loadToday(user: CurrentUser) {
       .eq("version", "A")
       .eq("is_repeat_variant", false),
     db.from("office_days").select("schedule_day, live_version").eq("office_id", officeId).not("live_version", "is", null),
-    db.from("profiles").select("va_scope").eq("id", user.id).maybeSingle(),
+    // "*": release_schedule only exists once release-schedule.sql has been run.
+    db.from("profiles").select("*").eq("id", user.id).maybeSingle(),
   ]);
   const officeRow = must(office);
   if (!officeRow) return { kind: "no_office" as const };
+  const meRow = must(me) as { va_scope: string[] | null; va_start_date: string | null; release_schedule?: unknown } | null;
+  const timeZone = zoneOf(officeRow.time_zone as string | null);
   const settingRows = must(settings) ?? [];
   const scenarioRows = must(scenarios) ?? [];
 
@@ -123,14 +130,16 @@ export async function loadToday(user: CurrentUser) {
     officeScenarioDays: new Set(scenarioRows.map((s) => s.schedule_day)),
   };
   // Only the VA's roles; a day they already opened stays.
-  const scope = normalizeScope(must(me)?.va_scope);
+  const scope = normalizeScope(meRow?.va_scope);
   const path = trainingPath({
     ...pathInput,
     scope,
     started: new Set(unlockRows.filter((u) => u.status !== "locked").map((u) => u.schedule_day)),
   });
   const proofRows = (must(proofs) ?? []) as ProofRow[];
-  const today = buildToday({ path, unlocks: unlockRows, approved });
+  const releaseSettings = scheduleSettings(meRow?.release_schedule);
+  const schedule = pathSchedule({ path, unlocks: unlockRows, startDate: meRow?.va_start_date ?? null, timeZone, settings: releaseSettings, now: new Date() });
+  const today = buildToday({ path, unlocks: unlockRows, approved, schedule });
 
   // Open the day (once).
   if (today.kind === "open" && today.current.status !== "open") {
@@ -146,18 +155,30 @@ export async function loadToday(user: CurrentUser) {
     if (opened?.length) today.current.status = "open";
   }
 
-  return { kind: "ok" as const, officeName: officeRow.name as string, today, proofs: proofRows, liveVersions };
+  return {
+    kind: "ok" as const,
+    officeName: officeRow.name as string,
+    timeZone,
+    paused: isPaused(releaseSettings),
+    startDate: meRow?.va_start_date ?? null,
+    today,
+    proofs: proofRows,
+    liveVersions,
+  };
 }
 
-// "Mark today's cards done" for the next day. Opens it at once when VFDA has
-// approved it; otherwise VFDA is told (once) that the VA is waiting.
+// "Mark today's cards done" for the next day: opens it at once when it's
+// released and VFDA approved it. Before the release, the cards are just
+// marked done (the quiz opens at 8 am). Released but not approved: VFDA is
+// told (once) that the VA is waiting.
 export async function markCardsDone(user: CurrentUser): Promise<{ error: string | null; preparing: string | null }> {
   const loaded = await loadToday(user);
   if (loaded.kind !== "ok") return { error: "Your account isn't linked to an office yet.", preparing: null };
   const { today } = loaded;
   if (today.kind === "open") return { error: null, preparing: null };
   if (today.kind === "preparing") return { error: null, preparing: today.current.day.code };
-  if (today.kind !== "cards") return { error: "There's no day waiting for its cards.", preparing: null };
+  if (today.kind === "upcoming" && today.current.unlock?.cards_done_at) return { error: null, preparing: null };
+  if (today.kind !== "cards" && today.kind !== "upcoming") return { error: "There's no day waiting for its cards.", preparing: null };
   const day = today.current;
 
   const db = createAdminClient();
@@ -319,6 +340,8 @@ async function openDrill(user: CurrentUser, attemptId: string): Promise<DayConte
       unlock: null,
       status: "open",
       version: attempt.version as DayView["version"],
+      // A drill isn't on the schedule.
+      release: { code: dayRow.code, releaseDate: null, releaseAt: null, early: false, released: true, done: false, late: false, status: "open" },
     },
     drill: { id: attempt.id, kind, workflow },
     attempt: { id: attempt.id, started_at: attempt.started_at, submitted_at: attempt.submitted_at },

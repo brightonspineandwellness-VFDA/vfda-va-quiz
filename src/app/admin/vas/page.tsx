@@ -12,10 +12,11 @@ import { requireRole } from "@/lib/auth";
 import { daysBetween, SOP_WAIT_FLAG_DAYS } from "@/lib/certification";
 import { loadCertGrid } from "@/lib/certifications";
 import { TREND_LABELS } from "@/lib/report";
-import { loadReminderBoard, type VaReminder } from "@/lib/reminders";
+import { loadScheduleBoard, type VaSchedule } from "@/lib/schedule-board";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
-import { resetDay } from "@/lib/va-admin-actions";
+import { releaseNextDay, resetDay, setSchedulePaused } from "@/lib/va-admin-actions";
 import { applies } from "@/lib/interview";
+import { RELEASE_STATUS_LABELS, releaseDateText, releaseTimeText } from "@/lib/release-schedule";
 import { attemptLabel, officeProfile, oldLabelHint, percentOf, resultLabel, sinceStartText, todayIn, trend, unlockStatus } from "@/lib/va-flow";
 import { dayInScope, normalizeScope, scopeText } from "@/lib/va-scope";
 import { PROOF_BUCKET } from "@/lib/va-training";
@@ -59,20 +60,11 @@ const REPORT_GRACE_MS = 15 * 60 * 1000;
 
 const minutes = (s: number | null) => (s === null ? "–" : `${Math.max(1, Math.round(s / 60))} min`);
 
-// Overdue VAs first, then behind, then everyone else.
-const STATE_RANK: Record<VaReminder["state"], number> = { overdue: 0, behind: 1, ok: 2 };
-
-function activityText(r: VaReminder | undefined) {
-  if (!r) return "–";
-  const d = r.activity.daysSince;
-  return d === 0 ? "today" : `${d} day${d === 1 ? "" : "s"} ago`;
-}
-
-function remindersText(r: VaReminder | undefined) {
-  if (!r) return "–";
-  const state = r.state === "overdue" ? "overdue" : r.state === "behind" ? (r.remindedOn ? "behind, reminded" : "behind") : "";
-  return [r.remindersSent ? `${r.remindersSent} sent` : "none", state].filter(Boolean).join(" · ");
-}
+// "W1D3 Mon, Nov 30 (Late)"
+const scheduleLine = (s: VaSchedule) =>
+  s.schedule
+    .map((d) => `${d.code} ${d.releaseDate ? releaseDateText(d.releaseDate) : s.paused ? "paused" : "not scheduled"}${d.early ? " (released early)" : ""} · ${RELEASE_STATUS_LABELS[d.status]}`)
+    .join("  |  ");
 
 async function Vas() {
   await requireRole("vfda_admin");
@@ -150,7 +142,7 @@ async function Vas() {
   if (!vas.data?.length) return <EmptyState title="No VAs yet">Invite a VA from an office&apos;s page.</EmptyState>;
   const [grid, board, doctors, programs] = await Promise.all([
     loadCertGrid(supabase, {}),
-    loadReminderBoard(createAdminClient()),
+    loadScheduleBoard(createAdminClient()),
     supabase.from("profiles").select("office_id, full_name, email").eq("role", "doctor").is("deactivated_at", null),
     // Before training-program.sql has been run there are none.
     supabase.from("training_programs").select("va_id, office_id, status"),
@@ -167,8 +159,9 @@ async function Vas() {
       .join(" ");
   const programOf = (va: { id: string; office_id: string | null }) =>
     (programs.error ? [] : (programs.data ?? [])).find((x) => x.va_id === va.id && x.office_id === va.office_id)?.status;
-  const reminderOf = new Map(board.map((r) => [r.vaId, r]));
-  const rank = (id: string) => STATE_RANK[reminderOf.get(id)?.state ?? "ok"];
+  const scheduleOf = new Map(board.map((r) => [r.vaId, r]));
+  // Most days late first.
+  const rank = (id: string) => -(scheduleOf.get(id)?.late.length ?? 0);
   // Stable: the name order stays within each group.
   const sortedVas = [...vas.data].sort((a, b) => rank(a.id) - rank(b.id));
   const now = new Date();
@@ -200,7 +193,7 @@ async function Vas() {
     const waitingForVfda = current && unlockStatus(current.status) === "locked" && current.prep_notified_at;
     const program = programOf(va);
     const tags = [
-      reminderOf.get(va.id)?.state === "overdue" && "overdue",
+      (scheduleOf.get(va.id)?.late.length ?? 0) > 0 && "late",
       current && dayAttempts.length > 0 && "in-training",
       !current && days.length > 0 && "all-done",
       critical > 0 && "critical",
@@ -209,11 +202,22 @@ async function Vas() {
     return {
       va,
       tags: tags.join(" "),
-      current: current
-        ? `${current.schedule_day} ${waitingForVfda ? "waiting for VFDA approval" : (STATUS_LABELS[unlockStatus(current.status)] ?? current.status)}`
-        : days.length
-          ? "all days done"
-          : "not started",
+      current: (() => {
+        const t = scheduleOf.get(va.id)?.today;
+        if (t && "current" in t) {
+          const r = t.current.release;
+          return `${t.current.day.code} ${
+            t.kind === "preparing" || waitingForVfda
+              ? "waiting for VFDA approval"
+              : t.kind === "upcoming"
+                ? r.releaseDate
+                  ? `releases ${releaseDateText(r.releaseDate)}`
+                  : "not scheduled"
+                : RELEASE_STATUS_LABELS[r.status].toLowerCase()
+          }`;
+        }
+        return t?.kind === "finished" || (!current && days.length) ? "all days done" : "not started";
+      })(),
       latest,
       scores: dayAttempts.map((a) => `${a.schedule_day} ${percentOf(a.first_try_points, a.max_points)}%`),
       trend: direction ? TREND_LABELS[direction] : "–",
@@ -238,22 +242,21 @@ async function Vas() {
         placeholder="VA name or email, office, doctor name or email"
         openOnHash
         chips={[
-          { key: "overdue", label: "Overdue" },
+          { key: "late", label: "Late" },
           { key: "in-training", label: "In training" },
           { key: "all-done", label: "All days done" },
           { key: "critical", label: "Has critical error" },
           { key: "program", label: "Program running" },
         ]}
       />
-      <Card number={1} title="Overview" description="Overdue VAs first, then behind, then everyone else. Click a name to open their section below.">
+      <Card number={1} title="Overview" description="VAs with the most days late first. Click a name to open their section below.">
       <Table maxHeight="70vh">
           <thead>
             <tr>
               <th className={th}>VA</th>
               <th className={th}>Office</th>
               <th className={th}>Current day</th>
-              <th className={th}>Last activity</th>
-              <th className={th}>Reminders</th>
+              <th className={th}>Schedule</th>
               <th className={th}>Latest label</th>
               <th className={th}>First-try scores <span className="text-xs font-normal text-muted">(VFDA only)</span></th>
               <th className={th}>Trend</th>
@@ -271,17 +274,8 @@ async function Vas() {
                 </td>
                 <td className={td}>{p.va.office_id ? (officeName.get(p.va.office_id) ?? "Unknown office") : "No office"}</td>
                 <td className={td}>{p.current}</td>
-                <td className={td}>{activityText(reminderOf.get(p.va.id))}</td>
-                <td
-                  className={`${td} ${
-                    reminderOf.get(p.va.id)?.state === "overdue"
-                      ? "font-semibold text-danger"
-                      : reminderOf.get(p.va.id)?.state === "behind"
-                        ? "font-medium text-warning"
-                        : ""
-                  }`}
-                >
-                  {remindersText(reminderOf.get(p.va.id))}
+                <td className={`${td} ${(scheduleOf.get(p.va.id)?.late.length ?? 0) > 0 ? "font-semibold text-danger" : ""}`}>
+                  {scheduleOf.get(p.va.id)?.summary ?? "–"}
                 </td>
                 <td className={td}>
                   {p.latest ? (
@@ -315,7 +309,7 @@ async function Vas() {
       </Card>
 
       {sortedVas.map((va) => {
-        const reminder = reminderOf.get(va.id);
+        const sched = scheduleOf.get(va.id);
         const days = (unlocks.data ?? [])
           .filter((u) => u.va_id === va.id && u.office_id === va.office_id)
           .sort((a, b) => (order[a.schedule_day] ?? 99) - (order[b.schedule_day] ?? 99));
@@ -354,18 +348,34 @@ async function Vas() {
             <div className="flex flex-col gap-1">
               <StartDateForm vaId={va.id} value={va.va_start_date} />
               <p className="text-xs text-muted">
-                {sinceStartText(va.va_start_date, todayIn(process.env.TRAINING_TIME_ZONE || "America/New_York"))}. Reports
-                only: a day opens when its cards are done, the previous quiz is submitted and VFDA approved it.
+                {sinceStartText(va.va_start_date, todayIn(process.env.TRAINING_TIME_ZONE || "America/New_York"))}. One quiz is
+                released each weekday at {releaseTimeText(sched?.timeZone)}, from the start date (a weekend start date starts the
+                next Monday). The time zone is the office&apos;s (office page). VFDA must still approve each day for the office.
               </p>
             </div>
 
-            {reminder && (
-              <p className="text-sm">
-                <span className="font-semibold">Last activity: </span>
-                {reminder.activity.lastActivity} ({activityText(reminder)}) · <span className="font-semibold">Reminders: </span>
-                {remindersText(reminder)}
-                {reminder.anchor && <span className="text-muted"> ({reminder.anchor.reason})</span>}
-              </p>
+            {sched && (
+              <div className="flex flex-col gap-2 text-sm">
+                <p>
+                  <span className="font-semibold">Schedule: </span>
+                  <span className={sched.late.length ? "font-semibold text-danger" : ""}>{sched.summary}</span>
+                </p>
+                <p className="text-muted">{scheduleLine(sched) || "No days on this VA's path."}</p>
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton
+                    action={setSchedulePaused.bind(null, va.id, !sched.paused)}
+                    label={sched.paused ? "Resume schedule" : "Pause schedule"}
+                    pendingLabel="Saving…"
+                  />
+                  {sched.schedule.some((d) => !d.released) && (
+                    <ActionButton action={releaseNextDay.bind(null, va.id)} label="Release next day now" pendingLabel="Releasing…" />
+                  )}
+                </div>
+                <p className="text-xs text-muted">
+                  Pause stops releases (illness, a holiday); resuming moves the days not released yet forward by the weekdays
+                  paused. Release next day now opens the next day at once; the days after it move one weekday earlier.
+                </p>
+              </div>
             )}
             <p className="text-sm">
               <span className="font-semibold">Role: </span>

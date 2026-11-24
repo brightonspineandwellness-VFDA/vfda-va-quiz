@@ -6,6 +6,7 @@
 // these return.
 
 import { applies, normalizeRemoteAccess, type Profile } from "@/lib/interview";
+import { buildSchedule, type DaySchedule, type ScheduleSettings } from "@/lib/release-schedule";
 import { dayInScope, type ScopeKey } from "@/lib/va-scope";
 
 // "describe": one box, the VA's own words (describe items).
@@ -140,7 +141,8 @@ export function trainingPath(input: {
 
 // ---------------------------------------------------------------------------
 // Dates. Training days are weekdays (a new VA's suggested start date). The
-// start date never opens or blocks a day; reports show the days since it.
+// start date decides when each day is released (src/lib/release-schedule.ts);
+// reports show the days since it.
 // ---------------------------------------------------------------------------
 
 const parseDate = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -184,16 +186,20 @@ export type DayView = {
   unlock: UnlockRow | null;
   status: UnlockStatus;
   version: Version;
+  // When it's released (src/lib/release-schedule.ts).
+  release: DaySchedule;
 };
 
-// "cards": waiting for the VA's "Mark today's cards done".
-// "preparing": cards done, but VFDA hasn't approved the day's scenarios for the office yet.
+// "upcoming": the next quiz isn't released yet (8 am office time on its day).
+// "preparing": released, but VFDA hasn't approved the day's scenarios for the office yet.
+// "cards": released, waiting for the VA's "Mark today's cards done".
 export type Today =
   | { kind: "no_days" }
   | { kind: "finished"; days: DayView[] }
   | { kind: "open"; days: DayView[]; current: DayView }
   | { kind: "cards"; days: DayView[]; current: DayView }
-  | { kind: "preparing"; days: DayView[]; current: DayView };
+  | { kind: "preparing"; days: DayView[]; current: DayView }
+  | { kind: "upcoming"; days: DayView[]; current: DayView };
 
 export const dayName = (v: Pick<DayView, "index" | "day">) => `Day ${v.index} (${v.day.code}): ${v.day.title}`;
 
@@ -206,26 +212,57 @@ export function proofState(day: DayRow, proofs: ProofRow[]): "none_needed" | "ac
   return mine.length ? "redo" : "missing";
 }
 
-// The next day opens once the day before it was submitted (any score), the VA
-// marked its cards done, and VFDA approved its scenarios for the office.
+// The VA's release schedule for their path (src/lib/release-schedule.ts).
+export function pathSchedule(input: {
+  path: DayRow[];
+  unlocks: UnlockRow[];
+  startDate: string | null;
+  timeZone: string;
+  settings: ScheduleSettings;
+  now: Date;
+}): DaySchedule[] {
+  const status = new Map(input.unlocks.map((u) => [u.schedule_day, unlockStatus(u.status)]));
+  return buildSchedule({
+    codes: input.path.map((d) => d.code),
+    startDate: input.startDate,
+    timeZone: input.timeZone,
+    settings: input.settings,
+    done: new Set(input.path.filter((d) => status.get(d.code) === "done").map((d) => d.code)),
+    opened: new Set(input.path.filter((d) => status.get(d.code) === "open").map((d) => d.code)),
+    now: input.now,
+  });
+}
+
+// Quizzes are taken in order: the current day is the first one not submitted.
+// It opens at its release (8 am office time on its day) once VFDA approved it
+// for the office and the VA marked its cards done (a step, not a wait: cards
+// can be marked done before the release). A released quiz stays open until
+// it's submitted.
 export function buildToday(input: {
   path: DayRow[];
   unlocks: UnlockRow[];
   // Every day VFDA has approved for the office.
   approved: Set<string>;
+  schedule: DaySchedule[];
 }): Today {
   if (input.path.length === 0) return { kind: "no_days" };
   const byDay = new Map(input.unlocks.map((u) => [u.schedule_day, u]));
+  const releaseOf = new Map(input.schedule.map((s) => [s.code, s]));
   const days: DayView[] = input.path.map((day, i) => {
     const unlock = byDay.get(day.code) ?? null;
-    return { index: i + 1, day, unlock, status: unlockStatus(unlock?.status), version: "A" };
+    const release =
+      releaseOf.get(day.code) ??
+      ({ code: day.code, releaseDate: null, releaseAt: null, early: false, released: false, done: false, late: false, status: "upcoming" } as DaySchedule);
+    return { index: i + 1, day, unlock, status: unlockStatus(unlock?.status), version: "A", release };
   });
   // Every day before this one is done, so the previous quiz was submitted.
   const current = days.find((d) => d.status !== "done");
   if (!current) return { kind: "finished", days };
   if (current.status === "open") return { kind: "open", days, current };
+  if (!current.release.released) return { kind: "upcoming", days, current };
+  if (!input.approved.has(current.day.code)) return { kind: "preparing", days, current };
   if (!current.unlock?.cards_done_at) return { kind: "cards", days, current };
-  return input.approved.has(current.day.code) ? { kind: "open", days, current } : { kind: "preparing", days, current };
+  return { kind: "open", days, current };
 }
 
 // ---------------------------------------------------------------------------

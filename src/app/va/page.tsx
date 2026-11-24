@@ -11,7 +11,8 @@ import { sendPreparingNotice } from "@/lib/reports";
 import { markTodaysCardsDone, startDayRetake } from "@/lib/va-actions";
 import { DayProgress } from "@/components/reports/skills";
 import { createAdminClient } from "@/lib/supabase/server";
-import { COMPLETED, proofState, RESULT_LABELS, resultLabel, showDate, type DayView, type UnlockStatus } from "@/lib/va-flow";
+import { RELEASE_STATUS_LABELS, releaseDateText, releaseTimeText, type ReleaseStatus } from "@/lib/release-schedule";
+import { proofState, RESULT_LABELS, resultLabel, showDate, type DayView } from "@/lib/va-flow";
 import { claimPreparingNotice, loadRetakeTasks, loadToday } from "@/lib/va-training";
 
 // "Practice this day again" waits while Claude writes the day's new versions.
@@ -27,11 +28,17 @@ export default function VaPage() {
   );
 }
 
-const STATUS_LABELS: Record<UnlockStatus, string> = {
-  locked: "Locked",
-  open: "Open",
-  done: "Done",
+const STATUS_TONE: Record<ReleaseStatus, "info" | "danger" | "success" | "neutral"> = {
+  upcoming: "neutral",
+  open: "info",
+  done: "success",
+  late: "danger",
 };
+
+// The current day's badge: Open, or Late when its release day has passed.
+function CurrentBadge({ view }: { view: DayView }) {
+  return <StatusBadge label={RELEASE_STATUS_LABELS[view.release.late ? "late" : "open"]} tone={view.release.late ? "danger" : "info"} />;
+}
 
 const PROOF_LABELS: Partial<Record<ReturnType<typeof proofState>, { label: string; tone: "warning" | "danger" | "success" | "neutral" }>> = {
   pending: { label: "Waiting for VFDA", tone: "warning" },
@@ -52,7 +59,11 @@ async function Today() {
       </>
     );
   }
-  const { today, officeName, proofs } = loaded;
+  const { today, officeName, proofs, timeZone, paused, startDate } = loaded;
+  const releaseTime = releaseTimeText(timeZone);
+  // Released quizzes not submitted yet, oldest first (taken in order).
+  const todo = "days" in today ? today.days.filter((d) => d.status !== "done" && d.release.released) : [];
+  const lateCount = todo.filter((d) => d.release.late).length;
   // Cards marked done before VFDA approved the day: make sure VFDA was told (once).
   if (today.kind === "preparing" && (await claimPreparingNotice(user, today.current.day.code))) {
     const day = today.current.day.code;
@@ -87,6 +98,15 @@ async function Today() {
       />
 
       {today.kind === "no_days" && <EmptyState title="No training days yet">No training days are set up for your office yet.</EmptyState>}
+      {todo.length > 1 && (
+        <Card accent="warning">
+          <p className="font-semibold">
+            You have {todo.length} quizzes to do{lateCount ? ` (${lateCount} late)` : ""}. Take them in order:{" "}
+            {todo.map((d) => d.day.code).join(", then ")}.
+          </p>
+          <p className="text-sm text-muted">Each one opens here after the one before it is submitted.</p>
+        </Card>
+      )}
       {today.kind === "finished" && (
         <Card>
           <p className="flex flex-wrap items-center gap-2 font-semibold">
@@ -95,17 +115,18 @@ async function Today() {
         </Card>
       )}
       {today.kind === "open" && (
-        <DayCard view={today.current} total={total} badge={<StatusBadge label="Open" />}>
+        <DayCard view={today.current} total={total} badge={<CurrentBadge view={today.current} />}>
+          <p className="text-sm text-muted">Cards marked done ✓</p>
           <ButtonLink href="/va/day" variant="primary" className="self-start">
-            Go to today&apos;s scenarios →
+            Start quiz →
           </ButtonLink>
         </DayCard>
       )}
       {today.kind === "cards" && (
-        <DayCard view={today.current} total={total} badge={<Badge tone="primary">Up next</Badge>}>
-          <p className="text-[0.9375rem]">Read today&apos;s cards, then mark them done to open the quiz.</p>
+        <DayCard view={today.current} total={total} badge={<CurrentBadge view={today.current} />}>
+          <p className="text-[0.9375rem]">Step 1: read the cards above, then mark them done. Step 2: start the quiz.</p>
           <div>
-            <ActionButton action={markTodaysCardsDone} label="Mark today's cards done & start quiz" primary />
+            <ActionButton action={markTodaysCardsDone} label="Mark today's cards done" primary />
           </div>
         </DayCard>
       )}
@@ -115,17 +136,44 @@ async function Today() {
           <p className="text-sm text-muted">Come back to this page later; the quiz opens here as soon as it&apos;s ready.</p>
         </DayCard>
       )}
+      {today.kind === "upcoming" && (
+        <DayCard view={today.current} total={total} badge={<Badge tone="primary">Upcoming</Badge>}>
+          {paused ? (
+            <p className="font-semibold">Your schedule is paused. VFDA will let you know when it starts again.</p>
+          ) : today.current.release.releaseDate ? (
+            <p className="font-semibold">
+              Releases {releaseDateText(today.current.release.releaseDate)} at {releaseTime}.
+            </p>
+          ) : (
+            <p className="font-semibold">{startDate ? "Not scheduled yet." : "Your start date isn't set yet. VFDA will set it."}</p>
+          )}
+          {today.current.unlock?.cards_done_at ? (
+            <p className="text-sm text-muted">Cards marked done ✓ The quiz opens here when it&apos;s released.</p>
+          ) : (
+            <>
+              <p className="text-sm text-muted">You can read the cards now and mark them done; the quiz opens when it&apos;s released.</p>
+              <div>
+                <ActionButton action={markTodaysCardsDone} label="Mark cards done" />
+              </div>
+            </>
+          )}
+        </DayCard>
+      )}
 
       {user.officeId && <Tasks vaId={user.id} officeId={user.officeId} />}
 
       {"days" in today && (
-        <Card title="Your progress" description={`Day ${doneCount} of ${total} completed`}>
+        <Card
+          title="Your schedule"
+          description={`Day ${doneCount} of ${total} completed · One quiz releases each weekday at ${releaseTime}${paused ? " · Paused" : ""}`}
+        >
           <DayProgress progress={{ done: doneCount, total }} compact />
           <Table>
             <thead>
               <tr>
                 <th className={th}>Day</th>
                 <th className={th}>Topic</th>
+                <th className={th}>Releases</th>
                 <th className={th}>Status</th>
                 <th className={th}>Proof of work</th>
               </tr>
@@ -140,14 +188,17 @@ async function Today() {
                       Day {d.index} <span className="text-sm font-normal text-muted">{d.day.code}</span>
                     </td>
                     <td className={`${td} min-w-40`}>{d.day.title}</td>
+                    <td className={`${td} whitespace-nowrap text-sm`}>
+                      {d.release.releaseDate ? `${releaseDateText(d.release.releaseDate)}, ${d.release.early ? "released early" : "8:00 am"}` : paused ? "Paused" : "–"}
+                    </td>
                     <td className={td}>
                       {d.status === "done" ? (
                         <span className="flex flex-wrap items-center gap-1.5">
-                          <StatusBadge label={COMPLETED} />
+                          <StatusBadge label={RELEASE_STATUS_LABELS.done} tone="success" />
                           {labelOf.get(d.day.code) && <StatusBadge label={resultLabel(labelOf.get(d.day.code))} />}
                         </span>
                       ) : (
-                        <StatusBadge label={d.status === "open" ? "Open now" : STATUS_LABELS[d.status]} tone={d.status === "open" ? "info" : undefined} />
+                        <StatusBadge label={RELEASE_STATUS_LABELS[d.release.status]} tone={STATUS_TONE[d.release.status]} />
                       )}
                     </td>
                     <td className={td}>{p ? <Badge tone={p.tone}>{p.label}</Badge> : <span className="text-sm text-muted">–</span>}</td>

@@ -1,9 +1,9 @@
 "use server";
 
 // VFDA's side of VA training (/admin/vas): accept proof of work or ask for a
-// redo, set a VA's training start date (reports only: days since start),
-// override a score (which changes only the label), and "Reset day (test)".
-// Nothing here blocks or unlocks a day.
+// redo, set a VA's training start date (their first release day), pause or
+// resume their release schedule, release their next day now, override a
+// score (which changes only the label), and "Reset day (test)".
 // VFDA admins only; writes as the admin (row-level security applies).
 
 import { after } from "next/server";
@@ -16,6 +16,8 @@ import { regradeAttempt, regradeOffice } from "@/lib/regrade";
 import { sendAttemptReport, sendSopNotice, sendTestAttemptEmail, sendTestEmail, sendTestLeads4Life, sendTestSlack } from "@/lib/reports";
 import { createAdminClient, createSessionClient } from "@/lib/supabase/server";
 import { RESULT_LABELS, type ResultLabel } from "@/lib/va-flow";
+import { isPaused, nextUnreleased, type ScheduleSettings } from "@/lib/release-schedule";
+import { loadScheduleBoard, type VaSchedule } from "@/lib/schedule-board";
 
 const DAY_CODE = /^W\dD\d$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -61,6 +63,43 @@ export async function setStartDate(vaId: string, date: string): Promise<ActionRe
     .eq("role", "va")
     .select("id");
   return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+}
+
+// The VA's release schedule changes (src/lib/release-schedule.ts), kept in
+// profiles.release_schedule.
+async function saveSchedule(vaId: string, change: (s: ScheduleSettings, va: VaSchedule) => ScheduleSettings | string): Promise<ActionResult> {
+  if (!(await admin())) return fail("VFDA admins only.");
+  if (!UUID.test(vaId)) return fail("Invalid request.");
+  const db = createAdminClient();
+  const va = (await loadScheduleBoard(db)).find((v) => v.vaId === vaId);
+  if (!va) return fail("VA not found, or not linked to an office.");
+  const next = change(va.settings, va);
+  if (typeof next === "string") return fail(next);
+  const { data, error } = await db.from("profiles").update({ release_schedule: next }).eq("id", vaId).eq("role", "va").select("id");
+  if (error && /release_schedule/.test(error.message)) return fail("Run supabase/release-schedule.sql in the Supabase SQL Editor first.");
+  return error || !data?.length ? fail("Couldn't save. Try again.") : { ok: true, data: null };
+}
+
+// "Pause schedule": no release until it's resumed; resuming moves the days
+// not released yet forward by the weekdays paused.
+export async function setSchedulePaused(vaId: string, paused: boolean): Promise<ActionResult> {
+  const now = new Date().toISOString();
+  return saveSchedule(vaId, (s) => {
+    if (paused === isPaused(s)) return paused ? "Already paused." : "The schedule isn't paused.";
+    return paused
+      ? { ...s, pauses: [...s.pauses, { paused_at: now, resumed_at: null }] }
+      : { ...s, pauses: s.pauses.map((p) => (p.resumed_at ? p : { ...p, resumed_at: now })) };
+  });
+}
+
+// "Release next day now": the next day not released yet opens at once (for
+// catching up or testing). The days after it move one weekday earlier.
+export async function releaseNextDay(vaId: string): Promise<ActionResult> {
+  return saveSchedule(vaId, (s, va) => {
+    const next = nextUnreleased(va.schedule);
+    if (!next) return "Every day is already released.";
+    return { ...s, early: { ...s.early, [next.code]: new Date().toISOString() } };
+  });
 }
 
 // Sends whatever part of an attempt's report hasn't gone out (failed or never sent).
