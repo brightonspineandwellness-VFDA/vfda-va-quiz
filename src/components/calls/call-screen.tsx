@@ -75,6 +75,54 @@ function isChromeOrEdge() {
   return /Chrome\/|Edg\//.test(ua) && !!recognitionCtor();
 }
 
+// Plays an mp3 response while it downloads (Media Source Extensions), so the
+// patient starts talking as soon as the first audio arrives. Falls back to
+// playing the whole clip when the browser can't stream it. Resolves when the
+// patient stops talking: true if it played.
+async function playStream(res: Response, audioRef: { current: HTMLAudioElement | null }): Promise<boolean> {
+  const audio = new Audio();
+  audioRef.current = audio;
+  const finished = new Promise<boolean>((resolve) => {
+    audio.onended = () => resolve(true);
+    audio.onerror = () => resolve(false);
+    audio.onpause = () => {
+      if (audioRef.current !== audio) resolve(true); // the screen was closed
+    };
+  });
+  try {
+    const canStream = typeof MediaSource !== "undefined" && MediaSource.isTypeSupported("audio/mpeg") && res.body;
+    if (!canStream) {
+      const blob = await res.blob();
+      audio.src = URL.createObjectURL(blob);
+      await audio.play();
+      return finished;
+    }
+    const ms = new MediaSource();
+    audio.src = URL.createObjectURL(ms);
+    await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
+    const sb = ms.addSourceBuffer("audio/mpeg");
+    const reader = res.body!.getReader();
+    let started = false;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await new Promise((r) => {
+        sb.addEventListener("updateend", r, { once: true });
+        sb.appendBuffer(value);
+      });
+      if (!started) {
+        started = true;
+        audio.play().catch(() => {});
+      }
+    }
+    if (ms.readyState === "open") ms.endOfStream();
+    if (!started) return false;
+    return finished;
+  } catch {
+    return false;
+  }
+}
+
 async function post<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
@@ -246,15 +294,39 @@ export function CallScreen({ callType, roleplay, title }: { callType: CallType; 
     }
   }
 
+  // One round trip per turn: the reply text arrives in headers and the
+  // patient's voice streams in the body, playing while it's still arriving.
   async function sendTurn(text: string) {
     const id = callIdRef.current;
     if (!id) return;
     setLines((l) => [...l, { speaker: "va", text }]);
     setPhase("thinking");
     try {
-      const res = await post<{ say: string; endCall: boolean; index: number }>(`/api/calls/${id}/turn`, { text });
-      setLines((l) => [...l, { speaker: "patient", text: res.say }]);
-      await speak(res.index, res.endCall);
+      const res = await fetch(`/api/calls/${id}/turn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "That didn't go through. Try again.");
+      }
+      if ((res.headers.get("content-type") ?? "").includes("audio")) {
+        const say = decodeURIComponent(res.headers.get("x-patient-say") ?? "");
+        const endCall = res.headers.get("x-end-call") === "1";
+        setLines((l) => [...l, { speaker: "patient", text: say }]);
+        setPhase("speaking");
+        const played = await playStream(res, audioRef);
+        if (!played) setError("The patient's voice didn't play. Read their words in the transcript and keep going.");
+        if (endCall) void finish();
+        else setPhase("idle");
+      } else {
+        const data = (await res.json()) as { say: string; endCall: boolean; voiceError?: string };
+        setLines((l) => [...l, { speaker: "patient", text: data.say }]);
+        if (data.voiceError) setError(`${data.voiceError} Read their words in the transcript and keep going.`);
+        if (data.endCall) void finish();
+        else setPhase("idle");
+      }
     } catch (e) {
       setLines((l) => l.slice(0, -1));
       setError(e instanceof Error ? e.message : "That didn't go through. Try again.");
@@ -262,12 +334,18 @@ export function CallScreen({ callType, roleplay, title }: { callType: CallType; 
     }
   }
 
+  // What Chrome has heard so far (final + in-progress words).
+  const liveRef = useRef("");
+  const sentRef = useRef(false);
+
   function startTalking() {
     if (phase !== "idle") return;
     const Ctor = recognitionCtor();
     if (!Ctor) return setPhase("unsupported");
     setError(null);
     heardRef.current = "";
+    liveRef.current = "";
+    sentRef.current = false;
     setInterim("");
     const rec = new Ctor();
     rec.lang = "en-US";
@@ -282,34 +360,49 @@ export function CallScreen({ callType, roleplay, title }: { callType: CallType; 
         else interimText += r[0].transcript;
       }
       heardRef.current = finalText;
-      setInterim((finalText + " " + interimText).trim());
+      liveRef.current = (finalText + " " + interimText).replace(/\s+/g, " ").trim();
+      setInterim(liveRef.current);
     };
     rec.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") setPhase("mic_blocked");
     };
+    // Chrome stopped listening on its own (a long pause or a network blip)
+    // while the button was still held: send what it heard.
     rec.onend = () => {
-      const said = (heardRef.current || "").trim() || interimRef.current.trim();
       recRef.current = null;
-      setInterim("");
-      if (said) void sendTurn(said);
-      else {
-        setError("We didn't hear anything. Hold the button while you speak, then let go.");
-        setPhase("idle");
-      }
+      if (!sentRef.current) sendHeard();
     };
     recRef.current = rec;
     rec.start();
     setPhase("listening");
   }
 
-  // Latest interim text, for a release before Chrome marks it final.
-  const interimRef = useRef("");
-  useEffect(() => {
-    interimRef.current = interim;
-  }, [interim]);
+  function sendHeard() {
+    if (sentRef.current) return;
+    sentRef.current = true;
+    const said = liveRef.current.trim();
+    setInterim("");
+    if (said) void sendTurn(said);
+    else {
+      setError("We didn't hear anything. Hold the button while you speak, then let go.");
+      setPhase("idle");
+    }
+  }
 
+  // Letting go sends right away, without waiting for Chrome to finish
+  // processing: a short pause catches the last word, then listening stops.
   function stopTalking() {
-    if (phase === "listening") recRef.current?.stop();
+    if (phase !== "listening" || sentRef.current) return;
+    setPhase("thinking");
+    setTimeout(() => {
+      const rec = recRef.current;
+      recRef.current = null;
+      if (rec) {
+        rec.onend = null;
+        rec.abort();
+      }
+      sendHeard();
+    }, 250);
   }
 
   const time = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;

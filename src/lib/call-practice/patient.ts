@@ -8,8 +8,6 @@ import "server-only";
 //     short rolling summary (practice_calls.persona_summary).
 
 import Anthropic from "@anthropic-ai/sdk";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { z } from "zod";
 import type { Persona } from "./personas";
 import type { CallContext } from "./rules";
 import { ROLEPLAY_TITLES, type CallType, type Roleplay, type TranscriptEntry } from "./types";
@@ -20,11 +18,7 @@ const MODEL = "claude-haiku-5-5";
 const KEEP_RECENT = 8;
 const FOLD_AT = 14;
 
-const ReplySchema = z.object({
-  say: z.string().describe("What the patient says next, spoken aloud: 1-2 short sentences, no stage directions"),
-  end_call: z.boolean().describe("true only when the call is clearly over (goodbyes said, or you've decided to hang up)"),
-});
-export type PatientReply = z.infer<typeof ReplySchema>;
+export type PatientReply = { say: string };
 
 export type TurnUsage = { input: number; output: number; cacheRead: number; cacheWrite: number };
 
@@ -70,7 +64,8 @@ Rules for every reply:
 - Never ask for or give real personal information. If the VA asks something you don't have (like a birthday), make one up that's clearly fictional.
 - ${callType === "easy" || callType === "w2d1_roleplay" ? "Be cooperative and book when offered a reasonable time." : "Make the VA work for it, but agree to book if they handle your concerns well."}
 - The VA leads the call and decides when it ends. Never end it yourself: if the VA asks "anything else?", answer, but stay on the line.
-- Set end_call to true only after the VA says goodbye (or clearly closes the call): then say a short goodbye.
+- When the VA says goodbye, say a short goodbye.
+- Reply with only the words you say out loud: no quotes, no name labels, no notes.
 - A typical call is about ${input.targetTurns} of your replies, but keep going as long as the VA is still working on it.`;
 }
 
@@ -107,22 +102,30 @@ export async function patientReply(input: {
   summary: string | null;
   recent: TranscriptEntry[];
 }): Promise<{ reply: PatientReply; usage: TurnUsage }> {
+  // Plain text (no JSON format) for the fastest reply. Whether the call ends
+  // is decided by the server from the VA's goodbye (src/lib/call-practice/calls.ts).
   const client = new Anthropic();
-  const message = await client.messages.parse({
+  const message = await client.messages.create({
     model: MODEL,
-    max_tokens: 400,
+    max_tokens: 200,
     thinking: { type: "disabled" },
-    output_config: { effort: "low", format: zodOutputFormat(ReplySchema) },
+    output_config: { effort: "low" },
     system: [{ type: "text", text: input.system, cache_control: { type: "ephemeral" } }],
     messages: toMessages(input.summary, input.recent),
   });
   if (message.stop_reason === "refusal") {
     // Haiku has no server-side fallback: keep the call going with a neutral line.
-    return { reply: { say: "Sorry, could you say that again?", end_call: false }, usage: usageOf(message.usage) };
+    return { reply: { say: "Sorry, could you say that again?" }, usage: usageOf(message.usage) };
   }
-  if (!message.parsed_output) throw new Error("The patient's reply couldn't be read.");
-  const say = message.parsed_output.say.trim().slice(0, 600) || "Sorry, could you repeat that?";
-  return { reply: { say, end_call: message.parsed_output.end_call }, usage: usageOf(message.usage) };
+  const raw = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join(" ");
+  const say =
+    raw
+      .replace(/^\s*(patient|[A-Z][a-z]+)\s*:\s*/, "") // a stray "Linda:" label
+      .replace(/^["“]|["”]$/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 600) || "Sorry, could you repeat that?";
+  return { reply: { say }, usage: usageOf(message.usage) };
 }
 
 // Fold older turns into the running summary (2-4 sentences).

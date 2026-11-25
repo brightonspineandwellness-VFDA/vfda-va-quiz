@@ -69,7 +69,7 @@ function addUsage(u: Usage, t: TurnUsage): Usage {
 const now = () => new Date().toISOString();
 export const publicPersona = (p: Persona): PublicPersona => ({ firstName: p.firstName, voice: p.voice });
 
-export async function loadOwnCall(user: CurrentUser, id: string, db: Db = createAdminClient()): Promise<CallRow | null> {
+export async function loadOwnCall(user: Pick<CurrentUser, "id">, id: string, db: Db = createAdminClient()): Promise<CallRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   const { data } = await db.from("practice_calls").select(CALL_COLUMNS).eq("id", id).maybeSingle();
   const row = data as CallRow | null;
@@ -130,10 +130,13 @@ export async function startCall(
 }
 
 export async function takeTurn(
-  user: CurrentUser,
+  user: Pick<CurrentUser, "id">,
   id: string,
   rawText: unknown,
-): Promise<{ say: string; endCall: boolean; index: number } | Fail> {
+): Promise<
+  | { say: string; endCall: boolean; index: number; voice: string; saved: Promise<Fail | null>; background: () => Promise<void> }
+  | Fail
+> {
   const text = typeof rawText === "string" ? rawText.replace(/\s+/g, " ").trim().slice(0, MAX_VA_CHARS) : "";
   if (!text) return fail("We didn't catch that. Hold the button and speak again.");
 
@@ -148,21 +151,15 @@ export async function takeTurn(
 
   const transcript: TranscriptEntry[] = [...call.transcript, { speaker: "va", text, at: now() }];
   let usage = call.usage ?? {};
-  let summary = call.persona_summary;
-  let summarized = call.summarized_count;
-
-  if (needsFold(transcript, summarized)) {
-    const start = windowStart(transcript, summarized);
-    const folded = await foldSummary(summary, transcript.slice(summarized, start));
-    summary = folded.summary;
-    summarized = start;
-    usage = addUsage(usage, folded.usage);
-  }
+  const summary = call.persona_summary;
+  const summarized = call.summarized_count;
 
   let say: string;
-  let endCall: boolean;
+  // Only the VA ends the call: after the VA's goodbye the patient says
+  // goodbye too and hangs up.
+  let endCall = vaClosed(text);
   if (call.patient_turns >= turnLimit(call.call_type)) {
-    // Past the turn limit: the patient wraps up politely.
+    // Past the safety limit: the patient wraps up politely.
     say = "Okay, I really have to go now. Thank you, bye!";
     endCall = true;
   } else {
@@ -172,30 +169,40 @@ export async function takeTurn(
       recent: transcript.slice(windowStart(transcript, summarized)),
     });
     say = result.reply.say;
-    // Only the VA ends the call: the patient may hang up after the VA's goodbye.
-    endCall = result.reply.end_call && vaClosed(text);
     usage = addUsage(usage, result.usage);
   }
   transcript.push({ speaker: "patient", text: say, at: now() });
 
+  // Saved while the patient's voice is being made (the route waits for both).
   // Optimistic check: a second request for the same turn can't double-write.
-  const { data, error } = await db
-    .from("practice_calls")
-    .update({
-      transcript,
-      patient_turns: call.patient_turns + 1,
-      persona_summary: summary,
-      summarized_count: summarized,
-      usage,
-    })
-    .eq("id", id)
-    .eq("status", "in_progress")
-    .eq("patient_turns", call.patient_turns)
-    .select("id");
-  if (error) return fail("The call couldn't be saved. Try again.", 500);
-  if (!data?.length) return fail("That turn was already sent.", 409);
+  // The summary columns are only written by the background fold below.
+  const saved = (async (): Promise<Fail | null> => {
+    const { data, error } = await db
+      .from("practice_calls")
+      .update({ transcript, patient_turns: call.patient_turns + 1, usage })
+      .eq("id", id)
+      .eq("status", "in_progress")
+      .eq("patient_turns", call.patient_turns)
+      .select("id");
+    if (error) return fail("The call couldn't be saved. Try again.", 500);
+    if (!data?.length) return fail("That turn was already sent.", 409);
+    return null;
+  })();
 
-  return { say, endCall, index: transcript.length - 1 };
+  // After the response: fold older lines into the running summary, so later
+  // turns stay small. Only applies if no other fold got there first.
+  const background = async () => {
+    if (endCall || !needsFold(transcript, summarized)) return;
+    const start = windowStart(transcript, summarized);
+    const folded = await foldSummary(summary, transcript.slice(summarized, start));
+    await db
+      .from("practice_calls")
+      .update({ persona_summary: folded.summary, summarized_count: start })
+      .eq("id", id)
+      .eq("summarized_count", summarized);
+  };
+
+  return { say, endCall, index: transcript.length - 1, voice: call.persona.voice, saved, background };
 }
 
 // End the call and write the feedback. A call whose grading failed stays
@@ -265,7 +272,7 @@ export async function abandonCall(user: CurrentUser, id: string): Promise<{ ok: 
 
 // The patient line to speak: only text already in this VA's own transcript,
 // so the voice route can't be used to read out arbitrary text.
-export async function patientLine(user: CurrentUser, id: string, index: number): Promise<{ text: string; voice: string } | Fail> {
+export async function patientLine(user: Pick<CurrentUser, "id">, id: string, index: number): Promise<{ text: string; voice: string } | Fail> {
   const call = await loadOwnCall(user, id);
   if (!call) return fail("Call not found.", 404);
   const entry = Number.isInteger(index) ? call.transcript[index] : undefined;

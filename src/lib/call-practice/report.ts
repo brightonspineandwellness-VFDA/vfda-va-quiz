@@ -14,7 +14,10 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
-import { officeDoctors } from "@/lib/reports";
+import { slackEscape } from "@/lib/report";
+import { appUrl, officeDoctors, postSlack, tryTwice } from "@/lib/reports";
+import { LINK_SECONDS, QUIZ_REPORT_BUCKET } from "@/lib/quiz-reports";
+import { callReportPdf } from "./report-pdf";
 import { createAdminClient } from "@/lib/supabase/server";
 import type { CallFeedback, CallFlag, ChecklistLine } from "./grade";
 import { effectiveResult, GOAL, summarize, loadCallsFor } from "./progress";
@@ -208,19 +211,64 @@ export async function makeDueCallReports(vaId: string, officeId: string, db: Db 
       coaching: written.coaching.slice(0, 4),
     };
 
-    const { error } = await db.from("call_reports").insert({
-      va_id: vaId,
-      office_id: officeId,
-      sequence: seq,
-      call_ids: calls.map((c) => c.id),
-      first_call_at: calls[0].started_at,
-      last_call_at: calls[calls.length - 1].finished_at ?? calls[calls.length - 1].started_at,
-      content,
-    });
+    const { data: inserted, error } = await db
+      .from("call_reports")
+      .insert({
+        va_id: vaId,
+        office_id: officeId,
+        sequence: seq,
+        call_ids: calls.map((c) => c.id),
+        first_call_at: calls[0].started_at,
+        last_call_at: calls[calls.length - 1].finished_at ?? calls[calls.length - 1].started_at,
+        content,
+      })
+      .select("id")
+      .single();
     if (error && !/duplicate key/i.test(error.message)) throw new Error(error.message);
-    if (!error) made++;
+    if (!error && inserted) {
+      made++;
+      // Posted once, right after the report is made (a duplicate insert never posts).
+      const slackError = await postCallReportToSlack(db, { id: inserted.id as string, va_id: vaId, office_id: officeId, content });
+      if (slackError) console.error("Call practice report not posted to Slack:", slackError);
+    }
   }
   return made;
+}
+
+// The VFDA Slack post, like the quiz reports' (src/lib/reports.ts): the
+// sections in short, the PDF's 30-day link (the doctor's version, with
+// coaching ideas) and a link to the report in the app. VFDA forwards it to
+// the doctor. The PDF is stored in the quiz-reports bucket under calls/.
+export async function postCallReportToSlack(
+  db: Db,
+  r: { id: string; va_id: string; office_id: string; content: CallReportContent },
+): Promise<string | null> {
+  const c = r.content;
+  let pdfLink: string | null = null;
+  try {
+    const bytes = await callReportPdf(c, "staff");
+    const path = `calls/${r.office_id}/${r.va_id}/${r.id}.pdf`;
+    const storage = db.storage.from(QUIZ_REPORT_BUCKET);
+    const up = await storage.upload(path, bytes, { contentType: "application/pdf", upsert: true });
+    if (!up.error) pdfLink = (await storage.createSignedUrl(path, LINK_SECONDS)).data?.signedUrl ?? null;
+  } catch (e) {
+    console.error("Call practice report PDF not stored:", e instanceof Error ? e.message : e);
+  }
+  const e = slackEscape;
+  const line = (label: string, items: string[]) => (items.length ? `*${label}:* ${items.map(e).join(" · ")}` : "");
+  const text = [
+    `*${e(`${reportTitle(c)} – ${c.vaName} – ${c.officeName}`)}*`,
+    `${e(c.label)} · ${c.stats.passed} of ${c.stats.calls} passed (${c.stats.easy} easy, ${c.stats.challenging} challenging) · progress: ${c.progress.easy}/${c.progress.goal} easy, ${c.progress.challenging}/${c.progress.goal} challenging`,
+    line("Skills shown", c.skills),
+    line("To practice", c.practice.map((p) => (p.source ? `${p.text} [${p.source}]` : p.text))),
+    line("Important to review", c.important.map((i) => `"${i.quote}"`)),
+    line("Flags", c.flags),
+    line("Coaching ideas for the doctor", c.coaching),
+    [pdfLink ? `<${pdfLink}|Report PDF> (link valid 30 days)` : "", `<${appUrl()}/admin/calls/reports/${r.id}|Open in the app>`].filter(Boolean).join(" · "),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return tryTwice(() => postSlack({ text }));
 }
 
 export const REPORT_COLUMNS = "id, va_id, office_id, sequence, created_at, content";
