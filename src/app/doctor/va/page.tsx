@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { AttemptLink } from "@/components/attempts/attempt-review";
+import { DoctorCallPracticeLink } from "@/components/calls/call-practice-link";
 import { ReportButtons } from "@/components/reports/report-buttons";
 import { CertGrid } from "@/components/certs/cert-grid";
 import { StandardsNotice } from "@/components/reports/standards";
@@ -22,7 +23,14 @@ export default function MyVaPage() {
         breadcrumbs={[{ label: "Home", href: "/doctor" }, { label: "My VA" }]}
         title="My VA"
         description="Each workflow's status, with the Trello card your VA updated for it. Review and approve cards on Trello; VFDA records your approval here."
-        actions={<ButtonLink href="/doctor/training">Training program</ButtonLink>}
+        actions={
+          <>
+            <ButtonLink href="/doctor/training">Training program</ButtonLink>
+            <Suspense fallback={null}>
+              <DoctorCallPracticeLink />
+            </Suspense>
+          </>
+        }
       />
       <Suspense fallback={<Loading />}>
         <Grid />

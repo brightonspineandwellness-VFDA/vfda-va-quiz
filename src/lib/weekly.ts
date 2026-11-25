@@ -11,6 +11,7 @@ import "server-only";
 // them all, or finished the last of them this week. Every send is a
 // notifications row (va_id, event weekly:<Sunday>), so nothing goes twice.
 
+import { GOAL, loadCallsFor, passRateText, summarize } from "@/lib/call-practice/progress";
 import { escapeHtml } from "@/lib/report";
 import { appUrl, deliver, officeDoctors, sendEmail, tryTwice, vfdaEmails, type Target } from "@/lib/reports";
 import { skillsOf } from "@/lib/skills";
@@ -41,6 +42,9 @@ export type WeeklySummary = {
   practice: string[]; // top skills to practice, each "... Review: <card>."
   progress: { done: number; total: number };
   next: string; // what's next
+  // Call practice (only when the VA has made practice calls). Added beside the
+  // quiz parts; the quiz lines are unchanged.
+  calls?: { weekFinished: number; weekPassed: number; easy: string; challenging: string };
 };
 
 // Most frequent first, then first seen.
@@ -93,6 +97,19 @@ export async function buildWeeklySummary(
     4,
   );
   const nextDay = p.path.find((d) => !p.firstTry.has(d.code));
+  const callRows = await loadCallsFor(db, { vaIds: [va.id] }).catch(() => []);
+  const callsAll = summarize(callRows);
+  const weekCalls = summarize(callRows.filter((c) => c.finished_at && inWeek(c.finished_at)));
+  const weekFinished = weekCalls.easy.finished + weekCalls.challenging.finished;
+  const calls =
+    callsAll.easy.finished + callsAll.challenging.finished > 0
+      ? {
+          weekFinished,
+          weekPassed: weekCalls.easy.passed + weekCalls.challenging.passed,
+          easy: `${Math.min(callsAll.easy.finished, GOAL)} of ${GOAL} easy calls (${passRateText(callsAll.easy)})`,
+          challenging: `${Math.min(callsAll.challenging.finished, GOAL)} of ${GOAL} challenging calls (${passRateText(callsAll.challenging)})`,
+        }
+      : undefined;
   const name = va.full_name?.trim() || va.email || "VA";
   return {
     vaId: va.id,
@@ -110,6 +127,7 @@ export async function buildWeeklySummary(
     skills,
     practice,
     progress,
+    calls,
     next: nextDay
       ? `Next: ${nextDay.code} ${nextDay.title}.`
       : `All quiz days are done. ${firstName(name)}'s 4-week training program is being built; the first sheets arrive next Sunday night.`,
@@ -117,6 +135,12 @@ export async function buildWeeklySummary(
 }
 
 type Audience = "doctor" | "vfda" | "va";
+
+const callLine = (c: NonNullable<WeeklySummary["calls"]>) =>
+  c.weekFinished ? `${c.weekFinished} practice call${c.weekFinished === 1 ? "" : "s"} this week, ${c.weekPassed} passed.` : "No practice calls this week.";
+const callHtml = (c: NonNullable<WeeklySummary["calls"]>) =>
+  [callLine(c), c.easy, c.challenging].map(escapeHtml).join("<br>");
+const callText = (c: NonNullable<WeeklySummary["calls"]>) => `Call practice:\n- ${[callLine(c), c.easy, c.challenging].join("\n- ")}`;
 
 // The email for one audience: subject, HTML and text.
 export function weeklyEmail(s: WeeklySummary, audience: Audience) {
@@ -132,11 +156,14 @@ export function weeklyEmail(s: WeeklySummary, audience: Audience) {
     ];
     const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#111">${lines.map((l) => `<p>${e(l)}</p>`).join("")}${
       s.skills.length ? `<p><b>Skills you showed</b><br>${s.skills.map((k) => `&#10003; ${e(k)}`).join("<br>")}</p>` : ""
-    }${s.practice.length ? `<p><b>What to practice</b></p><ul>${s.practice.map((k) => `<li>${e(k)}</li>`).join("")}</ul>` : ""}<p>${e(s.next)}</p><p>Keep it up!</p></div>`;
+    }${s.practice.length ? `<p><b>What to practice</b></p><ul>${s.practice.map((k) => `<li>${e(k)}</li>`).join("")}</ul>` : ""}${
+      s.calls ? `<p><b>Call practice</b><br>${callHtml(s.calls)}</p>` : ""
+    }<p>${e(s.next)}</p><p>Keep it up!</p></div>`;
     const text = [
       ...lines,
       s.skills.length ? `Skills you showed:\n${s.skills.map((k) => `- ${k}`).join("\n")}` : "",
       s.practice.length ? `What to practice:\n${s.practice.map((k) => `- ${k}`).join("\n")}` : "",
+      s.calls ? callText(s.calls) : "",
       s.next,
       "Keep it up!",
     ]
@@ -156,6 +183,7 @@ ${vfda ? `<p style="margin:0 0 12px;padding:6px 12px;background:#eef1f5;color:#3
 ${s.days.length ? `<ul>${s.days.map((d) => `<li>${e(dayRow(d))}</li>`).join("")}</ul>` : `<p>No training days this week.</p>`}
 ${s.skills.length ? `<h3 style="margin:16px 0 6px;font-size:15px;color:#166534">Top skills ${e(first)} showed</h3><p>${s.skills.map((k) => `&#10003; ${e(k)}`).join("<br>")}</p>` : ""}
 ${s.practice.length ? `<h3 style="margin:16px 0 6px;font-size:15px">Top skills to practice</h3><ul>${s.practice.map((k) => `<li>${e(k)}</li>`).join("")}</ul>` : ""}
+${s.calls ? `<h3 style="margin:16px 0 6px;font-size:15px">Call practice</h3><p>${callHtml(s.calls)}</p>` : ""}
 <h3 style="margin:16px 0 6px;font-size:15px">What's next</h3><p>${e(s.next)}</p>
 <p><a href="${e(link)}">Open in the app</a> (sign-in required)</p>
 </div>`;
@@ -165,6 +193,7 @@ ${s.practice.length ? `<h3 style="margin:16px 0 6px;font-size:15px">Top skills t
     `Days completed this week:\n${s.days.length ? s.days.map((d) => `- ${dayRow(d)}`).join("\n") : "None"}`,
     s.skills.length ? `Top skills ${first} showed:\n${s.skills.map((k) => `- ${k}`).join("\n")}` : "",
     s.practice.length ? `Top skills to practice:\n${s.practice.map((k) => `- ${k}`).join("\n")}` : "",
+    s.calls ? callText(s.calls) : "",
     `What's next: ${s.next}`,
     `Open in the app: ${link}`,
   ]

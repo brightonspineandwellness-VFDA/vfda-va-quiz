@@ -4,6 +4,7 @@ import { Suspense, type ReactNode } from "react";
 import { SopForm } from "@/components/certs/sop-form";
 import { ActionButton } from "@/components/setup/action-button";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { CallPracticeLink } from "@/components/calls/call-practice-link";
 import { Badge, ButtonLink, Card, EmptyState, linkClass, NumberBadge, PageHeader, StatusBadge, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { loadVaTasks } from "@/lib/certifications";
@@ -93,6 +94,9 @@ async function Today() {
           <>
             <ButtonLink href="/va/results">My results</ButtonLink>
             <ButtonLink href="/va/proof">Proof of work</ButtonLink>
+            <Suspense fallback={null}>
+              <CallPracticeLink user={user} />
+            </Suspense>
           </>
         }
       />

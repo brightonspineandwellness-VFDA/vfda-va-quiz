@@ -4,13 +4,17 @@ import "server-only";
 // service role after checking the signed-in VA owns the call; the browser
 // never writes practice_calls directly (no RLS insert/update for VAs).
 
+import { aiErrorMessage } from "@/lib/ai";
 import type { CurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { ACCESS_MESSAGES, callAccess, callsStartedToday } from "./access";
+import { gradeCall, type GradedCall } from "./grade";
+import { syncRoleplayProof } from "./proof";
+import { speechChars } from "./tts";
 import { makePersona, roleplayScenario, targetTurns, turnLimit, type Persona } from "./personas";
 import { foldSummary, needsFold, patientReply, patientSystemPrompt, windowStart, type TurnUsage } from "./patient";
 import { cadenceSources, loadCallContext } from "./rules";
-import { CALL_TYPES, isRoleplayFor, type CallType, type PublicPersona, type Roleplay, type TranscriptEntry } from "./types";
+import { CALL_TYPES, isRoleplayFor, type CadenceSource, type CallType, type PublicPersona, type Roleplay, type TranscriptEntry } from "./types";
 
 type Db = ReturnType<typeof createAdminClient>;
 
@@ -191,6 +195,61 @@ export async function takeTurn(
   if (!data?.length) return fail("That turn was already sent.", 409);
 
   return { say, endCall, index: transcript.length - 1 };
+}
+
+// End the call and write the feedback. A call whose grading failed stays
+// finished with no result, and finishing again retries the grading.
+export async function finishCall(user: CurrentUser, id: string): Promise<{ result: "passed" | "practice_again" } | Fail> {
+  const db = createAdminClient();
+  const call = await loadOwnCall(user, id, db);
+  if (!call) return fail("Call not found.", 404);
+  if (call.status === "abandoned") return fail("This call was closed without feedback. Start a new one.", 409);
+  const { data: graded } = await db.from("practice_calls").select("result").eq("id", id).maybeSingle();
+  const existing = (graded as { result: "passed" | "practice_again" | null } | null)?.result;
+  if (existing) return { result: existing };
+  if (!call.transcript.some((t) => t.speaker === "va")) {
+    await db.from("practice_calls").update({ status: "abandoned", finished_at: now() }).eq("id", id).eq("status", "in_progress");
+    return fail("You didn't say anything on this call, so there's no feedback. Start a new one.", 409);
+  }
+
+  if (call.status === "in_progress") {
+    await db.from("practice_calls").update({ status: "finished", finished_at: now() }).eq("id", id).eq("status", "in_progress");
+  }
+
+  const ctx = await loadCallContext(call.office_id, db);
+  const { data: src } = await db.from("practice_calls").select("cadence_sources").eq("id", id).maybeSingle();
+  const sources = ((src as { cadence_sources: Record<string, CadenceSource> } | null)?.cadence_sources ?? {}) as Record<string, CadenceSource>;
+
+  let grade: GradedCall;
+  try {
+    grade = await gradeCall({ db, callType: call.call_type, persona: call.persona, transcript: call.transcript, ctx, sources, officeId: call.office_id });
+  } catch (e) {
+    console.error("Call grading failed:", aiErrorMessage(e));
+    return fail("The feedback couldn't be written just now. Try again in a moment.", 502);
+  }
+
+  const usage: Usage = {
+    ...call.usage,
+    opusInput: grade.usage.input,
+    opusOutput: grade.usage.output,
+    ttsChars: call.transcript.filter((t) => t.speaker === "patient").reduce((n, t) => n + speechChars(t.text), 0),
+  };
+  const { error } = await db
+    .from("practice_calls")
+    .update({
+      result: grade.result,
+      checklist: grade.checklist,
+      feedback: { ...grade.feedback, critical_quote: grade.criticalQuote },
+      flags: grade.flags,
+      usage,
+    })
+    .eq("id", id)
+    .is("result", null);
+  if (error) return fail("The feedback couldn't be saved. Try again.", 500);
+  if (call.roleplay && grade.result === "passed") {
+    await syncRoleplayProof(db, call.va_id, call.office_id).catch((e: unknown) => console.error("Roleplay proof sync failed:", e));
+  }
+  return { result: grade.result };
 }
 
 export async function abandonCall(user: CurrentUser, id: string): Promise<{ ok: true } | Fail> {
