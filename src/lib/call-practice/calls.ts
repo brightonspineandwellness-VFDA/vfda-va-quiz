@@ -11,7 +11,7 @@ import { ACCESS_MESSAGES, callAccess, callsStartedToday } from "./access";
 import { gradeCall, type GradedCall } from "./grade";
 import { syncRoleplayProof } from "./proof";
 import { speechChars } from "./tts";
-import { makePersona, roleplayScenario, targetTurns, turnLimit, type Persona } from "./personas";
+import { makePersona, roleplayScenario, targetTurns, turnLimit, vaClosed, type Persona } from "./personas";
 import { foldSummary, needsFold, patientReply, patientSystemPrompt, windowStart, type TurnUsage } from "./patient";
 import { cadenceSources, loadCallContext } from "./rules";
 import { CALL_TYPES, isRoleplayFor, type CadenceSource, type CallType, type PublicPersona, type Roleplay, type TranscriptEntry } from "./types";
@@ -172,7 +172,8 @@ export async function takeTurn(
       recent: transcript.slice(windowStart(transcript, summarized)),
     });
     say = result.reply.say;
-    endCall = result.reply.end_call;
+    // Only the VA ends the call: the patient may hang up after the VA's goodbye.
+    endCall = result.reply.end_call && vaClosed(text);
     usage = addUsage(usage, result.usage);
   }
   transcript.push({ speaker: "patient", text: say, at: now() });

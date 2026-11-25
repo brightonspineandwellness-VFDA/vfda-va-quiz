@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { callDate, callTitle, RESULT_LABEL, resultTone } from "@/components/calls/call-feedback";
+import { CallReportList } from "@/components/calls/call-report";
+import { RefreshOnShow } from "@/components/calls/refresh-on-show";
 import { Badge, Card, EmptyState, linkClass, Table, td, th } from "@/components/ui";
+import type { CallReportRow } from "@/lib/call-practice/report";
 import { effectiveResult, GOAL, passRateText, summarize, type CallSummaryRow } from "@/lib/call-practice/progress";
 
 export type ProgressVa = { id: string; name: string; officeName?: string };
@@ -13,17 +16,20 @@ export function CallProgress({
   timeZone,
   linkBase,
   showOffice = false,
+  reports = [],
 }: {
   vas: ProgressVa[];
   calls: CallSummaryRow[];
   timeZone: string;
   linkBase: string;
   showOffice?: boolean;
+  reports?: CallReportRow[];
 }) {
   const nameOf = new Map(vas.map((v) => [v.id, v.name]));
   const recent = calls.filter((c) => c.status === "finished").slice(0, 40);
   return (
     <>
+      <RefreshOnShow />
       <Card title="Progress by VA" description={`Goal: ${GOAL} easy and ${GOAL} challenging calls. Every finished call counts; the pass rate is beside each count.`}>
         {!vas.length ? (
           <EmptyState title="No VAs yet" />
@@ -75,6 +81,7 @@ export function CallProgress({
           </Table>
         )}
       </Card>
+      <CallReportList reports={reports} linkBase={`${linkBase}/reports`} names={nameOf} timeZone={timeZone} />
       <Card title="Recent calls">
         {!recent.length ? (
           <EmptyState title="No calls yet" />

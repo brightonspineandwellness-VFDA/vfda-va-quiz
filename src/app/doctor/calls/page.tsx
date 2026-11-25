@@ -4,6 +4,7 @@ import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { loadCallsFor } from "@/lib/call-practice/progress";
+import { loadReportsFor } from "@/lib/call-practice/report";
 import { createAdminClient } from "@/lib/supabase/server";
 import { zoneOf } from "@/lib/week";
 
@@ -28,10 +29,11 @@ async function DoctorCalls({ searchParams }: { searchParams: Promise<Record<stri
   if (!user.officeId) return <EmptyState title="Your account isn't linked to an office yet" />;
   const db = createAdminClient();
   const { va } = await searchParams;
-  const [{ data: vaRows }, office, calls] = await Promise.all([
+  const [{ data: vaRows }, office, calls, reports] = await Promise.all([
     db.from("profiles").select("id, full_name, email").eq("role", "va").eq("office_id", user.officeId).is("deactivated_at", null).order("full_name"),
     db.from("offices").select("time_zone").eq("id", user.officeId).maybeSingle(),
     loadCallsFor(db, { officeIds: [user.officeId] }),
+    loadReportsFor(db, { officeIds: [user.officeId] }),
   ]);
   const vas = ((vaRows ?? []) as { id: string; full_name: string | null; email: string }[]).map((v) => ({ id: v.id, name: v.full_name || v.email }));
   const one = typeof va === "string" ? vas.filter((v) => v.id === va) : [];
@@ -42,6 +44,7 @@ async function DoctorCalls({ searchParams }: { searchParams: Promise<Record<stri
       calls={one.length ? calls.filter((c) => c.va_id === one[0].id) : calls}
       timeZone={zoneOf((office.data as { time_zone: string | null } | null)?.time_zone)}
       linkBase="/doctor/calls"
+      reports={one.length ? reports.filter((r) => r.va_id === one[0].id) : reports}
     />
   );
 }

@@ -1,0 +1,44 @@
+import { notFound } from "next/navigation";
+import { Suspense } from "react";
+import { CallReportView } from "@/components/calls/call-report";
+import { Loading, SignedInPage } from "@/components/signed-in-page";
+import { PageHeader } from "@/components/ui";
+import { requireRole } from "@/lib/auth";
+import { REPORT_COLUMNS, reportTitle, type CallReportRow } from "@/lib/call-practice/report";
+import { createAdminClient } from "@/lib/supabase/server";
+import { zoneOf } from "@/lib/week";
+
+export default function VaCallReportPage({ params }: PageProps<"/va/calls/reports/[id]">) {
+  return (
+    <SignedInPage area="VA">
+      <Suspense fallback={<Loading />}>
+        <Report params={params} />
+      </Suspense>
+    </SignedInPage>
+  );
+}
+
+// Only the signed-in VA's own report, without the doctor's coaching ideas.
+async function Report({ params }: { params: Promise<{ id: string }> }) {
+  const user = await requireRole("va");
+  const { id } = await params;
+  if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
+  const db = createAdminClient();
+  const { data } = await db.from("call_reports").select(REPORT_COLUMNS).eq("id", id).eq("va_id", user.id).maybeSingle();
+  const r = data as CallReportRow | null;
+  if (!r) notFound();
+  const office = await db.from("offices").select("time_zone").eq("id", r.office_id).maybeSingle();
+  return (
+    <>
+      <PageHeader
+        title={reportTitle(r.content)}
+        breadcrumbs={[
+          { label: "Today", href: "/va" },
+          { label: "Call practice", href: "/va/calls" },
+          { label: "Report" },
+        ]}
+      />
+      <CallReportView id={r.id} r={r.content} timeZone={zoneOf((office.data as { time_zone: string | null } | null)?.time_zone)} audience="va" />
+    </>
+  );
+}

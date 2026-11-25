@@ -7,6 +7,7 @@ import { linkClass, PageHeader } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
 import { loadCallSettings } from "@/lib/call-practice/access";
 import { loadCallsFor } from "@/lib/call-practice/progress";
+import { loadReportsFor } from "@/lib/call-practice/report";
 import { createAdminClient } from "@/lib/supabase/server";
 import { DEFAULT_TIME_ZONE } from "@/lib/week";
 
@@ -44,7 +45,7 @@ async function AdminCalls({ searchParams }: { searchParams: Promise<Record<strin
     .filter((v) => v.office_id && (officeId ? v.office_id === officeId : settings.allOffices || on.has(v.office_id)))
     .map((v) => ({ id: v.id, name: v.full_name || v.email, officeName: officeName.get(v.office_id!) ?? "" }));
   if (typeof va === "string" && vas.some((v) => v.id === va)) vas = vas.filter((v) => v.id === va);
-  const calls = await loadCallsFor(db, { vaIds: vas.map((v) => v.id) });
+  const [calls, reports] = await Promise.all([loadCallsFor(db, { vaIds: vas.map((v) => v.id) }), loadReportsFor(db, { vaIds: vas.map((v) => v.id) })]);
 
   return (
     <>
@@ -61,7 +62,7 @@ async function AdminCalls({ searchParams }: { searchParams: Promise<Record<strin
             </Link>
           ))}
       </nav>
-      <CallProgress vas={vas} calls={calls} timeZone={DEFAULT_TIME_ZONE} linkBase="/admin/calls" showOffice />
+      <CallProgress vas={vas} calls={calls} timeZone={DEFAULT_TIME_ZONE} linkBase="/admin/calls" showOffice reports={reports} />
     </>
   );
 }

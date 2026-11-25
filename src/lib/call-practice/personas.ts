@@ -156,6 +156,12 @@ export function makePersona(input: {
   return persona;
 }
 
-// Patient turn limits: easy about 8 turns, challenging about 14.
-export const turnLimit = (t: CallType) => (t === "easy" || t === "w2d1_roleplay" ? 10 : 16);
+// The VA leads and ends the call. The turn limit is only a safety stop for a
+// call that never closes (easy calls usually take about 8 patient turns,
+// challenging about 14).
+export const turnLimit = (t: CallType) => (t === "easy" || t === "w2d1_roleplay" ? 20 : 26);
 export const targetTurns = (t: CallType) => (t === "easy" || t === "w2d1_roleplay" ? 8 : 14);
+
+// The VA closed the call: the patient may say goodbye and hang up.
+export const vaClosed = (text: string) =>
+  /\b(good ?bye|bye|have a (great|good|nice|wonderful|blessed) (day|one|evening|night|weekend)|take care|see you (then|on|tomorrow|soon|next)|talk (to you )?soon)\b/i.test(text);

@@ -69,7 +69,9 @@ Rules for every reply:
 - React to what the VA actually said. If they ask for your details, give the fictional ones above.
 - Never ask for or give real personal information. If the VA asks something you don't have (like a birthday), make one up that's clearly fictional.
 - ${callType === "easy" || callType === "w2d1_roleplay" ? "Be cooperative and book when offered a reasonable time." : "Make the VA work for it, but agree to book if they handle your concerns well."}
-- Aim to wrap up after about ${input.targetTurns} of your replies. When the VA closes the call or says goodbye, say a short goodbye and set end_call to true.`;
+- The VA leads the call and decides when it ends. Never end it yourself: if the VA asks "anything else?", answer, but stay on the line.
+- Set end_call to true only after the VA says goodbye (or clearly closes the call): then say a short goodbye.
+- A typical call is about ${input.targetTurns} of your replies, but keep going as long as the VA is still working on it.`;
 }
 
 function toMessages(summary: string | null, recent: TranscriptEntry[]): Anthropic.MessageParam[] {

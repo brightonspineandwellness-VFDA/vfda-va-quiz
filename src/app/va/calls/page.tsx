@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { callDate, callLength, callTitle, RESULT_LABEL, resultTone } from "@/components/calls/call-feedback";
+import { CallReportList } from "@/components/calls/call-report";
+import { RefreshOnShow } from "@/components/calls/refresh-on-show";
+import { loadReportsFor } from "@/lib/call-practice/report";
 import { Loading, SignedInPage } from "@/components/signed-in-page";
 import { Badge, ButtonLink, Card, EmptyState, linkClass, Notice, PageHeader, ProgressBar, Table, td, th } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
@@ -56,7 +59,11 @@ async function CallPractice() {
       </Notice>
     );
   }
-  const [calls, used] = await Promise.all([loadCallsFor(db, { vaIds: [user.id] }), callsStartedToday(user.id, access.timeZone, db)]);
+  const [calls, used, reports] = await Promise.all([
+    loadCallsFor(db, { vaIds: [user.id] }),
+    callsStartedToday(user.id, access.timeZone, db),
+    loadReportsFor(db, { vaIds: [user.id] }),
+  ]);
   const p = summarize(calls);
   const left = Math.max(0, access.settings.dailyCap - used);
   const recent = calls.filter((c) => c.status === "finished").slice(0, 15);
@@ -78,6 +85,7 @@ async function CallPractice() {
 
   return (
     <>
+      <RefreshOnShow />
       {left === 0 ? (
         <Notice tone="warning" title="That's all for today">
           You&apos;ve used all {access.settings.dailyCap} practice calls for today. You can practice again tomorrow.
@@ -103,6 +111,8 @@ async function CallPractice() {
           {ROLEPLAYS.w2d2_roleplay.map((r) => roleplayRow("w2d2_roleplay", r))}
         </ul>
       </Card>
+
+      <CallReportList reports={reports} linkBase="/va/calls/reports" timeZone={access.timeZone} />
 
       <Card title="Recent calls">
         {!recent.length ? (

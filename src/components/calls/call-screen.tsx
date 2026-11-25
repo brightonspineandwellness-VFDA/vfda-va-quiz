@@ -6,11 +6,48 @@
 // the server (/api/calls/...); no key or model call is in the browser.
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, Card, Notice } from "@/components/ui";
 import type { CallType, PublicPersona, Roleplay, TranscriptEntry } from "@/lib/call-practice/types";
 
 type Phase = "check" | "unsupported" | "mic" | "mic_blocked" | "ready" | "starting" | "listening" | "thinking" | "speaking" | "idle" | "ending" | "error";
+
+// "Ring ring ring": three short phone rings (the US ring tone, 440 + 480 Hz),
+// made in the browser, about 3.5 seconds. Started from the Start call click,
+// so the browser allows the sound.
+function playRings(count = 3): Promise<void> {
+  const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctx) return Promise.resolve();
+  const ctx = new Ctx();
+  const ring = 0.9;
+  const gap = 0.35;
+  const out = ctx.createGain();
+  out.gain.value = 0.12;
+  out.connect(ctx.destination);
+  for (let i = 0; i < count; i++) {
+    const start = ctx.currentTime + 0.05 + i * (ring + gap);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, start);
+    env.gain.linearRampToValueAtTime(1, start + 0.03);
+    env.gain.setValueAtTime(1, start + ring - 0.05);
+    env.gain.linearRampToValueAtTime(0, start + ring);
+    env.connect(out);
+    for (const f of [440, 480]) {
+      const o = ctx.createOscillator();
+      o.frequency.value = f;
+      o.connect(env);
+      o.start(start);
+      o.stop(start + ring);
+    }
+  }
+  const total = (0.05 + count * (ring + gap)) * 1000;
+  return new Promise((resolve) =>
+    setTimeout(() => {
+      void ctx.close();
+      resolve();
+    }, total),
+  );
+}
 
 // Minimal Web Speech API typing (not in the DOM lib).
 type Recognition = {
@@ -63,10 +100,49 @@ export function CallScreen({ callType, roleplay, title }: { callType: CallType; 
   const finishedRef = useRef(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
+  // Browser and microphone check, each time the screen is shown. When the
+  // microphone is already allowed, go straight to "Start call".
   useEffect(() => {
-    // Browser check runs once, on the client.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPhase(isChromeOrEdge() ? "mic" : "unsupported");
+    let live = true;
+    if (!isChromeOrEdge()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPhase("unsupported");
+      return;
+    }
+    setPhase("mic");
+    navigator.permissions
+      ?.query({ name: "microphone" as PermissionName })
+      .then((p) => {
+        if (live && p.state === "granted") setPhase((ph) => (ph === "mic" ? "ready" : ph));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Next.js keeps a page alive (hidden) when you navigate away and shows it
+  // again when you come back. Leaving the call screen ends any open call and
+  // clears it, so the next visit starts a fresh call.
+  useLayoutEffect(() => {
+    return () => {
+      recRef.current?.abort();
+      recRef.current = null;
+      audioRef.current?.pause();
+      audioRef.current = null;
+      if (callIdRef.current && !finishedRef.current) navigator.sendBeacon(`/api/calls/${callIdRef.current}/abandon`);
+      callIdRef.current = null;
+      finishedRef.current = false;
+      heardRef.current = "";
+      setCallId(null);
+      setPersona(null);
+      setLines([]);
+      setInterim("");
+      setError(null);
+      setLeft(null);
+      setSeconds(0);
+      setPhase("check");
+    };
   }, []);
 
   useEffect(() => {
@@ -146,10 +222,14 @@ export function CallScreen({ callType, roleplay, title }: { callType: CallType; 
     setError(null);
     setPhase("starting");
     try {
-      const res = await post<{ id: string; persona: PublicPersona; opening: TranscriptEntry | null; left: number }>("/api/calls", {
-        callType,
-        roleplay,
-      });
+      // The phone rings while the call is set up.
+      const [res] = await Promise.all([
+        post<{ id: string; persona: PublicPersona; opening: TranscriptEntry | null; left: number }>("/api/calls", {
+          callType,
+          roleplay,
+        }),
+        playRings(3).catch(() => {}),
+      ]);
       callIdRef.current = res.id;
       setCallId(res.id);
       setPersona(res.persona);
@@ -274,12 +354,12 @@ export function CallScreen({ callType, roleplay, title }: { callType: CallType; 
     mic: "",
     mic_blocked: "",
     ready: "Ready when you are.",
-    starting: "Connecting…",
+    starting: roleplay === "confirmation" ? "Calling the patient… ring, ring, ring" : "Ring, ring, ring… the phone is ringing",
     listening: "Listening… let go when you're done.",
     thinking: `${persona?.firstName ?? "The patient"} is thinking…`,
     speaking: `${persona?.firstName ?? "The patient"} is talking…`,
-    idle: lines.length ? "Your turn. Hold the button and speak." : "The phone is ringing. Answer with the office greeting.",
-    ending: "Ending the call and writing your feedback…",
+    idle: lines.length ? "Your turn. Hold the button and speak." : "You've picked up. Answer with your office greeting.",
+    ending: "The call has ended. Writing your feedback (about 20 seconds)…",
     error: "",
   };
 

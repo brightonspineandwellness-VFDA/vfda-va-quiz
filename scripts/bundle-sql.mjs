@@ -191,6 +191,12 @@ const PHASES = [
     title: "Call practice database changes (new tables only: practice calls, cadence standards, settings, pilot offices)",
     after: "practice-days.sql",
   },
+  {
+    name: "call-reports",
+    starts: "20261126130000",
+    title: "Call practice reports (new table only: one report per 10 practice calls)",
+    after: "call-practice.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
