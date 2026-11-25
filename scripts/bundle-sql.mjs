@@ -185,6 +185,12 @@ const PHASES = [
     title: "Practice days database changes (phone practice days for skipped week 2 days, 10 days for every VA)",
     after: "release-schedule.sql",
   },
+  {
+    name: "call-practice",
+    starts: "20261126120000",
+    title: "Call practice database changes (new tables only: practice calls, cadence standards, settings, pilot offices)",
+    after: "practice-days.sql",
+  },
 ];
 
 const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
