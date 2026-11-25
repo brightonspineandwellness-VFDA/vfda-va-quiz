@@ -128,6 +128,7 @@ create table if not exists public.practice_calls (
                                             'financial_objection', 'upset_scheduling', 'safety_privacy')),
   persona          jsonb not null default '{}',   -- the made-up patient
   persona_summary  text,                          -- rolling summary, keeps patient prompts small
+  summarized_count integer not null default 0,    -- transcript entries folded into persona_summary
   transcript       jsonb not null default '[]',   -- [{speaker: 'va' | 'patient', text, at}]
   patient_turns    integer not null default 0,
   status           text not null default 'in_progress' check (status in ('in_progress', 'finished', 'abandoned')),
